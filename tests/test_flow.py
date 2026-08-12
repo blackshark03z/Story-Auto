@@ -63,7 +63,7 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(caught.exception.failure_class,"FLOW_UI_CHANGED")
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
-        page=NativePage(); _Control(type("D",(),{"page":page})(),0).click(); self.assertEqual(page.clicked,(10.0,20.0))
+        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0))
     def test_preflight_auth_and_project(self):
         runtime=FlowRuntime(Path("profile"),"http://test","url","story-auto")
         opener=lambda *_args,**_kw: Response(b'{"Browser":"Chrome"}')
