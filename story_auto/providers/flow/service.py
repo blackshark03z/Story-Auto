@@ -95,7 +95,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             refs = [entries[d].get("selected_asset", {}).get("path") for d in request.get("depends_on", [])]
             try:
-                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = True; attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
+                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 temp.parent.mkdir(parents=True, exist_ok=True)
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
@@ -105,6 +105,8 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
                 entry.update({"status":"SUCCEEDED", "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata}, "updated_at":_now()}); submissions += 1
             except (FlowError, FlowSessionError) as error:
+                attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
+                attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)
                 # A post-dispatch timeout/unknown result is deliberately terminal and non-resubmittable.
                 state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_UI_CHANGED", "FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE"))
                 attempt.update({"status":state, "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})

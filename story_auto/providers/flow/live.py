@@ -36,7 +36,8 @@ class _Editor:
 class _Control:
     def __init__(self, dom, index): self.dom,self.index=dom,index
     def click(self):
-        self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(!xs[%d])throw Error('generate');(%s)(xs[%d])})()""" % (self.index,_ACTIVATE,self.index))
+        target = self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward'&&e.getAttribute('aria-disabled')!=='true');const e=xs[%d];if(!e)throw Error('eligible_generate');const r=e.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()""" % self.index)
+        self.dom.page.click(float(target["x"]), float(target["y"]))
 
 
 class FlowBrowserDom:
@@ -100,12 +101,13 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 180): self.runtime,self.timeout_seconds,self.last_settings=runtime,timeout_seconds,None
+    def __init__(self, runtime, *, timeout_seconds: int = 180): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed=runtime,timeout_seconds,None,False
     def __call__(self, request, references, destination: Path):
         page=CdpPage.open(self.runtime)
         try:
             dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved); before=set(dom.media_candidates())
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"])
+            self.dispatch_confirmed = True
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
                 added=[x for x in dom.media_candidates() if x not in before]

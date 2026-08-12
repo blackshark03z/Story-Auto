@@ -27,6 +27,11 @@ class DOM:
     def add_references(self, _): pass
     def media_candidates(self): return []
 
+class NativePage:
+    def __init__(self): self.clicked = None
+    def evaluate(self, _): return {"x":10,"y":20}
+    def click(self, x, y): self.clicked=(x,y)
+
 class Inspector:
     def __init__(self, value): self.value=value
     def inspect(self, _): return self.value
@@ -56,6 +61,9 @@ class FlowTests(unittest.TestCase):
         for dom in (DOM(0),DOM(2),DOM(1,2)):
             with self.assertRaises(FlowSessionError) as caught: FlowComposer(dom).submit("p",references=[],media_type="IMAGE")
             self.assertEqual(caught.exception.failure_class,"FLOW_UI_CHANGED")
+    def test_live_generate_control_uses_native_mouse_click(self):
+        from story_auto.providers.flow.live import _Control
+        page=NativePage(); _Control(type("D",(),{"page":page})(),0).click(); self.assertEqual(page.clicked,(10.0,20.0))
     def test_preflight_auth_and_project(self):
         runtime=FlowRuntime(Path("profile"),"http://test","url","story-auto")
         opener=lambda *_args,**_kw: Response(b'{"Browser":"Chrome"}')
