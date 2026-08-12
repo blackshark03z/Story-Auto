@@ -154,7 +154,7 @@ def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[st
 def _media_settings(config) -> dict[str, Any]:
     settings = config.settings.get("media", {})
     if not isinstance(settings, dict): raise PlanningError("MEDIA_POLICY_INVALID")
-    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9")}
+    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20))}
 
 def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: str, settings: dict[str, Any]) -> dict[str, Any]:
     if render_mode not in {"hybrid_hook", "full_video_ai"}: raise PlanningError("MEDIA_POLICY_INVALID")
@@ -202,7 +202,8 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
         prompt = f"{GENERATION_PROMPT_VERSION}: {shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['camera_intent']}; {shot['composition_intent']}."
         requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"reference_asset_ids":refs,"depends_on":deps,"target_duration":media["target_duration"],"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r["request_id"]))
-    estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests),"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"]}
+    required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
+    estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
     return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":GENERATION_PROMPT_VERSION,"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED"}
 
 def validate_generation_requests(value: Any, media_plan: dict[str, Any], continuity: dict[str, Any]) -> None:
