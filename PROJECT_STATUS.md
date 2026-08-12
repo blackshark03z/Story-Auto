@@ -69,8 +69,9 @@ visual generation, and UI implementation remain deferred.
   records aggregate usage and latency only.
 - Goal 05 lifecycle validation is bound to the accepted planning implementation
   commit and its offline/live evidence.
-- The Flow provider foundation now owns a separate runtime profile path, CDP
-  health/preflight contract, fail-closed composer page object, append-only
+- The Flow provider foundation now owns a separate runtime profile path,
+  CDP-backed Flow page/session adapter, explicit isolated-profile launcher,
+  capability preflight, fail-closed composer page object, append-only
   `generation_manifest.json`, dependency-aware explicit execution gate, and
   atomic local image/video asset selection. Offline fixtures prove selector
   ambiguity rejection, auth/project capability results, resume reuse, invalid

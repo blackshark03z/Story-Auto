@@ -3,12 +3,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import FlowError, FlowExecutor, execute_generation
-from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, preflight
+from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 
 
 class Editor:
@@ -39,7 +40,7 @@ class FlowTests(unittest.TestCase):
         runtime=RuntimeLayout.from_root(root); cfg=ProjectConfig("prj_flow001")
         paths=create_project(runtime,cfg)
         atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval":{"status":"APPROVED"}})
-        request=lambda ident, kind, deps=[]: {"request_id":ident,"fingerprint":ident+"hash","media_type":kind,"prompt":"p","depends_on":deps,"provider":"google_flow"}
+        request=lambda ident, kind, deps=[]: {"request_id":ident,"fingerprint":ident+"hash","purpose":"REFERENCE" if ident == "ref" else "SHOT","media_type":kind,"prompt":"p","depends_on":deps,"provider":"google_flow"}
         atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests":[request("ref","IMAGE"),request("shot","IMAGE",["ref"])]})
         return runtime, cfg, paths
     def _executor(self):
@@ -60,6 +61,12 @@ class FlowTests(unittest.TestCase):
         auth=preflight(runtime,Inspector({"login_required":True}),opener=opener); self.assertFalse(auth.authenticated)
         cap=preflight(runtime,Inspector({"project_identity":"story-auto","image":True,"video":True,"reference_image":True,"frame_video":True}),opener=opener)
         cap.require("VIDEO",True)
+    def test_dedicated_session_never_uses_another_profile(self):
+        with tempfile.TemporaryDirectory() as root:
+            profile=Path(root)/"story-auto-profile"; runtime=FlowRuntime(profile,"http://127.0.0.1:9222","https://flow.example","story-auto"); calls=[]
+            with patch("story_auto.providers.flow.session.Path.is_file", return_value=True):
+                launch_dedicated_session(runtime, launcher=lambda args: calls.append(args))
+            self.assertIn(f"--user-data-dir={profile}", calls[0]); self.assertNotIn("YouTube", " ".join(calls[0]))
     def test_manifest_dependency_resume_and_invalid_asset(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, cfg, paths=self._project(root); executor,calls=self._executor()

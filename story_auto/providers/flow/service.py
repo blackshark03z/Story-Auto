@@ -66,6 +66,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
     selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
     if len(selected) > 3: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "Goal 06 permits only the three-request vertical slice")
+    kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
+    if any(kinds.count(kind) > 1 for kind in kinds) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO")} for kind in kinds):
+        raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "Goal 06 permits at most one reference image, shot image, and shot video")
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         for request in selected:

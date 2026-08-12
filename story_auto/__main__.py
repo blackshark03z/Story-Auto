@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 import argparse
+import json
 import uuid
 from pathlib import Path
 
 from .core.project import ProjectConfig, RuntimeLayout, create_project
 from .pipeline import run_audio_stages, run_content_stage
 from .core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
-from .providers.flow import FlowRuntime, execute_generation, preflight
+from .providers.flow import FlowRuntime, FlowExecutor, execute_generation, launch_dedicated_session, preflight
+from .providers.flow.live import FlowInspector, LiveFlowGenerator
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -28,6 +30,8 @@ def main() -> int:
     approve_shots.add_argument("project_id")
     flow = commands.add_parser("flow-preflight", help="Discover the dedicated Flow session capabilities")
     flow.add_argument("project_id")
+    open_flow = commands.add_parser("flow-open-session", help="Open the isolated Flow profile for operator login")
+    open_flow.add_argument("project_id")
     generate = commands.add_parser("execute-generation", help="Explicitly execute a bounded approved Flow generation slice")
     generate.add_argument("project_id")
     generate.add_argument("--confirm-execute-generation", action="store_true", help="Required: authorizes paid provider submissions")
@@ -51,13 +55,36 @@ def main() -> int:
             print(f"shot_plan: {shot}\nmedia_plan: {media}\ngeneration_requests: {requests}")
             return 0
         if args.command == "flow-preflight":
-            # Browser implementation is deliberately injected by the desktop/operator runtime;
-            # this CLI does not guess UI state or automate a login.
-            raise ValueError("Flow preflight requires the configured Story Auto browser inspector runtime")
+            from .core.project import load_project
+            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            capabilities = preflight(runtime, FlowInspector(runtime))
+            print(json.dumps(capabilities.__dict__, default=str, sort_keys=True))
+            return 0
+        if args.command == "flow-open-session":
+            from .core.project import load_project
+            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+            launch_dedicated_session(FlowRuntime.from_settings(paths.runtime, config.settings))
+            print("FLOW_SESSION_OPENED: sign in manually in the dedicated Story Auto Chrome profile, then run flow-preflight")
+            return 0
         if args.command == "execute-generation":
             if not args.confirm_execute_generation:
                 raise ValueError("explicit --confirm-execute-generation is required")
-            raise ValueError("Flow execution requires the configured Story Auto browser executor runtime")
+            from .core.project import load_project
+            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            capabilities = preflight(runtime, FlowInspector(runtime))
+            requests = __import__('story_auto.core.artifacts', fromlist=['read_json']).read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            selected = []
+            reference = next((r for r in requests if r.get("purpose") == "REFERENCE" and r.get("media_type") == "IMAGE"), None)
+            if reference: selected.append(reference)
+            for media_type in ("IMAGE", "VIDEO"):
+                candidate = next((r for r in requests if r.get("purpose") == "SHOT" and r.get("media_type") == media_type and set(r.get("depends_on", [])) <= {reference["request_id"]}), None) if reference else None
+                if candidate: selected.append(candidate)
+            if not selected: raise ValueError("no bounded Flow vertical-slice requests are runnable")
+            result = execute_generation(Path(args.runtime_root), args.project_id, executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True, request_ids={r["request_id"] for r in selected})
+            print(json.dumps(result, sort_keys=True))
+            return 0
         result = run_content_stage(Path(args.runtime_root), args.project_id)
         print(f"content: {result}")
         # Projects created before audio configuration remain valid content-only projects.

@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.request import urlopen
 import json
+import os
+import subprocess
+from urllib.parse import urlparse
 
 
 @dataclass(frozen=True)
@@ -67,3 +70,15 @@ def preflight(runtime: FlowRuntime, inspector, *, opener=urlopen) -> FlowCapabil
     return FlowCapabilities(True, project_ok, bool(found.get("image")), bool(found.get("video")),
                             bool(found.get("reference_image")), bool(found.get("frame_video")),
                             "" if project_ok else "configured Flow project/workspace is not active")
+
+
+def launch_dedicated_session(runtime: FlowRuntime, *, launcher=subprocess.Popen) -> None:
+    """Open the operator-managed profile; this never copies another profile or logs in."""
+    candidates = [Path(os.environ.get("PROGRAMFILES(X86)", "")) / "Google/Chrome/Application/chrome.exe",
+                  Path(os.environ.get("PROGRAMFILES", "")) / "Google/Chrome/Application/chrome.exe"]
+    chrome = next((p for p in candidates if p.is_file()), None)
+    if chrome is None: raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "Google Chrome was not found")
+    port = urlparse(runtime.cdp_url).port
+    if not port: raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "configured CDP URL needs an explicit port")
+    runtime.profile.mkdir(parents=True, exist_ok=True)
+    launcher([str(chrome), f"--remote-debugging-port={port}", f"--user-data-dir={runtime.profile}", runtime.project_url])

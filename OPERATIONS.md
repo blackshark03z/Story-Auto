@@ -22,6 +22,9 @@ Never reuse YouTube Auto project/runtime/browser roots.
 ## Provider sessions
 
 - Flow uses a dedicated Story Auto browser profile.
+- `story-auto flow-open-session <project_id>` opens that isolated profile with
+  its configured CDP endpoint. The operator signs in manually, then runs
+  `story-auto flow-preflight <project_id>` before any paid execution.
 - Operator logs in manually.
 - Session/login expiry is reported as `AUTH_REQUIRED`.
 - No automation of credentials/password entry.

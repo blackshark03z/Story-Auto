@@ -12,6 +12,8 @@ class FlowComposer:
         return values[0]
 
     def submit(self, prompt: str, *, references: list[str], media_type: str) -> None:
+        choose = getattr(self.dom, "choose_mode", None)
+        if choose: choose(media_type)
         editors = self.dom.active_prompt_editors()
         editor = self._one("active prompt editor", editors)
         editor.set_text(prompt)
