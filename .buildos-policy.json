@@ -1,0 +1,59 @@
+{
+  "schema": "buildos.project-policy.v1.22",
+  "documentation_handoff": {
+    "accepted_ref": "main",
+    "category_authorities": {
+      "USER_BEHAVIOR": "README.md",
+      "ARCHITECTURE_OWNERSHIP_BOUNDARY": "ARCHITECTURE.md",
+      "API_CONFIG_SCHEMA": "PROJECT_STATUS.md",
+      "DEVELOPER_WORKFLOW": "ENGINEERING.md",
+      "FEATURE_PRESET_INVENTORY": "PROJECT_STATUS.md"
+    },
+    "continuity": {
+      "mandatory_operational_skill": "documentation-handoff-continuity",
+      "max_sidecar_bytes": 16384,
+      "field_study": "EXTERNAL_APPEND_ONLY_NON_AUTHORITATIVE"
+    }
+  },
+  "project_lifecycle": {
+    "project_profile": "desktop-app",
+    "project_intent": {
+      "name": "Story Auto",
+      "purpose": "Turn content.md narration into cinematic long-form storytelling videos with recoverable AI media generation.",
+      "intended_use": "Single-operator local production of original fictional YouTube storytelling videos.",
+      "success_definition": "A configured operator can plan, review, generate, resume, render, and package a 1080p story in hybrid_hook or full_video_ai mode with deterministic artifacts, per-request provenance, bounded spend, and no silent mode-violating fallback.",
+      "non_goals": "No YouTube upload, cloud queue/database/multi-user system, generic NLE, plugin framework, automatic music sourcing, or extra visual providers in V1.",
+      "constraints": "Separate from YouTube Auto; Google Flow visual provider; ElevenLabs/Typecast TTS; Gemini 3.5 Flash baseline; provider calls bounded and explicit; runtime/browser/secrets outside source control."
+    },
+    "knowledge_pack": {
+      "readme": "README.md",
+      "project_status": "PROJECT_STATUS.md",
+      "architecture": "ARCHITECTURE.md",
+      "engineering": "ENGINEERING.md",
+      "roadmap": "ROADMAP.md",
+      "changelog": "CHANGELOG.md"
+    },
+    "quality_gates": [
+      {
+        "id": "design-and-project-gate",
+        "command": "python tools/quality_gate.py"
+      }
+    ],
+    "testing_strategy": "Deterministic core/contract tests; provider page-fixture tests offline; tiny FFmpeg integration fixtures; bounded authorized live provider smoke tests; runtime artifact review may veto passing tests.",
+    "engineering_conventions": "Modular monolith; provider-independent core; atomic/versioned artifacts; append-only generation attempts; CLI/application services canonical before UI; no runtime imports from YouTube Auto; typed provider failures and bounded retries.",
+    "safety_boundaries": {
+      "runtime": "Story Auto uses its own configurable runtime root, projects, cache/temp/logs/evidence, locks and dedicated Flow browser profile; tests use temporary roots.",
+      "production": "No YouTube publishing. Large Flow batches and all full-video batches require explicit operator confirmation. One active production Flow-generation project per profile.",
+      "data": "Project content and generated assets remain outside source control by default; selected/raw attempts are retained and not silently overwritten; diagnostics are sanitized.",
+      "secrets": "Do not commit secrets. Credentials live in environment or Story Auto-specific secure storage; browser login is user-managed."
+    },
+    "modules": {
+      "operations": true,
+      "adr": true,
+      "security": true,
+      "migrations": true,
+      "project_closure": false,
+      "project_brief": true
+    }
+  }
+}
