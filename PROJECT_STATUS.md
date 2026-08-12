@@ -67,6 +67,8 @@ visual generation, and UI implementation remain deferred.
 - One bounded Gemini 3.5 fixture passed timeline/continuity/shot planning and
   both hybrid and full-video media/request compilation; the runtime evidence
   records aggregate usage and latency only.
+- Goal 05 lifecycle validation is bound to the accepted planning implementation
+  commit and its offline/live evidence.
 - Bounded live Gemini fixture validation passed for `gemini-3.5-flash`; the
   identical `gemini-3.6-flash` benchmark was available and passed without
   changing the production baseline. Safe metrics are in runtime evidence.
