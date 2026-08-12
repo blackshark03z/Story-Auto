@@ -11,6 +11,8 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.pipeline import run_audio_stages
 from story_auto.providers.tts.elevenlabs import ElevenLabsProvider, classify_http, merge_offset_spans
 from story_auto.providers.tts.typecast import normalize_timestamps
+from story_auto.providers.credentials import provider_keys
+from story_auto.core.audio.errors import AudioPipelineError
 
 
 class _FakeTypecast:
@@ -58,6 +60,12 @@ class AudioContractTests(unittest.TestCase):
 
     def test_invalid_provider_is_rejected(self) -> None:
         with self.assertRaises(ValueError): TTSRequest("x", narration_hash("x"), "other", "voice")
+
+    def test_missing_credentials_are_sanitized(self) -> None:
+        with self.assertRaises(AudioPipelineError) as captured:
+            provider_keys("typecast")
+        self.assertEqual(captured.exception.failure_class, "CREDENTIAL_MISSING")
+        self.assertNotIn("TYPECAST_API_KEY", str(captured.exception))
 
 
 if __name__ == "__main__": unittest.main()
