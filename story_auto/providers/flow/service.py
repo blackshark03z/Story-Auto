@@ -77,6 +77,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if entry.get("status") == "SUCCEEDED" and _valid_selected(paths, entry): continue
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
             if not _runnable(request, entries): continue
+            entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             attempt_number = len(entry["attempts"]) + 1
             if attempt_number > 2: entry["status"] = "FAILED_PERMANENT"; continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"]}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)

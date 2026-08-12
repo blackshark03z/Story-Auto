@@ -13,7 +13,7 @@ from .service import FlowError
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
 _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',tag:e.tagName})))()"""
-_CONTROL_JS = """(()=>{const names=new Set(['generate','tạo']);return Array.from(document.querySelectorAll('button,[role="button"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e),n=(e.innerText+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')).trim().toLowerCase();return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&names.has(n)}).map((e,i)=>({i,label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}))})()"""
+_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'};const all=Array.from(document.querySelectorAll('button[type="submit"]'));const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=all.filter(e=>p.contains(e)&&visible(e));if(xs.length===1){const e=xs[0];return [{i:all.indexOf(e),label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}]}if(xs.length>1)return xs.map(e=>({i:all.indexOf(e),label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
@@ -29,7 +29,7 @@ class _Editor:
 class _Control:
     def __init__(self, dom, index): self.dom,self.index=dom,index
     def click(self):
-        self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button,[role=\"button\"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e),n=(e.innerText+' '+(e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')).trim().toLowerCase();return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&n==='generate'});if(!xs[%d])throw Error('generate');xs[%d].click()})()""" % (self.index,self.index))
+        self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button[type=\"submit\"]'));if(!xs[%d])throw Error('generate');(%s)(xs[%d])})()""" % (self.index,_ACTIVATE,self.index))
 
 
 class FlowBrowserDom:
