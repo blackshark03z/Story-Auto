@@ -45,6 +45,15 @@ class ProjectConfig:
             provider_settings = tts.get(provider)
             if not isinstance(provider_settings, dict) or not isinstance(provider_settings.get("voice_id"), str) or not provider_settings["voice_id"].strip():
                 raise ProjectValidationError(f"settings.tts.{provider}.voice_id is required")
+        llm = self.settings.get("llm")
+        if llm is not None:
+            if not isinstance(llm, dict) or llm.get("provider") != "gemini":
+                raise ProjectValidationError("settings.llm.provider must be gemini")
+            model = llm.get("model", "gemini-3.5-flash")
+            if not isinstance(model, str) or not model.strip():
+                raise ProjectValidationError("settings.llm.model must be non-empty text")
+            if any(key.lower() in {"api_key", "key", "token", "secret", "credential"} for key in llm):
+                raise ProjectValidationError("settings.llm must not contain credentials")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "project_id": self.project_id,

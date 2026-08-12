@@ -7,7 +7,9 @@
     "schema_version",
     "project_id",
     "alignment_sha256",
-    "scenes"
+    "scenes",
+    "provenance",
+    "review_status"
   ],
   "properties": {
     "schema_version": {
@@ -26,6 +28,8 @@
       "items": {
         "type": "object"
       }
-    }
+    },
+    "provenance": {"type": "object"},
+    "review_status": {"enum": ["DRAFT", "VALIDATED", "APPROVED"]}
   }
 }

@@ -7,8 +7,8 @@
 Frozen product design: Story Auto V1, 2026-08-12.
 
 The repository contains the frozen product authorities, Build OS adoption tooling,
-and accepted offline foundation primitives. Provider, planning, rendering, and UI
-implementation have not yet been accepted.
+the accepted audio foundation, and the Gemini story-planning foundation. Rendering,
+visual generation, and UI implementation remain deferred.
 
 ## Accepted feature inventory
 
@@ -45,6 +45,22 @@ implementation have not yet been accepted.
 - The `content` pipeline stage produces a deterministic `content_manifest.json`
   with atomic checkpoint RUN/SKIP/invalidation behavior.
 - The CLI supports project creation, run, and resume entirely offline.
+- Gemini planning is isolated behind a Story Auto provider boundary with
+  credential sanitization, structured-output validation, bounded retry, and an
+  explicit capability probe.
+- `story_timeline.json` resolves model grouping to canonical alignment segments;
+  it never accepts model-generated timestamps as timing authority.
+- `continuity_bible.json` retains stable typed entity IDs and separates narrated
+  facts from generated visual-design choices. Planning artifacts include safe
+  request provenance and are atomically published only after validation.
+- Planning checkpoint identities skip unchanged timeline/continuity artifacts,
+  rerun missing/corrupt continuity independently, and invalidate downstream
+  continuity when timeline semantics, prompt version, or model changes.
+- A validated plan is not approved. `approve-plan` writes hash-bound durable
+  `review_state.json` approval after semantic validation.
+- Bounded live Gemini fixture validation passed for `gemini-3.5-flash`; the
+  identical `gemini-3.6-flash` benchmark was available and passed without
+  changing the production baseline. Safe metrics are in runtime evidence.
 
 ## Configuration/schema authority
 
@@ -52,5 +68,5 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 ## Explicitly not accepted yet
 
-No provider adapter, UI, provider live test, FFmpeg integration, or generated
-Story Auto production video has been accepted at this baseline.
+No visual provider adapter, UI, FFmpeg integration, or generated Story Auto
+production video has been accepted at this baseline.

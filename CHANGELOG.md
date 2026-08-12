@@ -8,6 +8,11 @@
   canonical alignment validation, and separate TTS/alignment resume identities.
 - Add isolated ElevenLabs and Typecast adapters with offline timestamp/chunking
   coverage. Live validation remains credential-gated.
+- Add the Gemini planning foundation: an isolated structured-output provider,
+  alignment-authoritative story timelines, continuity bibles, durable review
+  state, and per-stage checkpoint/resume fingerprints.
+- Add deterministic planning/provider tests plus bounded live Gemini 3.5 and
+  3.6 fixture validation. The production baseline remains Gemini 3.5 Flash.
 
 ## 2026-08-12 — Design baseline v1.0.0
 

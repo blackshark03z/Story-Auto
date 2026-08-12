@@ -10,6 +10,8 @@
     "characters",
     "locations",
     "props"
+    ,"provenance"
+    ,"review_status"
   ],
   "properties": {
     "schema_version": {
@@ -30,6 +32,8 @@
     },
     "props": {
       "type": "array"
-    }
+    },
+    "provenance": {"type": "object"},
+    "review_status": {"enum": ["DRAFT", "VALIDATED", "APPROVED"]}
   }
 }

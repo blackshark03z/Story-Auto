@@ -11,6 +11,7 @@ from story_auto.core.content import ContentValidationError, narration_hash, pars
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.providers.tts import provider_for
+from story_auto.core.planning import run_planning_stages
 
 CONTENT_PRODUCER_VERSION = "story-auto-content-stage/1.0.0"
 CONTENT_MANIFEST_SCHEMA_VERSION = "story-auto-content-manifest/1.0.0"

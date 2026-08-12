@@ -19,8 +19,8 @@ from story_auto.core.audio.errors import AudioPipelineError
 
 _LEGACY_ENTROPY = b"youtube-auto.credentials.v1"
 _OWN_ENTROPY = b"story-auto.credentials.v1"
-_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys"}
-_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY"}
+_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys", "gemini": "gemini_api_keys"}
+_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY", "gemini": "GEMINI_API_KEY"}
 
 
 class _DataBlob(ctypes.Structure):
@@ -87,4 +87,7 @@ def provider_keys(provider: str) -> list[str]:
         try: _write_own_pool(pool, legacy)
         except Exception: pass  # In-memory use remains safe if migration cannot persist.
         return legacy
+    # This established boundary predates LLM planning.  Keep its sanitized,
+    # provider-neutral behavior; provider adapters translate this to their
+    # public failure class at their own boundary.
     raise AudioPipelineError("CREDENTIAL_MISSING", provider=provider, stage="credentials")
