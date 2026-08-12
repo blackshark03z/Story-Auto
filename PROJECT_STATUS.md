@@ -69,6 +69,15 @@ visual generation, and UI implementation remain deferred.
   records aggregate usage and latency only.
 - Goal 05 lifecycle validation is bound to the accepted planning implementation
   commit and its offline/live evidence.
+- The Flow provider foundation now owns a separate runtime profile path, CDP
+  health/preflight contract, fail-closed composer page object, append-only
+  `generation_manifest.json`, dependency-aware explicit execution gate, and
+  atomic local image/video asset selection. Offline fixtures prove selector
+  ambiguity rejection, auth/project capability results, resume reuse, invalid
+  selected-asset invalidation, and no blind post-timeout resubmission.
+- Live Flow execution remains unaccepted: no Story Auto CDP endpoint was
+  reachable on this machine, so no login state, project identity, capabilities,
+  paid generation, or provider media result was accessed.
 - Bounded live Gemini fixture validation passed for `gemini-3.5-flash`; the
   identical `gemini-3.6-flash` benchmark was available and passed without
   changing the production baseline. Safe metrics are in runtime evidence.
@@ -79,5 +88,5 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 ## Explicitly not accepted yet
 
-No visual provider adapter, UI, FFmpeg integration, or generated Story Auto
-production video has been accepted at this baseline.
+No live Google Flow adapter/session, generated Story Auto production media,
+or final compositor has been accepted at this baseline.

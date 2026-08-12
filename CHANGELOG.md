@@ -17,6 +17,11 @@
   deterministic hybrid/full-video `media_plan.json`, compiled continuity and
   shot `generation_requests.json`, dependency ordering, guardrail estimates,
   visual-stage resume fingerprints, and hash-bound shot-plan approval.
+- Add an isolated Google Flow provider foundation: dedicated runtime/CDP
+  preflight contract, fail-closed composer boundary, append-only generation
+  attempt manifest, explicit generation gate, dependency-aware resume, and
+  local Pillow/FFprobe validation. Offline evidence passes; live Flow evidence
+  remains operator-session-gated.
 
 ## 2026-08-12 — Design baseline v1.0.0
 

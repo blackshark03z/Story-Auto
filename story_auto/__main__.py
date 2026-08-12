@@ -8,6 +8,7 @@ from pathlib import Path
 from .core.project import ProjectConfig, RuntimeLayout, create_project
 from .pipeline import run_audio_stages, run_content_stage
 from .core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
+from .providers.flow import FlowRuntime, execute_generation, preflight
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -25,6 +26,11 @@ def main() -> int:
     visual.add_argument("project_id")
     approve_shots = commands.add_parser("approve-shot-plan", help="Approve validated shot/media/generation planning")
     approve_shots.add_argument("project_id")
+    flow = commands.add_parser("flow-preflight", help="Discover the dedicated Flow session capabilities")
+    flow.add_argument("project_id")
+    generate = commands.add_parser("execute-generation", help="Explicitly execute a bounded approved Flow generation slice")
+    generate.add_argument("project_id")
+    generate.add_argument("--confirm-execute-generation", action="store_true", help="Required: authorizes paid provider submissions")
     args = parser.parse_args()
     try:
         if args.command == "new":
@@ -44,6 +50,14 @@ def main() -> int:
             shot, media, requests = run_visual_planning_stages(Path(args.runtime_root), args.project_id)
             print(f"shot_plan: {shot}\nmedia_plan: {media}\ngeneration_requests: {requests}")
             return 0
+        if args.command == "flow-preflight":
+            # Browser implementation is deliberately injected by the desktop/operator runtime;
+            # this CLI does not guess UI state or automate a login.
+            raise ValueError("Flow preflight requires the configured Story Auto browser inspector runtime")
+        if args.command == "execute-generation":
+            if not args.confirm_execute_generation:
+                raise ValueError("explicit --confirm-execute-generation is required")
+            raise ValueError("Flow execution requires the configured Story Auto browser executor runtime")
         result = run_content_stage(Path(args.runtime_root), args.project_id)
         print(f"content: {result}")
         # Projects created before audio configuration remain valid content-only projects.
