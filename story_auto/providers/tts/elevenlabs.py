@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json, socket, urllib.error, urllib.parse, urllib.request
+import json, socket, urllib.error, urllib.parse, urllib.request, re, shutil, subprocess, tempfile, os
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,23 @@ def merge_offset_spans(parts: list[list[dict[str, Any]]], durations: list[float]
     return merged
 
 
+def concatenate_mp3_parts(parts: list[bytes], output: Path) -> None:
+    """Losslessly concatenate independently generated MP3 chunks into a staged artifact."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg: raise AudioPipelineError("AUDIO_ARTIFACT_INVALID", provider="elevenlabs", stage="tts", detail="ffmpeg unavailable")
+    with tempfile.TemporaryDirectory(prefix="story_auto_elevenlabs_", dir=output.parent) as directory:
+        root = Path(directory); paths=[]
+        for index, payload in enumerate(parts, 1):
+            path=root / f"part_{index:04d}.mp3"; atomic_write_bytes(path, payload); paths.append(path)
+        listing=root / "concat.txt"
+        listing.write_text("".join(f"file '{path.as_posix()}'\n" for path in paths), encoding="utf-8")
+        staged=root / "voice.mp3"
+        result=subprocess.run([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(staged)], capture_output=True, text=True, check=False)
+        if result.returncode != 0 or not staged.is_file() or staged.stat().st_size == 0:
+            raise AudioPipelineError("AUDIO_ARTIFACT_INVALID", provider="elevenlabs", stage="tts")
+        os.replace(staged, output)
+
+
 class ElevenLabsProvider:
     name = "elevenlabs"
     provenance = "YouTube Auto snapshot d0c86c8e: chunk planning/error ambiguity concepts adapted; no imports retained."
@@ -40,17 +57,21 @@ class ElevenLabsProvider:
         except urllib.error.HTTPError as error: raise AudioPipelineError(classify_http(error.code), provider=self.name, stage="tts") from error
         except (urllib.error.URLError, TimeoutError, socket.timeout) as error: raise AmbiguousDispatchError(self.name) from error
     def generate(self, request: TTSRequest, output: Path) -> TTSResult:
-        keys, chunks, audio = provider_keys(self.name), self.chunk_plan(request.narration, int(request.settings.get("chunk_characters", 4500))), []
-        if len(chunks) != 1: raise AudioPipelineError("CHUNK_CONCAT_REQUIRED", provider=self.name, stage="tts", detail="multi-part production requires ffmpeg")
-        for key in keys:
-            try:
-                audio = self.transport(f"https://api.elevenlabs.io/v1/text-to-speech/{request.voice_id}?{urllib.parse.urlencode({'output_format':'mp3_44100_128'})}", {"text":chunks[0], "model_id":request.settings.get("model", "eleven_multilingual_v2")}, key, "audio/mpeg"); break
-            except AudioPipelineError as error:
-                if error.failure_class in {"CREDENTIAL_INVALID", "QUOTA_EXHAUSTED", "RATE_LIMITED"}: continue
-                raise
-        if not audio: raise AudioPipelineError("PROVIDER_GENERATION_FAILED", provider=self.name, stage="tts")
-        atomic_write_bytes(output, audio)
-        return TTSResult(output, self.name, request.voice_id, float(request.settings.get("duration_seconds", 0)), request.narration_sha256, {"model":request.settings.get("model", "eleven_multilingual_v2")}, "elevenlabs_forced_alignment")
+        keys, chunks = provider_keys(self.name), self.chunk_plan(request.narration, int(request.settings.get("chunk_characters", 4500)))
+        parts=[]
+        for chunk in chunks:
+            audio=b""
+            for key in keys:
+                try:
+                    audio = self.transport(f"https://api.elevenlabs.io/v1/text-to-speech/{request.voice_id}?{urllib.parse.urlencode({'output_format':'mp3_44100_128'})}", {"text":chunk, "model_id":request.settings.get("model", "eleven_multilingual_v2")}, key, "audio/mpeg"); break
+                except AudioPipelineError as error:
+                    if error.failure_class in {"CREDENTIAL_INVALID", "QUOTA_EXHAUSTED", "RATE_LIMITED"}: continue
+                    raise
+            if not audio: raise AudioPipelineError("PROVIDER_GENERATION_FAILED", provider=self.name, stage="tts")
+            parts.append(audio)
+        if len(parts) == 1: atomic_write_bytes(output, parts[0])
+        else: concatenate_mp3_parts(parts, output)
+        return TTSResult(output, self.name, request.voice_id, 0.0, request.narration_sha256, {"model":request.settings.get("model", "eleven_multilingual_v2"), "part_count":len(parts)}, "elevenlabs_forced_alignment")
     def align(self, request: TTSRequest, result: TTSResult) -> list[dict[str, Any]]:
         """Call the documented forced-alignment boundary; never retry ambiguous dispatch."""
         key = provider_keys(self.name)[0]
@@ -65,14 +86,20 @@ class ElevenLabsProvider:
         except (urllib.error.URLError, TimeoutError, socket.timeout) as error: raise AmbiguousDispatchError(self.name) from error
         words = payload.get("words") if isinstance(payload, dict) else None
         if not isinstance(words, list): raise AudioPipelineError("FORCED_ALIGNMENT_FAILED", provider=self.name, stage="alignment")
+        timed = []
+        for word in words:
+            if not isinstance(word, dict) or not str(word.get("text", word.get("word", ""))).strip(): continue
+            try: timed.append((float(word["start"]), float(word["end"])))
+            except (KeyError, TypeError, ValueError): raise AudioPipelineError("FORCED_ALIGNMENT_FAILED", provider=self.name, stage="alignment")
+        transcript = [(index, match) for index, match in enumerate(re.finditer(r"\S+", request.narration))]
+        if len(timed) < len(transcript): raise AudioPipelineError("NARRATION_ALIGNMENT_MISMATCH", provider=self.name, stage="alignment")
+        word_to_time = {index: timed[index] for index, _ in transcript}
         spans=[]
         for start_index, end_index in sentence_spans(request.narration):
             sentence=request.narration[start_index:end_index]
-            candidates=[word for word in words if str(word.get("text", word.get("word", ""))).strip()]
-            if not candidates: raise AudioPipelineError("FORCED_ALIGNMENT_FAILED", provider=self.name, stage="alignment")
-            # Provider words are ordered; deterministic proportional partition avoids provider objects leaving this boundary.
-            left=max(0, int(len(spans) * len(candidates) / max(1, len(sentence_spans(request.narration)))))
-            right=max(left + 1, int((len(spans)+1) * len(candidates) / max(1, len(sentence_spans(request.narration)))))
-            selected=candidates[left:right]
-            spans.append({"text":sentence, "start":float(selected[0].get("start", 0)), "end":float(selected[-1].get("end", 0))})
+            positions=[index for index, match in transcript if start_index <= match.start() < end_index]
+            if not positions: raise AudioPipelineError("FORCED_ALIGNMENT_FAILED", provider=self.name, stage="alignment")
+            start, end = word_to_time[positions[0]][0], word_to_time[positions[-1]][1]
+            if end <= start: raise AudioPipelineError("FORCED_ALIGNMENT_FAILED", provider=self.name, stage="alignment")
+            spans.append({"text":sentence, "start":start, "end":end})
         return spans

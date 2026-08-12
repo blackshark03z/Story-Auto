@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
-from story_auto.core.audio import TTSRequest, TimedSpan, build_alignment, validate_alignment
+from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, validate_alignment
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import ContentValidationError, narration_hash, parse_content_markdown
 from story_auto.core.project import RuntimeLayout, load_project
@@ -61,8 +61,9 @@ def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None)
             try:
                 result = active_adapter.generate(request, audio_path)
                 if not audio_path.is_file() or audio_path.stat().st_size == 0: raise RuntimeError("provider did not publish audio")
+                validated_duration = audio_duration_seconds(audio_path, provider=provider_name)
                 audio_sha256 = sha256_file(audio_path)
-                manifest = {"schema_version":"story-auto-audio/1.0.0", "audio_path":audio_relative, "audio_sha256":audio_sha256, "duration_seconds":result.duration_seconds, "provider":provider_name, "voice_id":voice_id, "narration_sha256":narration_sha256, "alignment_method":result.alignment_method, "metadata":result.metadata}
+                manifest = {"schema_version":"story-auto-audio/1.0.0", "audio_path":audio_relative, "audio_sha256":audio_sha256, "duration_seconds":validated_duration, "provider":provider_name, "voice_id":voice_id, "narration_sha256":narration_sha256, "alignment_method":result.alignment_method, "metadata":result.metadata}
                 atomic_write_json(manifest_path, manifest)
                 checkpoints.record("tts", fingerprint=tts_fingerprint, status="SUCCESS", outputs=[audio_relative, manifest_relative], producer_version=TTS_PRODUCER_VERSION); tts_action="RUN"
             except Exception:

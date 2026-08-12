@@ -35,6 +35,16 @@ class ProjectConfig:
             raise ProjectValidationError("content_path must be the project-relative content.md")
         if not isinstance(self.settings, dict):
             raise ProjectValidationError("settings must be a JSON object")
+        tts = self.settings.get("tts")
+        if tts is not None:
+            if not isinstance(tts, dict) or tts.get("provider") not in {"elevenlabs", "typecast"}:
+                raise ProjectValidationError("settings.tts.provider must be elevenlabs or typecast")
+            if tts.get("allow_cross_provider_fallback", False) is not False:
+                raise ProjectValidationError("settings.tts.allow_cross_provider_fallback must be false")
+            provider = tts["provider"]
+            provider_settings = tts.get(provider)
+            if not isinstance(provider_settings, dict) or not isinstance(provider_settings.get("voice_id"), str) or not provider_settings["voice_id"].strip():
+                raise ProjectValidationError(f"settings.tts.{provider}.voice_id is required")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "project_id": self.project_id,
