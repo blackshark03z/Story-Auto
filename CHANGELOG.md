@@ -13,6 +13,10 @@
   state, and per-stage checkpoint/resume fingerprints.
 - Add deterministic planning/provider tests plus bounded live Gemini 3.5 and
   3.6 fixture validation. The production baseline remains Gemini 3.5 Flash.
+- Add provider-independent visual planning: validated `shot_plan.json`,
+  deterministic hybrid/full-video `media_plan.json`, compiled continuity and
+  shot `generation_requests.json`, dependency ordering, guardrail estimates,
+  visual-stage resume fingerprints, and hash-bound shot-plan approval.
 
 ## 2026-08-12 — Design baseline v1.0.0
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .core.project import ProjectConfig, RuntimeLayout, create_project
 from .pipeline import run_audio_stages, run_content_stage
-from .core.planning import approve_plan, run_planning_stages
+from .core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -21,6 +21,10 @@ def main() -> int:
         command.add_argument("project_id")
     approve = commands.add_parser("approve-plan", help="Approve validated story timeline and continuity")
     approve.add_argument("project_id")
+    visual = commands.add_parser("plan-visuals", help="Compile shot, media, and provider-independent generation plans")
+    visual.add_argument("project_id")
+    approve_shots = commands.add_parser("approve-shot-plan", help="Approve validated shot/media/generation planning")
+    approve_shots.add_argument("project_id")
     args = parser.parse_args()
     try:
         if args.command == "new":
@@ -31,6 +35,14 @@ def main() -> int:
         if args.command == "approve-plan":
             approve_plan(Path(args.runtime_root), args.project_id)
             print("review_state: APPROVED")
+            return 0
+        if args.command == "approve-shot-plan":
+            approve_shot_plan(Path(args.runtime_root), args.project_id)
+            print("review_state: APPROVED")
+            return 0
+        if args.command == "plan-visuals":
+            shot, media, requests = run_visual_planning_stages(Path(args.runtime_root), args.project_id)
+            print(f"shot_plan: {shot}\nmedia_plan: {media}\ngeneration_requests: {requests}")
             return 0
         result = run_content_stage(Path(args.runtime_root), args.project_id)
         print(f"content: {result}")

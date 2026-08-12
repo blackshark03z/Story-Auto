@@ -58,6 +58,15 @@ visual generation, and UI implementation remain deferred.
   continuity when timeline semantics, prompt version, or model changes.
 - A validated plan is not approved. `approve-plan` writes hash-bound durable
   `review_state.json` approval after semantic validation.
+- Visual planning now compiles independent shot, media, and generation-request
+  artifacts. Shot IDs, reference dependencies, request fingerprints, hybrid
+  hook boundaries, full-video constraints, media overrides, and attempt
+  exposure are validated before any provider execution is possible.
+- `plan-visuals` creates those artifacts; `approve-shot-plan` records the
+  required hash-bound human planning approval. Neither command calls Flow.
+- One bounded Gemini 3.5 fixture passed timeline/continuity/shot planning and
+  both hybrid and full-video media/request compilation; the runtime evidence
+  records aggregate usage and latency only.
 - Bounded live Gemini fixture validation passed for `gemini-3.5-flash`; the
   identical `gemini-3.6-flash` benchmark was available and passed without
   changing the production baseline. Safe metrics are in runtime evidence.

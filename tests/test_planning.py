@@ -8,7 +8,9 @@ from unittest.mock import patch
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.audio import TimedSpan, build_alignment
 from story_auto.core.content import narration_hash
-from story_auto.core.planning import approve_plan, run_planning_stages, validate_continuity, validate_timeline
+from story_auto.core.planning import (approve_plan, approve_shot_plan, run_planning_stages,
+                                      run_visual_planning_stages, validate_continuity,
+                                      validate_generation_requests, validate_timeline)
 from story_auto.core.planning.service import PlanningError
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMResponse
@@ -24,6 +26,16 @@ class FakeGemini:
         else:
             value = {"style": {"id": "cinematic", "negative_constraints": ["no text overlays"]}, "characters": [{"entity_id": "char_daniel", "name": "Daniel", "facts": {"age": 62}, "visual_design": {"eye_color": "brown"}}], "locations": [{"entity_id": "loc_school", "name": "School", "facts": {"narration_support": "academy"}}], "props": [{"entity_id": "prop_key", "name": "Brass key", "visual_design": {"material": "brass"}}]}
         return LLMResponse(value, request.model, request.request_id, 1, 3, {"promptTokenCount": 10, "candidatesTokenCount": 5})
+
+
+class FakeVisualGemini(FakeGemini):
+    def generate_structured(self, request):
+        if request.stage == "shot_plan":
+            self.calls.append(request)
+            return LLMResponse({"shots": [
+                {"scene_id":"scn_0001","start":0,"end":1,"subject":"Daniel","action":"arrives at the academy","character_ids":["char_daniel"],"location_id":"loc_school","prop_ids":[],"camera_intent":"slow tracking","composition_intent":"wide establishing frame","visual_emotional_purpose":"establish anticipation","motion_value":2},
+                {"scene_id":"scn_0002","start":1,"end":2,"subject":"Daniel","action":"finds the brass key","character_ids":["char_daniel"],"location_id":"loc_school","prop_ids":["prop_key"],"camera_intent":"slow push in","composition_intent":"close detail","visual_emotional_purpose":"reveal discovery","motion_value":9}]}, request.model, request.request_id, 1, 3, {"promptTokenCount": 10})
+        return super().generate_structured(request)
 
 
 class PlanningTests(unittest.TestCase):
@@ -91,6 +103,33 @@ class PlanningTests(unittest.TestCase):
         from story_auto.core.project import ProjectValidationError
         with self.assertRaises(ProjectValidationError):
             ProjectConfig(project_id="prj_plan001", settings={"llm": {"provider": "gemini", "api_key": "not-allowed"}})
+
+    def test_visual_planning_media_requests_resume_and_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, config, paths, _ = self._project(directory); fake = FakeVisualGemini()
+            run_planning_stages(runtime.root, config.project_id, provider=fake)
+            project = read_json(paths.project_file); project["settings"]["media"] = {"hook_seconds": .5}; atomic_write_json(paths.project_file, project)
+            self.assertEqual(run_visual_planning_stages(runtime.root, config.project_id, provider=fake), ("RUN", "RUN", "RUN"))
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))
+            self.assertEqual(requests["guardrail_estimate"]["reference_image_requests"], 3)
+            self.assertEqual(requests["guardrail_estimate"]["required_video_requests"], 1)
+            self.assertEqual(requests["guardrail_estimate"]["preferred_video_requests"], 1)
+            self.assertTrue(all(request["request_id"].startswith("req_") for request in requests["requests"]))
+            validate_generation_requests(requests, read_json(paths.artifact_path("output/media_plan.json")), read_json(paths.artifact_path("output/continuity_bible.json")))
+            self.assertEqual(run_visual_planning_stages(runtime.root, config.project_id, provider=fake), ("SKIP", "SKIP", "SKIP"))
+            approve_shot_plan(runtime.root, config.project_id)
+            self.assertEqual(read_json(paths.artifact_path("output/review_state.json"))["plan_approval"]["status"], "APPROVED")
+
+    def test_full_video_override_rejected_and_hook_boundary_is_shot_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, config, paths, _ = self._project(directory); fake = FakeVisualGemini()
+            run_planning_stages(runtime.root, config.project_id, provider=fake)
+            project = read_json(paths.project_file); project["settings"]["media"] = {"hook_seconds": .5}; atomic_write_json(paths.project_file, project)
+            run_visual_planning_stages(runtime.root, config.project_id, provider=fake)
+            self.assertEqual(read_json(paths.artifact_path("output/media_plan.json"))["resolved_hook_end"], 1.0)
+            project["render_mode"] = "full_video_ai"; project["settings"]["media"]["overrides"] = {"sh_0001": {"media_type":"IMAGE"}}; atomic_write_json(paths.project_file, project)
+            with self.assertRaises(PlanningError) as caught: run_visual_planning_stages(runtime.root, config.project_id, provider=fake)
+            self.assertEqual(caught.exception.failure_class, "MEDIA_OVERRIDE_REJECTED")
 
 
 if __name__ == "__main__": unittest.main()
