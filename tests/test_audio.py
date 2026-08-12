@@ -16,6 +16,7 @@ from story_auto.providers.tts.elevenlabs import ElevenLabsProvider, classify_htt
 from story_auto.providers.tts.typecast import _concatenate_wav, normalize_timestamps, split_text_chunks
 from story_auto.providers.credentials import provider_keys
 from story_auto.core.audio.errors import AudioPipelineError
+from story_auto.core.audio.media import audio_duration_seconds
 
 
 class _FakeTypecast:
@@ -64,6 +65,12 @@ class AudioContractTests(unittest.TestCase):
         audio, duration = _concatenate_wav([self._wav(), self._wav()])
         self.assertEqual(duration, 2.0)
         with wave.open(BytesIO(audio), "rb") as merged: self.assertEqual(merged.getnframes(), 16000)
+
+    def test_invalid_audio_is_not_checkpoint_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "voice.wav"; path.write_bytes(b"not audio")
+            with self.assertRaises(AudioPipelineError) as captured: audio_duration_seconds(path, provider="typecast")
+            self.assertEqual(captured.exception.failure_class, "AUDIO_ARTIFACT_INVALID")
 
     def test_resume_keeps_audio_when_alignment_is_missing_and_invalidates_on_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
