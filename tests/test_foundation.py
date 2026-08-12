@@ -9,6 +9,7 @@ from unittest.mock import patch
 from story_auto.core.artifacts import ArtifactWriteError, atomic_write_json, atomic_write_text
 from story_auto.core.checkpoint import FingerprintError, canonical_json, fingerprint
 from story_auto.core.content import ContentValidationError, parse_content_markdown
+from story_auto.core.project import ProjectPathError, ProjectPaths, RuntimeLayout
 
 
 class NarrationParsingTests(unittest.TestCase):
@@ -64,6 +65,38 @@ class FingerprintTests(unittest.TestCase):
             fingerprint(namespace="", direct_inputs={})
         with self.assertRaises(FingerprintError):
             canonical_json({"not_finite": float("nan")})
+
+
+class RuntimePathTests(unittest.TestCase):
+    def test_creates_only_story_auto_runtime_layout_under_temporary_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            layout = RuntimeLayout.from_root(Path(directory) / "story-auto-runtime").ensure()
+            expected = {
+                layout.projects,
+                layout.flow_profile,
+                layout.cache,
+                layout.temp,
+                layout.logs,
+                layout.evidence,
+                layout.locks,
+            }
+            self.assertTrue(all(path.is_dir() for path in expected))
+            self.assertTrue(all("youtube" not in str(path).casefold() for path in expected))
+
+    def test_project_artifacts_require_opaque_id_and_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = ProjectPaths(RuntimeLayout.from_root(directory), "prj_story001")
+            self.assertEqual(project.project_file, project.root / "project.json")
+            self.assertEqual(project.content_file, project.root / "content.md")
+            self.assertEqual(
+                project.artifact_path("artifacts/plans/timeline.json"),
+                project.root / "artifacts" / "plans" / "timeline.json",
+            )
+            for unsafe in ("../outside.json", "C:\\outside.json", "/outside.json", ""):
+                with self.subTest(unsafe=unsafe), self.assertRaises(ProjectPathError):
+                    project.artifact_path(unsafe)
+            with self.assertRaises(ProjectPathError):
+                ProjectPaths(RuntimeLayout.from_root(directory), "story-001")
 
 
 if __name__ == "__main__":
