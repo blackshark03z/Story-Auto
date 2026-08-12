@@ -52,3 +52,6 @@ class CdpPage:
         node = self.command("DOM.querySelector", {"nodeId":root, "selector":selector}).get("nodeId", 0)
         if not node: raise FlowSessionError("FLOW_UI_CHANGED", "reference input not found")
         self.command("DOM.setFileInputFiles", {"nodeId":node, "files":files})
+
+    def insert_text(self, text: str) -> None:
+        self.command("Input.insertText", {"text":text})

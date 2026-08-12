@@ -11,6 +11,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from .validation import AssetValidationError, validate_image, validate_video
+from .session import FlowSessionError
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
 FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED", "AMBIGUOUS"}
@@ -93,9 +94,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
                 attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
                 entry.update({"status":"SUCCEEDED", "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata}, "updated_at":_now()}); submissions += 1
-            except FlowError as error:
+            except (FlowError, FlowSessionError) as error:
                 # A post-dispatch timeout/unknown result is deliberately terminal and non-resubmittable.
-                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else "FAILED_RETRYABLE")
+                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_UI_CHANGED", "FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE"))
                 attempt.update({"status":state, "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})

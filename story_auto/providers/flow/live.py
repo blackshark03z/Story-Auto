@@ -13,7 +13,7 @@ from .service import FlowError
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
 _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',tag:e.tagName})))()"""
-_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'};const all=Array.from(document.querySelectorAll('button[type="submit"]'));const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=all.filter(e=>p.contains(e)&&visible(e));if(xs.length===1){const e=xs[0];return [{i:all.indexOf(e),label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}]}if(xs.length>1)return xs.map(e=>({i:all.indexOf(e),label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}));p=p.parentElement}return []})()"""
+_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'};const all=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');return all.filter(visible).map((e,i)=>({i,label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}))})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
@@ -22,14 +22,14 @@ _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=
 class _Editor:
     def __init__(self, dom, index): self.dom,self.index=dom,index
     def set_text(self, value):
-        value = __import__('json').dumps(value)
-        self.dom.page.evaluate("""(()=>{const e=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled})[%d];if(!e)throw Error('editor');e.focus();if(e.tagName==='TEXTAREA'){e.value=%s;e.dispatchEvent(new Event('input',{bubbles:true}));}else{e.textContent=%s;e.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:%s}));}})()""" % (self.index,value,value,value))
+        self.dom.page.evaluate("""(()=>{const e=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled})[%d];if(!e)throw Error('editor');e.focus();if(e.tagName==='TEXTAREA'){e.select()}else{document.execCommand('selectAll',false,null)}})()""" % self.index)
+        self.dom.page.insert_text(value)
     def read_text(self): return self.dom.page.evaluate(_EDITOR_JS)[self.index]["text"]
 
 class _Control:
     def __init__(self, dom, index): self.dom,self.index=dom,index
     def click(self):
-        self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button[type=\"submit\"]'));if(!xs[%d])throw Error('generate');(%s)(xs[%d])})()""" % (self.index,_ACTIVATE,self.index))
+        self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(!xs[%d])throw Error('generate');(%s)(xs[%d])})()""" % (self.index,_ACTIVATE,self.index))
 
 
 class FlowBrowserDom:
