@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
+import re
 
 
 def narration_hash(narration: str) -> str:
@@ -49,3 +50,13 @@ def plan_chunks(narration: str, *, max_characters: int) -> tuple[str, ...]:
 
 def validate_reconstruction(source: str, chunks: tuple[str, ...] | list[str]) -> bool:
     return "".join(chunks) == source
+
+
+def sentence_spans(text: str) -> list[tuple[int, int]]:
+    """Deterministic sentence ranges, retaining all source characters across spans."""
+    spans, cursor = [], 0
+    for match in re.finditer(r".+?(?:[.!?]+(?:[\"')\]]+)?)(?=\s+|$)", text, re.DOTALL):
+        start, end = match.span()
+        if text[start:end].strip(): spans.append((start, end)); cursor = end
+    if cursor < len(text) and text[cursor:].strip(): spans.append((cursor, len(text)))
+    return spans or [(0, len(text))]

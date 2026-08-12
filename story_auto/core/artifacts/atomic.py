@@ -55,6 +55,21 @@ def atomic_write_json(path: Path | str, value: Any) -> None:
     atomic_write_text(path, serialized)
 
 
+def atomic_write_bytes(path: Path | str, content: bytes) -> None:
+    if not isinstance(content, bytes):
+        raise TypeError("artifact bytes must be bytes")
+    target = Path(path); target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False, dir=target.parent, prefix=f".{target.name}.", suffix=".tmp") as temporary:
+            temp_path = Path(temporary.name); temporary.write(content); temporary.flush(); os.fsync(temporary.fileno())
+        os.replace(temp_path, target); temp_path = None
+    except OSError as error:
+        raise ArtifactWriteError(f"could not atomically write {target}") from error
+    finally:
+        if temp_path is not None: temp_path.unlink(missing_ok=True)
+
+
 def read_json(path: Path | str) -> Any:
     """Read UTF-8 JSON, retaining the filesystem boundary in the error."""
 

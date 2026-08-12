@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from .core.project import ProjectConfig, RuntimeLayout, create_project
-from .pipeline import run_content_stage
+from .pipeline import run_audio_stages, run_content_stage
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -26,7 +26,13 @@ def main() -> int:
             print(f"CREATED {project_id}")
             return 0
         result = run_content_stage(Path(args.runtime_root), args.project_id)
-        print(f"content stage = {result}")
+        print(f"content: {result}")
+        # Projects created before audio configuration remain valid content-only projects.
+        from .core.project import load_project
+        _, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+        if "tts" in config.settings:
+            tts, alignment = run_audio_stages(Path(args.runtime_root), args.project_id)
+            print(f"tts: {tts}\nalignment: {alignment}")
         return 0
     except (ValueError, OSError, RuntimeError) as error:
         parser.exit(2, f"error: {error}\n")

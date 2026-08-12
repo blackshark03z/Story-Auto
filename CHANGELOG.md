@@ -4,6 +4,10 @@
 
 - Add the offline Story Auto core foundation: minimal project contract, locking,
   atomic checkpoint store, bounded retry, and CLI content-manifest vertical slice.
+- Add provider-neutral TTS request/result contracts, canonical audio manifests,
+  canonical alignment validation, and separate TTS/alignment resume identities.
+- Add isolated ElevenLabs and Typecast adapters with offline timestamp/chunking
+  coverage. Live validation remains credential-gated.
 
 ## 2026-08-12 — Design baseline v1.0.0
 
