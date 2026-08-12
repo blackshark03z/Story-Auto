@@ -2,11 +2,13 @@
 
 ## Current accepted state
 
-**DESIGN_FROZEN / IMPLEMENTATION_NOT_STARTED**
+**DESIGN_FROZEN / FOUNDATION_IN_PROGRESS**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
-The repository baseline contains product requirements, architecture, artifact contracts, recovery rules, acceptance criteria, Build OS adoption tooling, and no product implementation yet.
+The repository contains the frozen product authorities, Build OS adoption tooling,
+and accepted offline foundation primitives. Provider, planning, rendering, and UI
+implementation have not yet been accepted.
 
 ## Accepted feature inventory
 
@@ -25,10 +27,22 @@ The repository baseline contains product requirements, architecture, artifact co
 - Title/description/thumbnail package.
 - CLI first; local UI after hybrid pipeline proof.
 
+## Accepted implementation evidence
+
+- Strict `content.md` parsing requires exactly one non-empty `## Narration`
+  section; arbitrary document body is not treated as narration.
+- Durable JSON/text artifact publication is atomic and UTF-8.
+- Direct stage inputs have deterministic canonical SHA-256 fingerprints.
+- Focused offline tests cover valid/invalid narration input, failed atomic
+  replacement preservation, and fingerprint determinism.
+
 ## Configuration/schema authority
 
 Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and `contracts/schemas/`. Secrets are never stored in project artifacts.
 
 ## Explicitly not accepted yet
 
-No product code, provider adapter, UI, provider live test, FFmpeg integration, or generated Story Auto production video has been accepted at this baseline.
+No provider adapter, UI, provider live test, FFmpeg integration, or generated
+Story Auto production video has been accepted at this baseline. The remaining
+Foundation work includes project paths/model, lock/checkpoint/retry behavior,
+and the CLI skeleton.

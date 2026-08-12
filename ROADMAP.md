@@ -9,8 +9,9 @@
 ## Phase 1 — Foundation
 
 - Project model/paths.
-- strict `content.md` parser.
-- atomic I/O, project lock, fingerprints/checkpoints, bounded retry.
+- [x] strict `content.md` parser.
+- [x] atomic I/O and deterministic fingerprints.
+- Project lock, checkpoints, bounded retry.
 - CLI skeleton + tests.
 
 ## Phase 2 — Audio foundation

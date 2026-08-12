@@ -12,3 +12,10 @@
 - Prepared Build OS v1.22 external adoption kit.
 
 No product implementation is accepted in this release baseline.
+
+## 2026-08-12 — Foundation primitives accepted
+
+- Added strict `content.md` narration parsing.
+- Added atomic UTF-8 JSON/text artifact publication.
+- Added deterministic direct-input SHA-256 fingerprints and focused offline coverage.
+- No frozen product/design contracts changed.
