@@ -58,6 +58,17 @@ def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: s
         if not isinstance(attempt, dict) or attempt.get("failure_class") != "FLOW_UI_CHANGED" or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
         entry["status"] = "FAILED_RETRYABLE"; entry["reconciled_at"] = _now(); entry["reconciliation"] = "verified_no_dispatch"; atomic_write_json(path, manifest)
 
+def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id: str, source: Path, *, settings: dict, attribution: str) -> dict:
+    """Adopt one attributable human-recovered Flow output without a new submit."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest=_manifest(paths, project_id); entry=next((e for e in manifest["requests"] if e.get("request_id")==request_id),None)
+        if not entry or entry.get("status") != "AMBIGUOUS" or not attribution: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
+        metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
+        number=len(entry["attempts"])+1; rel=f"assets/{entry['media_type'].lower()}/{request_id}/manual_recovery_{number:03d}{source.suffix}"; target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
+        attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"metadata":metadata,"completed_at":_now()}
+        entry["attempts"].append(attempt);entry.update({"status":"SUCCEEDED","selected_asset":{"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata},"failure_class":None,"updated_at":_now()});atomic_write_json(path,manifest);return entry["selected_asset"]
+
 @dataclass
 class FlowExecutor:
     """A live adapter supplies generate(); it must acquire to the given temp file."""

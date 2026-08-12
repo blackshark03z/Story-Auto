@@ -14,7 +14,7 @@ from .settings import ResolvedFlowGenerationSettings, resolve_settings
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
 _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',is_empty:e.tagName==='TEXTAREA'?!e.value:!!e.querySelector('[data-slate-zero-width][data-slate-length="0"]'),tag:e.tagName})))()"""
-_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'};const all=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');return all.filter(visible).map((e,i)=>({i,label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}))})()"""
+_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
@@ -34,10 +34,10 @@ class _Editor:
     def read_text(self): return self.dom.page.evaluate(_EDITOR_JS)[self.index]["text"]
 
 class _Control:
-    def __init__(self, dom, index): self.dom,self.index=dom,index
+    def __init__(self, dom, evidence): self.dom,self.evidence=dom,evidence
     def click(self):
-        target = self.dom.page.evaluate("""(()=>{const xs=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward'&&e.getAttribute('aria-disabled')!=='true');const e=xs[%d];if(!e)throw Error('eligible_generate');const r=e.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()""" % self.index)
-        self.dom.page.click(float(target["x"]), float(target["y"]))
+        if not self.evidence.get("enabled"): raise FlowError("FLOW_GENERATE_DISABLED")
+        self.dom.page.click(float(self.evidence["x"]), float(self.evidence["y"]))
 
 
 class FlowBrowserDom:
@@ -72,7 +72,7 @@ class FlowBrowserDom:
         if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
         actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
         return actual
-    def generate_controls(self, _editor, _media_type): return [_Control(self, x["i"]) for x in self.page.evaluate(_CONTROL_JS) or []]
+    def generate_controls(self, _editor, _media_type): return [_Control(self, x) for x in self.page.evaluate(_CONTROL_JS) or [] if x.get("enabled")]
     def add_references(self, files):
         # Native file inputs are normally hidden behind a visible upload button.
         count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
@@ -105,9 +105,16 @@ class LiveFlowGenerator:
     def __call__(self, request, references, destination: Path):
         page=CdpPage.open(self.runtime)
         try:
-            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved); before=set(dom.media_candidates())
+            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved); before=set(dom.media_candidates()); before_text=page.evaluate("document.body.innerText")
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"])
-            self.dispatch_confirmed = True
+            # An immediate composer/UI transition is a dispatch acknowledgement;
+            # final media remains separately attributable by pre/post comparison.
+            for _ in range(8):
+                now_text=page.evaluate("document.body.innerText")
+                if now_text != before_text or set(dom.media_candidates()) != before:
+                    self.dispatch_confirmed = True; self.last_settings["dispatch_ack_method"]="composer_or_output_transition"; break
+                time.sleep(.25)
+            if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "native click produced no Flow acknowledgement")
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
                 added=[x for x in dom.media_candidates() if x not in before]
