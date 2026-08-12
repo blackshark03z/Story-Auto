@@ -39,6 +39,12 @@ implementation have not yet been accepted.
   profile, cache, temp, logs, evidence, and locks directories.
 - Opaque project IDs and durable project-relative artifact paths reject
   absolute or escaping paths.
+- Versioned minimal project contracts validate render mode and isolate each
+  project into `project.json`, `content.md`, `output/`, and `logs/`.
+- Project locks are one-writer-per-project with conservative stale recovery.
+- The `content` pipeline stage produces a deterministic `content_manifest.json`
+  with atomic checkpoint RUN/SKIP/invalidation behavior.
+- The CLI supports project creation, run, and resume entirely offline.
 
 ## Configuration/schema authority
 
@@ -47,6 +53,4 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 ## Explicitly not accepted yet
 
 No provider adapter, UI, provider live test, FFmpeg integration, or generated
-Story Auto production video has been accepted at this baseline. The remaining
-Foundation work includes project configuration/model, lock/checkpoint/retry
-behavior, and the CLI skeleton.
+Story Auto production video has been accepted at this baseline.

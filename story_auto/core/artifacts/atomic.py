@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 from typing import Any
+import hashlib
 
 
 class ArtifactWriteError(OSError):
@@ -52,3 +53,27 @@ def atomic_write_json(path: Path | str, value: Any) -> None:
         value, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False
     ) + "\n"
     atomic_write_text(path, serialized)
+
+
+def read_json(path: Path | str) -> Any:
+    """Read UTF-8 JSON, retaining the filesystem boundary in the error."""
+
+    target = Path(path)
+    try:
+        with target.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, json.JSONDecodeError) as error:
+        raise ArtifactWriteError(f"could not read JSON artifact {target}") from error
+
+
+def sha256_file(path: Path | str) -> str:
+    """Return the SHA-256 of a file without loading it all into memory."""
+
+    digest = hashlib.sha256()
+    try:
+        with Path(path).open("rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as error:
+        raise ArtifactWriteError(f"could not hash file {path}") from error
+    return digest.hexdigest()

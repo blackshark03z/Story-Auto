@@ -24,7 +24,15 @@ def canonical_json(value: Any) -> str:
         raise FingerprintError("fingerprint inputs must be finite JSON values") from error
 
 
-def fingerprint(*, namespace: str, direct_inputs: Mapping[str, Any]) -> str:
+def fingerprint(
+    *,
+    namespace: str | None = None,
+    direct_inputs: Mapping[str, Any],
+    stage_name: str | None = None,
+    producer_version: str | None = None,
+    artifact_schema_version: str | None = None,
+    settings: Mapping[str, Any] | None = None,
+) -> str:
     """Hash an explicit namespace and the stage's direct inputs.
 
     The namespace makes otherwise-identical input data distinct between stage
@@ -32,10 +40,24 @@ def fingerprint(*, namespace: str, direct_inputs: Mapping[str, Any]) -> str:
     cache policy stay owned by later checkpoint services.
     """
 
+    if namespace is None:
+        namespace = stage_name
     if not isinstance(namespace, str) or not namespace.strip():
         raise FingerprintError("fingerprint namespace must be non-empty text")
     if not isinstance(direct_inputs, Mapping):
         raise FingerprintError("direct_inputs must be a mapping")
 
-    payload = canonical_json({"namespace": namespace, "direct_inputs": dict(direct_inputs)})
+    if producer_version is not None and (not isinstance(producer_version, str) or not producer_version):
+        raise FingerprintError("producer_version must be non-empty text")
+    if artifact_schema_version is not None and (not isinstance(artifact_schema_version, str) or not artifact_schema_version):
+        raise FingerprintError("artifact_schema_version must be non-empty text")
+    if settings is not None and not isinstance(settings, Mapping):
+        raise FingerprintError("settings must be a mapping")
+    payload = canonical_json({
+        "namespace": namespace,
+        "producer_version": producer_version,
+        "artifact_schema_version": artifact_schema_version,
+        "direct_inputs": dict(direct_inputs),
+        "settings": dict(settings or {}),
+    })
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

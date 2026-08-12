@@ -48,3 +48,18 @@ The CLI is the first canonical execution path. A local UI is added only after th
 ## Build OS
 
 Build OS v1.22 is adopted **outside this repository**. The product repository contains only its tracked adoption policy/authority records after bootstrap; `.buildos/` remains local control state and is excluded from Git by the OS.
+
+## Foundation CLI
+
+The current offline foundation owns a separate runtime root and proves the
+first artifact boundary only. It makes no provider or network calls.
+
+```text
+python -m story_auto --runtime-root runtime new --project-id prj_example
+python -m story_auto --runtime-root runtime run prj_example
+python -m story_auto --runtime-root runtime resume prj_example
+```
+
+`run` writes `output/content_manifest.json` from the required `## Narration`
+section in `content.md`. `resume` skips only when its deterministic checkpoint
+matches and the expected artifact is still present; changing narration reruns it.

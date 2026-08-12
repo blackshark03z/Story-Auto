@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add the offline Story Auto core foundation: minimal project contract, locking,
+  atomic checkpoint store, bounded retry, and CLI content-manifest vertical slice.
+
 ## 2026-08-12 — Design baseline v1.0.0
 
 - Froze Story Auto V1 product requirements.
