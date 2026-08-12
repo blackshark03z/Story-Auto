@@ -14,7 +14,9 @@ class CdpPage:
     @classmethod
     def open(cls, runtime, *, opener=urlopen, ws_connect=None):
         try:
-            with opener(runtime.cdp_url.rstrip("/") + "/json", timeout=4) as response:
+            # Chrome's documented target list endpoint is /json/list; /json is
+            # a human-facing discovery response and is not consistently a list.
+            with opener(runtime.cdp_url.rstrip("/") + "/json/list", timeout=4) as response:
                 pages = json.loads(response.read().decode("utf-8"))
             matches = [p for p in pages if p.get("type") == "page" and str(p.get("url", "")).startswith(runtime.project_url)]
             if len(matches) != 1: raise FlowSessionError("FLOW_PROJECT_MISMATCH", f"expected one Flow project tab, found {len(matches)}")
