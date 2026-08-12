@@ -10,6 +10,7 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import FlowError, FlowExecutor, execute_generation
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
+from story_auto.providers.flow.settings import resolve_settings, select_model
 
 
 class Editor:
@@ -87,5 +88,19 @@ class FlowTests(unittest.TestCase):
             runtime,cfg,_=self._project(root); executor,_=self._executor()
             with self.assertRaises(FlowError) as caught: execute_generation(runtime.root,cfg.project_id,executor=executor)
             self.assertEqual(caught.exception.failure_class,"EXECUTION_CONFIRMATION_REQUIRED")
+    def test_provider_policy_resolves_explicit_counts_and_modes(self):
+        smoke=resolve_settings({"purpose":"REFERENCE","media_type":"IMAGE","execution_tier":"DEV_SMOKE","aspect_ratio":"16:9"})
+        reference=resolve_settings({"purpose":"REFERENCE","media_type":"IMAGE","aspect_ratio":"16:9"})
+        shot=resolve_settings({"purpose":"SHOT","media_type":"IMAGE","aspect_ratio":"16:9"})
+        video=resolve_settings({"purpose":"SHOT","media_type":"VIDEO","depends_on":["ref"],"target_duration":5,"aspect_ratio":"16:9"})
+        self.assertEqual((smoke.output_count, reference.output_count, shot.output_count), (1,2,1)); self.assertEqual(video.workflow_mode,"REFERENCE_TO_VIDEO")
+        self.assertEqual(select_model(reference,[{"name":"fallback","media_types":["IMAGE"]}])["name"],"fallback")
+    def test_pre_dispatch_failure_can_only_be_reopened_with_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","status":"FAILED_PERMANENT","attempts":[{"failure_class":"FLOW_UI_CHANGED","dispatch_confirmed":False}]}]})
+            from story_auto.providers.flow.service import reopen_verified_pre_dispatch_failure
+            reopen_verified_pre_dispatch_failure(runtime.root,cfg.project_id,"ref")
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"FAILED_RETRYABLE")
 
 if __name__ == "__main__": unittest.main()

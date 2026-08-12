@@ -48,6 +48,16 @@ def _valid_selected(paths, entry):
 
 def _runnable(request, entries): return all(entries.get(dep, {}).get("status") == "SUCCEEDED" for dep in request.get("depends_on", []))
 
+def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
+    """Only reopens an attempt with recorded proof no Generate click happened."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id); entry = next((e for e in manifest["requests"] if e.get("request_id") == request_id), None)
+        if not entry or entry.get("status") != "FAILED_PERMANENT": raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
+        if not isinstance(attempt, dict) or attempt.get("failure_class") != "FLOW_UI_CHANGED" or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        entry["status"] = "FAILED_RETRYABLE"; entry["reconciled_at"] = _now(); entry["reconciliation"] = "verified_no_dispatch"; atomic_write_json(path, manifest)
+
 @dataclass
 class FlowExecutor:
     """A live adapter supplies generate(); it must acquire to the given temp file."""
@@ -81,11 +91,11 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             attempt_number = len(entry["attempts"]) + 1
             if attempt_number > 2: entry["status"] = "FAILED_PERMANENT"; continue
-            attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"]}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
+            attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             refs = [entries[d].get("selected_asset", {}).get("path") for d in request.get("depends_on", [])]
             try:
-                result = executor.run(request, refs, temp); source = Path(result or temp)
+                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = True; attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 temp.parent.mkdir(parents=True, exist_ok=True)
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)

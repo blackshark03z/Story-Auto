@@ -44,7 +44,9 @@ class CdpPage:
     def evaluate(self, expression: str):
         result = self.command("Runtime.evaluate", {"expression":expression, "awaitPromise":True, "returnByValue":True})
         detail = result.get("exceptionDetails")
-        if detail: raise FlowSessionError("FLOW_UI_CHANGED", "page evaluation failed")
+        if detail:
+            description = str(detail.get("exception", {}).get("description", "page evaluation failed")).split("\n", 1)[0][:180]
+            raise FlowSessionError("FLOW_UI_CHANGED", description)
         return result.get("result", {}).get("value")
 
     def set_input_files(self, selector: str, files: list[str]) -> None:
@@ -55,3 +57,14 @@ class CdpPage:
 
     def insert_text(self, text: str) -> None:
         self.command("Input.insertText", {"text":text})
+
+    def key(self, key: str, *, code: str | None = None, modifiers: int = 0) -> None:
+        """Dispatch real DevTools keyboard events to the currently focused page node."""
+        virtual = {"Backspace":8, "Tab":9, "End":35}.get(key, ord(key.upper()) if len(key) == 1 else 0)
+        params = {"type":"rawKeyDown", "key":key, "code":code or key, "modifiers":modifiers, "windowsVirtualKeyCode":virtual, "nativeVirtualKeyCode":virtual}
+        self.command("Input.dispatchKeyEvent", params)
+        self.command("Input.dispatchKeyEvent", {**params, "type":"keyUp"})
+
+    def click(self, x: float, y: float) -> None:
+        self.command("Input.dispatchMouseEvent", {"type":"mousePressed", "x":x, "y":y, "button":"left", "clickCount":1})
+        self.command("Input.dispatchMouseEvent", {"type":"mouseReleased", "x":x, "y":y, "button":"left", "clickCount":1})

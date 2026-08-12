@@ -9,10 +9,11 @@ from story_auto.core.artifacts import atomic_write_bytes
 from .cdp import CdpPage
 from .page import FlowComposer
 from .service import FlowError
+from .settings import ResolvedFlowGenerationSettings, resolve_settings
 
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
-_EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',tag:e.tagName})))()"""
+_EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',is_empty:e.tagName==='TEXTAREA'?!e.value:!!e.querySelector('[data-slate-zero-width][data-slate-length="0"]'),tag:e.tagName})))()"""
 _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'};const all=Array.from(document.querySelectorAll('button')).filter(e=>e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');return all.filter(visible).map((e,i)=>({i,label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim()}))})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
@@ -22,8 +23,14 @@ _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=
 class _Editor:
     def __init__(self, dom, index): self.dom,self.index=dom,index
     def set_text(self, value):
-        self.dom.page.evaluate("""(()=>{const e=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled})[%d];if(!e)throw Error('editor');e.focus();if(e.tagName==='TEXTAREA'){e.select()}else{document.execCommand('selectAll',false,null)}})()""" % self.index)
+        # Focus resolution is DOM-only; content changes flow through native CDP
+        # keyboard/input events so the React/Slate application state receives them.
+        states = self.dom.page.evaluate(_EDITOR_JS) or []
+        if self.index >= len(states) or not states[self.index].get("is_empty"):
+            raise FlowError("FLOW_UI_CHANGED", "active Flow editor was not empty after safe composer reset")
+        self.dom.page.evaluate("""(()=>{const e=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled})[%d];if(!e)throw Error('editor');e.focus()})()""" % self.index)
         self.dom.page.insert_text(value)
+        self.dom.page.key("Tab", code="Tab")
     def read_text(self): return self.dom.page.evaluate(_EDITOR_JS)[self.index]["text"]
 
 class _Control:
@@ -35,10 +42,35 @@ class _Control:
 class FlowBrowserDom:
     def __init__(self, page: CdpPage): self.page = page
     def active_prompt_editors(self): return [_Editor(self, x["i"]) for x in self.page.evaluate(_EDITOR_JS) or []]
+    def reset_composer(self, *, timeout_seconds: int = 12) -> None:
+        """Reloads a no-dispatch draft to clear stale UI state before an attempt."""
+        self.page.command("Page.reload", {"ignoreCache":False})
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            try:
+                editors = self.page.evaluate(_EDITOR_JS) or []
+                if len(editors) == 1 and editors[0].get("is_empty"): return
+            except Exception: pass
+            time.sleep(.25)
+        raise FlowError("FLOW_UI_CHANGED", "Flow composer did not return to one empty editor")
     def choose_mode(self, media_type):
         token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
         result = self.page.evaluate("""(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return {reason:'model_trigger'};if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}const xs=Array.from(document.querySelectorAll('button[aria-controls*=%s]')).filter(visible);if(xs.length!==1)return {reason:'mode',count:xs.length};(%s)(xs[0]);await new Promise(r=>setTimeout(r,250));return {ok:true}})()""" % (_ACTIVATE, __import__('json').dumps("content-" + token), _ACTIVATE))
         if not isinstance(result, dict) or not result.get("ok"): raise FlowError("FLOW_UI_CHANGED", f"unable to resolve {media_type} mode: {result}")
+    def apply_settings(self, resolved: ResolvedFlowGenerationSettings) -> dict:
+        """Set/re-read tabs and counts; all labels/DOM stay inside this adapter."""
+        token = "IMAGE" if resolved.media_type == "IMAGE" else "VIDEO"
+        ratio = {"16:9":"LANDSCAPE", "4:3":"LANDSCAPE_4_3", "1:1":"SQUARE", "3:4":"PORTRAIT_3_4", "9:16":"PORTRAIT"}.get(resolved.aspect_ratio)
+        if not ratio: raise FlowError("FLOW_CAPABILITY_UNAVAILABLE", "unsupported Flow aspect ratio")
+        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,250));}const tab=token=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+token)&&visible(e));const choose=(token,reason)=>{const xs=tab(token);if(xs.length!==1)throw Error(reason+':'+xs.length);activate(xs[0])};choose(%s,'mode');await new Promise(r=>setTimeout(r,200));choose(%s,'ratio');await new Promise(r=>setTimeout(r,200));choose(%s,'count');await new Promise(r=>setTimeout(r,200));const active=token=>tab(token).filter(e=>e.getAttribute('aria-selected')==='true').length===1;return {media:active(%s),ratio:active(%s),count:active(%s),model:trigger.innerText.trim()}})()""" % tuple(__import__('json').dumps(v) for v in (token,ratio,str(resolved.output_count),token,ratio,str(resolved.output_count)))
+        actual = self.page.evaluate(script)
+        if not isinstance(actual,dict) or not all(actual.get(k) for k in ("media","ratio","count")): raise FlowError("FLOW_UI_CHANGED", f"settings readback mismatch: {actual}")
+        # The visible model selector supplies the actual model name; selection
+        # policy is explicit and a mismatch is retained as provenance.
+        actual["model"] = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).filter(e=>visible(e)&&e.innerText.includes('arrow_drop_down'));return xs.length===1?xs[0].innerText.replace('arrow_drop_down','').trim():null})()""")
+        if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
+        actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
+        return actual
     def generate_controls(self, _editor, _media_type): return [_Control(self, x["i"]) for x in self.page.evaluate(_CONTROL_JS) or []]
     def add_references(self, files):
         # Native file inputs are normally hidden behind a visible upload button.
@@ -68,11 +100,11 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 180): self.runtime,self.timeout_seconds=runtime,timeout_seconds
+    def __init__(self, runtime, *, timeout_seconds: int = 180): self.runtime,self.timeout_seconds,self.last_settings=runtime,timeout_seconds,None
     def __call__(self, request, references, destination: Path):
         page=CdpPage.open(self.runtime)
         try:
-            dom=FlowBrowserDom(page); before=set(dom.media_candidates())
+            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved); before=set(dom.media_candidates())
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"])
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
