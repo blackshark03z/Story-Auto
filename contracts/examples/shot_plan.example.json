@@ -1,0 +1,22 @@
+{
+  "schema_version": "story-auto-shot-plan/1.0.0",
+  "project_id": "prj_demo001",
+  "timeline_sha256": "sha256:timeline",
+  "continuity_sha256": "sha256:continuity",
+  "shots": [
+    {
+      "shot_id": "sh_0001",
+      "scene_id": "scn_0001",
+      "start": 0.0,
+      "end": 6.0,
+      "action": "Julian walks toward the exit.",
+      "camera_intent": "slow tracking",
+      "entity_refs": [
+        "char_julian"
+      ],
+      "continuity_state_refs": [
+        "night"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "schema_version": "story-auto-render-plan/1.0.0",
+  "project_id": "prj_demo001",
+  "render_mode": "hybrid_hook",
+  "master_duration": 6.0,
+  "segments": [
+    {
+      "segment_id": "rnd_0001",
+      "shot_id": "sh_0001",
+      "start": 0.0,
+      "end": 6.0,
+      "source_kind": "VIDEO",
+      "asset_id": "ast_001",
+      "asset_path": "assets/video/sh_0001/attempt_001.mp4",
+      "asset_sha256": "sha256:asset",
+      "fit": "COVER",
+      "transition": {
+        "type": "CUT"
+      },
+      "fallback_used": false
+    }
+  ]
+}

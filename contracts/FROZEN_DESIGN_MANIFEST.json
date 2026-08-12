@@ -1,0 +1,12 @@
+{
+  "schema": "story-auto.frozen-design-manifest/1.0.0",
+  "files": {
+    "DESIGN_FREEZE.md": "6665e7b8b72cfb4d32c64c22a2d3634eb448fe47647c2790ef600a0f12ebe086",
+    "docs/specs/FROZEN_PRODUCT_DESIGN_V1.md": "9e3062a4971c88aa0a5ea2074ac2f124a11f121c028086ea31a2483d6d574716",
+    "docs/specs/DOMAIN_MODEL_V1.md": "0848fcf0bc973c7a5f1dae275c66700e59c84e0c03b037d121779a11ac089c61",
+    "docs/specs/ARTIFACT_CONTRACTS_V1.md": "677b6ba4bd1e3ad9511c0d992fbc38128dadfccf78d6032db87113a8168253a7",
+    "docs/specs/FAILURE_RECOVERY_V1.md": "56ff63172285cb37525de08accd91a1470bcd03fead11a135d312457a69bfedb",
+    "docs/specs/QUALITY_ACCEPTANCE_V1.md": "68cdb10ccb7bce607a377f29d4a128dee0405ce4068ac1c9d58283663feee101",
+    "contracts/frozen_design_v1.json": "12892273d6e8d752c4019fe1863b038561c1359d5ff279bfe496be0214d10296"
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "schema_version": "story-auto-project/1.0.0",
+  "project_id": "prj_demo001",
+  "project_slug": "locked-piano",
+  "render_mode": "hybrid_hook",
+  "content_path": "content.md",
+  "providers": {
+    "tts": {
+      "selected": "elevenlabs",
+      "allow_cross_provider_fallback": false
+    },
+    "llm": {
+      "provider": "gemini",
+      "default_model": "gemini-3.5-flash",
+      "benchmark_candidates": [
+        "gemini-3.6-flash"
+      ]
+    },
+    "visual": {
+      "provider": "google_flow"
+    }
+  },
+  "render": {
+    "width": 1920,
+    "height": 1080,
+    "aspect_ratio": "16:9",
+    "fps": 30
+  },
+  "hybrid": {
+    "hook_seconds": 55,
+    "motion_spikes": true
+  },
+  "audio": {
+    "source_video_audio": "MUTE",
+    "bgm_enabled": true,
+    "bgm_path": "assets/audio/bgm.mp3"
+  },
+  "guardrails": {
+    "max_auto_attempts_per_request": 2,
+    "large_batch_requires_confirmation": true,
+    "full_video_batch_requires_confirmation": true,
+    "one_generation_project_at_a_time": true
+  }
+}

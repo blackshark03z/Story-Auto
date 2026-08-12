@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-final-manifest/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "final_path",
+    "final_sha256",
+    "duration_seconds",
+    "width",
+    "height",
+    "render_plan_sha256",
+    "alignment_sha256",
+    "audio_plan_sha256",
+    "selected_asset_hashes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-final-manifest/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "final_path": {
+      "type": "string"
+    },
+    "final_sha256": {
+      "type": "string"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "width": {
+      "type": "integer"
+    },
+    "height": {
+      "type": "integer"
+    },
+    "render_plan_sha256": {
+      "type": "string"
+    },
+    "alignment_sha256": {
+      "type": "string"
+    },
+    "audio_plan_sha256": {
+      "type": "string"
+    },
+    "subtitle_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "selected_asset_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "publishing_package_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

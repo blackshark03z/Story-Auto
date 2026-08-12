@@ -1,0 +1,18 @@
+{
+  "schema_version": "story-auto-generation-requests/1.0.0",
+  "project_id": "prj_demo001",
+  "requests": [
+    {
+      "request_id": "req_001",
+      "purpose": "SHOT",
+      "shot_id": "sh_0001",
+      "media_type": "VIDEO",
+      "provider": "google_flow",
+      "prompt": "Mature cinematic shot.",
+      "reference_asset_ids": [],
+      "target_duration": 6.0,
+      "aspect_ratio": "16:9",
+      "provider_hints": {}
+    }
+  ]
+}

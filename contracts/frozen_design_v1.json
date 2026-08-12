@@ -1,0 +1,95 @@
+{
+  "schema": "story-auto.frozen-design/1.0.0",
+  "status": "FROZEN",
+  "frozen_at": "2026-08-12",
+  "product": {
+    "name": "Story Auto",
+    "primary_input": "content.md",
+    "required_heading": "## Narration",
+    "output": {
+      "container": "mp4",
+      "width": 1920,
+      "height": 1080,
+      "aspect_ratio": "16:9"
+    }
+  },
+  "render_modes": {
+    "hybrid_hook": {
+      "default_hook_seconds": 55,
+      "hook_media": "VIDEO",
+      "body_media": "IMAGE",
+      "motion_spikes": true
+    },
+    "full_video_ai": {
+      "all_final_visual_segments": "VIDEO",
+      "required": true,
+      "silent_still_fallback": false
+    }
+  },
+  "providers": {
+    "tts": [
+      "elevenlabs",
+      "typecast"
+    ],
+    "tts_cross_provider_fallback_default": false,
+    "llm": {
+      "provider": "gemini",
+      "baseline_model": "gemini-3.5-flash",
+      "benchmark_candidates": [
+        "gemini-3.6-flash"
+      ]
+    },
+    "visual": {
+      "provider": "google_flow",
+      "image": true,
+      "video": true
+    },
+    "source_video_audio": "MUTE"
+  },
+  "human_gates": [
+    "PLAN_APPROVAL",
+    "REFERENCE_APPROVAL",
+    "LARGE_BATCH_CONFIRMATION"
+  ],
+  "audio": {
+    "narration": "REQUIRED",
+    "subtitles": "REQUIRED",
+    "bgm": "OPTIONAL_LOCAL_LICENSED",
+    "sfx_automation": "DEFERRED"
+  },
+  "publishing": {
+    "title": true,
+    "description": true,
+    "thumbnail": true,
+    "youtube_upload": false
+  },
+  "runtime": {
+    "separate_from_youtube_auto": true,
+    "one_active_flow_generation_project_per_profile": true
+  },
+  "artifact_order": [
+    "project.json",
+    "alignment.json",
+    "story_timeline.json",
+    "continuity_bible.json",
+    "shot_plan.json",
+    "media_plan.json",
+    "review_state.json",
+    "generation_requests.json",
+    "generation_manifest.json",
+    "render_plan.json",
+    "audio_plan.json",
+    "final_manifest.json",
+    "publishing_package.json"
+  ],
+  "invariants": [
+    "alignment_owns_master_timing",
+    "provider_specific_ui_state_never_enters_core_contracts",
+    "attempts_are_not_overwritten",
+    "full_video_ai_never_silently_falls_back_to_image",
+    "all_selected_visual_sources_normalize_to_silent_mp4_before_final_composition",
+    "ui_must_call_same_application_services_as_cli",
+    "no_runtime_import_from_youtube_auto",
+    "secrets_never_persist_in_project_artifacts"
+  ]
+}

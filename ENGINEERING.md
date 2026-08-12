@@ -1,0 +1,71 @@
+# Engineering Contract
+
+## Delivery style
+
+- Modular monolith; avoid plugin frameworks and speculative shared libraries.
+- One bounded Build OS task at a time.
+- One writer per task/worktree.
+- CLI/application services first; UI later consumes the same services.
+- Port YouTube Auto primitives selectively; never import YouTube Auto at runtime.
+- Do not carry historical YouTube Auto schemas/composer/UI merely for compatibility.
+
+## Artifact rules
+
+- Every durable JSON artifact has an explicit schema version.
+- Project-relative paths in durable artifacts; avoid machine-specific absolute paths.
+- Atomic JSON/text writes.
+- Direct-input hashes drive stage fingerprints.
+- Generated attempts are never overwritten in place.
+- A failed attempt never becomes cache-valid.
+- Final manifests bind exact selected asset hashes and plan hashes.
+
+## Checkpoint/invalidation rules
+
+Invalidate only downstream stages that depend on changed inputs. Examples:
+
+- narration text change → TTS/alignment and everything downstream;
+- TTS voice/provider/settings change → TTS/alignment and downstream, not source content parsing;
+- render mode change → media plan onward, not narration/alignment/story timeline;
+- continuity edit → shot/media/prompt generation onward;
+- single-shot prompt edit → only that request/asset selection/render segment and final render;
+- BGM change → audio plan/final render only;
+- title/description settings → publishing package only.
+
+## Error handling
+
+Provider/UI failures must be typed and retain stage/request/attempt context. Do not convert every error to a generic pipeline failure.
+
+No infinite retry loops. One initial attempt plus bounded automatic correction/retry is the normal default; further retries are an explicit new operator action or changed request.
+
+## Credentials
+
+Never commit secrets. Reuse/adapt the proven secure configuration/key-fallback patterns from YouTube Auto where useful, but give Story Auto its own namespace/store. Browser login is user-managed; do not automate passwords or bypass provider controls.
+
+## Testing strategy
+
+1. Contract/schema and pure-core unit tests.
+2. Deterministic stage/checkpoint tests.
+3. Provider page-fixture/mock tests with zero network.
+4. Tiny FFmpeg/FFprobe integration fixtures created at test time.
+5. Bounded live provider smoke tests only with explicit provider-call authorization.
+6. 60–90 second hybrid production prototype.
+7. 2–3 minute full-video prototype before any 18–24 minute full-video run.
+8. Human/vision review can veto a green automated suite when the actual artifact is wrong.
+
+Every production bug becomes the smallest reproducible fixture/test before the root-cause fix is accepted.
+
+## Baseline executable quality gate
+
+```text
+python tools/quality_gate.py
+```
+
+As implementation appears, accepted project quality gates should evolve to include the real offline test suite. Task-specific Build OS checks remain focused and bounded.
+
+## Provider-call policy
+
+Offline tests are the default. Live TTS/Gemini/Flow calls require explicit task scope and a bounded request budget. Never let a long-running Codex Goal start a large Flow batch merely to prove code works.
+
+## Porting provenance
+
+Materially ported logic records source commit/module and adaptations in `docs/reference/YOUTUBE_AUTO_EXTRACTION_AUDIT.md` or a later migration note. Story Auto owns ported code after import.

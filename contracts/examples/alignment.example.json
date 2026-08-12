@@ -1,0 +1,17 @@
+{
+  "schema_version": "story-auto-alignment/1.0.0",
+  "project_id": "prj_demo001",
+  "audio_path": "output/voice.mp3",
+  "audio_sha256": "sha256:demo",
+  "narration_sha256": "sha256:narration",
+  "duration_seconds": 20.0,
+  "source": "elevenlabs_forced_alignment",
+  "segments": [
+    {
+      "segment_id": "seg_0001",
+      "start": 0.0,
+      "end": 20.0,
+      "text": "The academy had been empty."
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-alignment/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "audio_path",
+    "audio_sha256",
+    "narration_sha256",
+    "duration_seconds",
+    "source",
+    "segments"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-alignment/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "audio_path": {
+      "type": "string"
+    },
+    "audio_sha256": {
+      "type": "string"
+    },
+    "narration_sha256": {
+      "type": "string"
+    },
+    "duration_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "source": {
+      "enum": [
+        "elevenlabs_forced_alignment",
+        "typecast_timestamps",
+        "external"
+      ]
+    },
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

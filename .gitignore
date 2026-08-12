@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Story Auto runtime — source/runtime are separate
+runtime/
+projects/
+cache/
+temp/
+logs/
+evidence/
+*.log
+
+# Provider/browser local state
+browser-profile/
+.flow-profile/
+
+# Secrets
+.env
+.env.*
+*.key
+*.secret
+secrets/
+credentials/
+
+# Build OS local control state
+.buildos/

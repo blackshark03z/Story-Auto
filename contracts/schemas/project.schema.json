@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-project/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "project_slug",
+    "render_mode",
+    "content_path",
+    "providers",
+    "render",
+    "hybrid",
+    "audio",
+    "guardrails"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-project/1.0.0"
+    },
+    "project_id": {
+      "type": "string"
+    },
+    "project_slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
+    },
+    "render_mode": {
+      "enum": [
+        "hybrid_hook",
+        "full_video_ai"
+      ]
+    },
+    "content_path": {
+      "type": "string"
+    },
+    "providers": {
+      "type": "object"
+    },
+    "render": {
+      "type": "object"
+    },
+    "hybrid": {
+      "type": "object"
+    },
+    "audio": {
+      "type": "object"
+    },
+    "guardrails": {
+      "type": "object"
+    }
+  }
+}

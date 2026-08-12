@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-continuity-bible/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "style",
+    "characters",
+    "locations",
+    "props"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-continuity-bible/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "style": {
+      "type": "object"
+    },
+    "characters": {
+      "type": "array"
+    },
+    "locations": {
+      "type": "array"
+    },
+    "props": {
+      "type": "array"
+    }
+  }
+}

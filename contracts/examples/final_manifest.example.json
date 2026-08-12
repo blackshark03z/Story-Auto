@@ -1,0 +1,17 @@
+{
+  "schema_version": "story-auto-final-manifest/1.0.0",
+  "project_id": "prj_demo001",
+  "final_path": "output/final.mp4",
+  "final_sha256": "sha256:final",
+  "duration_seconds": 6.0,
+  "width": 1920,
+  "height": 1080,
+  "render_plan_sha256": "sha256:render",
+  "alignment_sha256": "sha256:alignment",
+  "audio_plan_sha256": "sha256:audio",
+  "subtitle_sha256": "sha256:subs",
+  "selected_asset_hashes": [
+    "sha256:asset"
+  ],
+  "publishing_package_sha256": null
+}

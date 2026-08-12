@@ -1,0 +1,14 @@
+{
+  "schema_version": "story-auto-story-timeline/1.0.0",
+  "project_id": "prj_demo001",
+  "alignment_sha256": "sha256:alignment",
+  "scenes": [
+    {
+      "scene_id": "scn_0001",
+      "start": 0.0,
+      "end": 20.0,
+      "narration_text": "The academy had been empty...",
+      "story_role": "cold_open"
+    }
+  ]
+}

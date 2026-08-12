@@ -1,0 +1,22 @@
+{
+  "schema_version": "story-auto-continuity-bible/1.0.0",
+  "project_id": "prj_demo001",
+  "style": {
+    "id": "mature_cinematic_story"
+  },
+  "characters": [
+    {
+      "entity_id": "char_daniel",
+      "name": "Daniel Mercer",
+      "identity": {
+        "age": 62
+      },
+      "wardrobe_states": {
+        "default": "gray custodian shirt"
+      },
+      "reference_asset_ids": []
+    }
+  ],
+  "locations": [],
+  "props": []
+}

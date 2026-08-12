@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-audio-plan/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "narration",
+    "source_video_audio",
+    "bgm"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-audio-plan/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "narration": {
+      "type": "object"
+    },
+    "source_video_audio": {
+      "const": "MUTE"
+    },
+    "bgm": {
+      "type": "object"
+    }
+  }
+}

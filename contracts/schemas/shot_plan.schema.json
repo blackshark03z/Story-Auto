@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-shot-plan/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "timeline_sha256",
+    "continuity_sha256",
+    "shots"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-shot-plan/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "timeline_sha256": {
+      "type": "string"
+    },
+    "continuity_sha256": {
+      "type": "string"
+    },
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

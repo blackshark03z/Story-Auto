@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "story-auto-review-state/1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "plan_approval",
+    "references",
+    "assets",
+    "batch_confirmations"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "story-auto-review-state/1.0.0"
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "plan_approval": {
+      "type": "object"
+    },
+    "references": {
+      "type": "object"
+    },
+    "assets": {
+      "type": "object"
+    },
+    "batch_confirmations": {
+      "type": "array"
+    }
+  }
+}

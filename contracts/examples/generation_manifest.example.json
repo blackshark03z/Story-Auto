@@ -1,0 +1,21 @@
+{
+  "schema_version": "story-auto-generation-manifest/1.0.0",
+  "project_id": "prj_demo001",
+  "requests": [
+    {
+      "request_id": "req_001",
+      "request_identity_sha256": "sha256:req",
+      "status": "SUCCEEDED",
+      "attempts": [
+        {
+          "attempt": 1,
+          "status": "SUCCEEDED",
+          "asset_id": "ast_001",
+          "asset_path": "assets/video/sh_0001/attempt_001.mp4",
+          "asset_sha256": "sha256:asset"
+        }
+      ],
+      "selected_asset_id": "ast_001"
+    }
+  ]
+}

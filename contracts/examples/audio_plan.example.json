@@ -1,0 +1,16 @@
+{
+  "schema_version": "story-auto-audio-plan/1.0.0",
+  "project_id": "prj_demo001",
+  "narration": {
+    "path": "output/voice.mp3",
+    "sha256": "sha256:voice"
+  },
+  "source_video_audio": "MUTE",
+  "bgm": {
+    "enabled": true,
+    "path": "assets/audio/bgm.mp3",
+    "sha256": "sha256:bgm",
+    "loop": true,
+    "duck_under_narration": true
+  }
+}

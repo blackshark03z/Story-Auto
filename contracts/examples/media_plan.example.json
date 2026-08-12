@@ -1,0 +1,16 @@
+{
+  "schema_version": "story-auto-media-plan/1.0.0",
+  "project_id": "prj_demo001",
+  "render_mode": "hybrid_hook",
+  "shot_plan_sha256": "sha256:shots",
+  "shots": [
+    {
+      "shot_id": "sh_0001",
+      "media_type": "VIDEO",
+      "requirement": "REQUIRED",
+      "target_duration": 6.0,
+      "provider": "google_flow",
+      "fallback_policy": "FAIL"
+    }
+  ]
+}

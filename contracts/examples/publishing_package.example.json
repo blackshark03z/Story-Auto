@@ -1,0 +1,16 @@
+{
+  "schema_version": "story-auto-publishing-package/1.0.0",
+  "project_id": "prj_demo001",
+  "title_candidates": [
+    "The Custodian Played 8 Notes from an Unpublished Song — The Conductor Knew His Name"
+  ],
+  "selected_title": "The Custodian Played 8 Notes from an Unpublished Song — The Conductor Knew His Name",
+  "description": "A quiet custodian plays eight notes...",
+  "thumbnail": {
+    "request_id": "req_thumb_001",
+    "asset_id": "ast_thumb_001",
+    "asset_path": "assets/thumbnail/selected.png",
+    "asset_sha256": "sha256:thumb"
+  },
+  "approved": false
+}

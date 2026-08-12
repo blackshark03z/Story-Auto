@@ -1,0 +1,15 @@
+{
+  "schema_version": "story-auto-review-state/1.0.0",
+  "project_id": "prj_demo001",
+  "plan_approval": {
+    "status": "APPROVED",
+    "bound_hashes": {
+      "continuity": "sha256:continuity",
+      "shots": "sha256:shots",
+      "media": "sha256:media"
+    }
+  },
+  "references": {},
+  "assets": {},
+  "batch_confirmations": []
+}
