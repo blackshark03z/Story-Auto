@@ -8,7 +8,7 @@
 
 ## Phase 1 — Foundation
 
-- Project model/paths.
+- [x] Runtime project paths and Story Auto-only runtime-root isolation.
 - [x] strict `content.md` parser.
 - [x] atomic I/O and deterministic fingerprints.
 - Project lock, checkpoints, bounded retry.

@@ -35,6 +35,10 @@ implementation have not yet been accepted.
 - Direct stage inputs have deterministic canonical SHA-256 fingerprints.
 - Focused offline tests cover valid/invalid narration input, failed atomic
   replacement preservation, and fingerprint determinism.
+- Runtime roots are isolated into Story Auto-owned projects, Flow browser
+  profile, cache, temp, logs, evidence, and locks directories.
+- Opaque project IDs and durable project-relative artifact paths reject
+  absolute or escaping paths.
 
 ## Configuration/schema authority
 
@@ -44,5 +48,5 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 No provider adapter, UI, provider live test, FFmpeg integration, or generated
 Story Auto production video has been accepted at this baseline. The remaining
-Foundation work includes project paths/model, lock/checkpoint/retry behavior,
-and the CLI skeleton.
+Foundation work includes project configuration/model, lock/checkpoint/retry
+behavior, and the CLI skeleton.

@@ -19,3 +19,8 @@ No product implementation is accepted in this release baseline.
 - Added atomic UTF-8 JSON/text artifact publication.
 - Added deterministic direct-input SHA-256 fingerprints and focused offline coverage.
 - No frozen product/design contracts changed.
+
+## 2026-08-12 — Runtime path isolation accepted
+
+- Added a dedicated Story Auto runtime layout and safe project-relative paths.
+- No frozen product/design contracts changed.
