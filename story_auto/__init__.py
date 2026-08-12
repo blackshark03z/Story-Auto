@@ -1,0 +1,1 @@
+"""Story Auto application package."""
