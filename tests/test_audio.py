@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import wave
+import base64
 from io import BytesIO
 from unittest.mock import patch
 from pathlib import Path
@@ -13,9 +14,9 @@ from story_auto.core.content import narration_hash
 from story_auto.core.project import ProjectConfig, ProjectValidationError, RuntimeLayout, create_project
 from story_auto.pipeline import run_audio_stages
 from story_auto.providers.tts.elevenlabs import ElevenLabsProvider, classify_http, merge_offset_spans
-from story_auto.providers.tts.typecast import _concatenate_wav, normalize_timestamps, split_text_chunks
+from story_auto.providers.tts.typecast import TypecastProvider, _concatenate_wav, normalize_timestamps, split_text_chunks
 from story_auto.providers.credentials import provider_keys
-from story_auto.core.audio.errors import AudioPipelineError
+from story_auto.core.audio.errors import AmbiguousDispatchError, AudioPipelineError
 from story_auto.core.audio.media import audio_duration_seconds
 
 
@@ -105,6 +106,37 @@ class AudioContractTests(unittest.TestCase):
             provider_keys("typecast")
         self.assertEqual(captured.exception.failure_class, "CREDENTIAL_MISSING")
         self.assertNotIn("TYPECAST_API_KEY", str(captured.exception))
+
+    def test_elevenlabs_mocked_generation_rotates_only_confirmed_key_failures(self) -> None:
+        calls = []
+        def transport(url, payload, key, accept):
+            calls.append(key)
+            if key == "bad": raise AudioPipelineError("CREDENTIAL_INVALID", provider="elevenlabs", stage="tts")
+            return b"mock-mp3"
+        request = TTSRequest("Hello.", narration_hash("Hello."), "elevenlabs", "voice")
+        with tempfile.TemporaryDirectory() as directory, patch("story_auto.providers.tts.elevenlabs.provider_keys", return_value=["bad", "good"]):
+            result = ElevenLabsProvider(transport=transport).generate(request, Path(directory) / "voice.mp3")
+        self.assertEqual(calls, ["bad", "good"])
+        self.assertEqual(result.alignment_method, "elevenlabs_forced_alignment")
+
+    def test_elevenlabs_ambiguous_dispatch_is_not_retried(self) -> None:
+        calls = []
+        def transport(*args):
+            calls.append(1); raise AmbiguousDispatchError("elevenlabs")
+        request = TTSRequest("Hello.", narration_hash("Hello."), "elevenlabs", "voice")
+        with tempfile.TemporaryDirectory() as directory, patch("story_auto.providers.tts.elevenlabs.provider_keys", return_value=["one", "two"]):
+            with self.assertRaises(AmbiguousDispatchError): ElevenLabsProvider(transport=transport).generate(request, Path(directory) / "voice.mp3")
+        self.assertEqual(calls, [1])
+
+    def test_typecast_mocked_generation_normalizes_provider_timestamps(self) -> None:
+        narration = "Hello."
+        response = {"audio": base64.b64encode(self._wav()).decode("ascii"), "characters":[{"text": character, "start": index*.1, "end":(index+1)*.1} for index, character in enumerate(narration)]}
+        request = TTSRequest(narration, narration_hash(narration), "typecast", "tc_voice")
+        with tempfile.TemporaryDirectory() as directory, patch("story_auto.providers.tts.typecast.provider_keys", return_value=["key"]):
+            result = TypecastProvider(transport=lambda payload, key: response).generate(request, Path(directory) / "voice.wav")
+            spans = TypecastProvider(transport=lambda payload, key: response).align(request, result)
+        self.assertEqual(spans[0]["text"], narration)
+        self.assertGreater(spans[0]["end"], spans[0]["start"])
 
 
 if __name__ == "__main__": unittest.main()
