@@ -66,7 +66,7 @@ class FlowTests(unittest.TestCase):
             profile=Path(root)/"story-auto-profile"; runtime=FlowRuntime(profile,"http://127.0.0.1:9222","https://flow.example","story-auto"); calls=[]
             with patch("story_auto.providers.flow.session.Path.is_file", return_value=True):
                 launch_dedicated_session(runtime, launcher=lambda args: calls.append(args))
-            self.assertIn(f"--user-data-dir={profile}", calls[0]); self.assertNotIn("YouTube", " ".join(calls[0]))
+            self.assertIn(f"--user-data-dir={profile}", calls[0]); self.assertIn("--remote-allow-origins=http://127.0.0.1:9222", calls[0]); self.assertNotIn("YouTube", " ".join(calls[0]))
     def test_manifest_dependency_resume_and_invalid_asset(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, cfg, paths=self._project(root); executor,calls=self._executor()
