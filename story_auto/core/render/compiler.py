@@ -13,8 +13,18 @@ def _cover_filter(target: MediaTarget) -> str:
             f"crop={target.width}:{target.height},setsar=1,fps={target.fps},format={target.pixel_format}")
 
 
+def _finishing_filter(profile: str) -> str:
+    if profile == "NONE":
+        return ""
+    if profile != "NATURAL_SOFT":
+        raise MediaError("RENDER_FINISHING_PROFILE_INVALID", profile)
+    # Deliberately restrained: no blur and no sharpening. Source defects stay
+    # visible to QC rather than being disguised during normalization.
+    return "eq=saturation=0.94:contrast=0.97:gamma=0.99,noise=alls=1.2:allf=t+u"
+
+
 def compile_image(source: Path, output: Path, *, duration: float, motion: str,
-                  target: MediaTarget = MediaTarget()) -> dict:
+                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE") -> dict:
     if motion not in {"STATIC", "SLOW_PUSH", "SLOW_PAN"}:
         raise MediaError("IMAGE_MOTION_INVALID", motion)
     frames = max(1, round(duration * target.fps))
@@ -30,6 +40,8 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
                   f"force_original_aspect_ratio=increase,crop={math.ceil(target.width * 1.08)}:{math.ceil(target.height * 1.08)},"
                   f"crop={target.width}:{target.height}:x='(in_w-out_w)*t/{format_duration(duration)}':"
                   f"y='(in_h-out_h)/2',setsar=1,fps={target.fps},format={target.pixel_format}")
+    finish = _finishing_filter(finishing_profile)
+    if finish: visual += "," + finish
     output.parent.mkdir(parents=True, exist_ok=True)
     run_command(["ffmpeg", "-y", "-loop", "1", "-i", str(source), "-vf", visual,
                  "-frames:v", str(frames), "-an", "-c:v", "libx264", "-preset", "medium",
@@ -39,7 +51,7 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
 
 
 def compile_video(source: Path, output: Path, *, duration: float, short_policy: str,
-                  target: MediaTarget = MediaTarget()) -> dict:
+                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE") -> dict:
     source_meta = probe_media(source)
     shortage = duration - float(source_meta["duration_seconds"])
     if shortage > .04 and short_policy != "FREEZE_TAIL":
@@ -47,6 +59,8 @@ def compile_video(source: Path, output: Path, *, duration: float, short_policy: 
     filters = [_cover_filter(target)]
     if shortage > .04:
         filters.append(f"tpad=stop_mode=clone:stop_duration={format_duration(shortage)}")
+    finish = _finishing_filter(finishing_profile)
+    if finish: filters.append(finish)
     output.parent.mkdir(parents=True, exist_ok=True)
     run_command(["ffmpeg", "-y", "-i", str(source), "-vf", ",".join(filters),
                  "-t", format_duration(duration), "-an", "-c:v", "libx264", "-preset", "medium",

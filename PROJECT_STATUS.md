@@ -7,8 +7,9 @@
 Frozen product design: Story Auto V1, 2026-08-12.
 
 The repository contains the frozen product authorities and a production-capable
-CLI/application pipeline through hybrid rendering and publishing assets. Local UI
-and full-video production execution remain deferred to later goals.
+CLI/application pipeline through hybrid rendering and publishing assets. Goal 08
+production-release work is active; local UI and live representative evidence are
+not yet accepted.
 
 ## Accepted feature inventory
 
@@ -95,6 +96,15 @@ and full-video production execution remain deferred to later goals.
 - Gemini title/description generation and Flow thumbnail generation publish a
   project-bound `publishing_package.json`; visually rejected provider candidates
   remain append-only provenance and cannot become the selected thumbnail.
+- Structured `NATURAL_SOFT_REALISM` policy now compiles image intent separately
+  from motion-only reference-video prompts; generic AI-polish defaults are not injected.
+- Production media uses `IMAGE output_count=1`, pauses at naturalness QC, and
+  rejects visible provider watermarks without deleting rejected attempts.
+- `full_video_ai` now partitions long shots into deterministic video request
+  parts, supports explicit repeated-kind production batches, and renders only
+  complete all-video coverage through the common compositor.
+- Optional `NATURAL_SOFT` normalization applies restrained saturation/contrast,
+  highlight, and fine-grain finishing without blur or sharpening.
 - A 71.067-second real hybrid prototype and a 5.867-second technical
   representative production passed 1080p runtime/visual review. No approved
   long-form content exists in canonical local project/kit locations, recorded as
@@ -107,6 +117,6 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 ## Explicitly not accepted yet
 
 - Product/operator UI.
-- Full-video production mode execution (render safety is implemented and tested).
+- Live multi-shot full-video representative production and visual acceptance.
 - A representative approved long-form creative production; no canonical fixture
   was locally available for this baseline.

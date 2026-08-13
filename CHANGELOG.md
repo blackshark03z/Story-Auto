@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add structured `NATURAL_SOFT_REALISM` visual DNA, anti-AI-polish prompts,
+  production naturalness/watermark QC, and the project-wide x1 image invariant.
+- Add deterministic multi-part full-video requests and render coverage,
+  repeated-kind production batches, QC-gated thumbnails, and optional bounded
+  `NATURAL_SOFT` render finishing.
+
 - Add the offline Story Auto core foundation: minimal project contract, locking,
   atomic checkpoint store, bounded retry, and CLI content-manifest vertical slice.
 - Add provider-neutral TTS request/result contracts, canonical audio manifests,

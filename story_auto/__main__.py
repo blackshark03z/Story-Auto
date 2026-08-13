@@ -37,6 +37,8 @@ def main() -> int:
     generate = commands.add_parser("execute-generation", help="Explicitly execute a bounded approved Flow generation slice")
     generate.add_argument("project_id")
     generate.add_argument("--confirm-execute-generation", action="store_true", help="Required: authorizes paid provider submissions")
+    generate.add_argument("--all-ready", action="store_true", help="Execute an approved production batch, including repeated media kinds")
+    generate.add_argument("--max-requests", type=int, help="Optional safe pause boundary for this invocation")
     render = commands.add_parser("render", help="Resolve, normalize, subtitle, mix, and render final.mp4")
     render.add_argument("project_id")
     publishing = commands.add_parser("publishing-metadata", help="Generate title candidates and description with Gemini")
@@ -88,14 +90,15 @@ def main() -> int:
             runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
             capabilities = preflight(runtime, FlowInspector(runtime))
             requests = __import__('story_auto.core.artifacts', fromlist=['read_json']).read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
-            selected = []
-            reference = next((r for r in requests if r.get("purpose") == "REFERENCE" and r.get("media_type") == "IMAGE"), None)
-            if reference: selected.append(reference)
-            for media_type in ("IMAGE", "VIDEO"):
-                candidate = next((r for r in requests if r.get("purpose") == "SHOT" and r.get("media_type") == media_type and set(r.get("depends_on", [])) <= {reference["request_id"]}), None) if reference else None
-                if candidate: selected.append(candidate)
-            if not selected: raise ValueError("no bounded Flow vertical-slice requests are runnable")
-            result = execute_generation(Path(args.runtime_root), args.project_id, executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True, request_ids={r["request_id"] for r in selected})
+            selected = requests if args.all_ready else []
+            if not args.all_ready:
+                reference = next((r for r in requests if r.get("purpose") == "REFERENCE" and r.get("media_type") == "IMAGE"), None)
+                if reference: selected.append(reference)
+                for media_type in ("IMAGE", "VIDEO"):
+                    candidate = next((r for r in requests if r.get("purpose") == "SHOT" and r.get("media_type") == media_type and set(r.get("depends_on", [])) <= {reference["request_id"]}), None) if reference else None
+                    if candidate: selected.append(candidate)
+            if not selected: raise ValueError("no Flow requests are runnable")
+            result = execute_generation(Path(args.runtime_root), args.project_id, executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True, request_ids={r["request_id"] for r in selected}, production_batch=args.all_ready, max_requests=args.max_requests)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.command == "render":

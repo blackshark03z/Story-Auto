@@ -161,6 +161,15 @@ class FlowTests(unittest.TestCase):
     def test_stale_image_output_count_is_forced_to_one(self):
         resolved=resolve_settings({"purpose":"REFERENCE","media_type":"IMAGE","output_count":4})
         self.assertEqual(resolved.output_count,1)
+    def test_production_batch_allows_repeated_kinds_and_resumes_without_duplicates(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,calls=self._executor()
+            requests={"requests":[{"request_id":f"image_{i}","fingerprint":f"hash_{i}","purpose":"SHOT","shot_id":f"sh_{i:04d}","media_type":"IMAGE","prompt":"natural image","depends_on":[],"provider":"google_flow","output_count":1} for i in range(1,4)]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            with self.assertRaises(FlowError): execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True)
+            first=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            second=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            self.assertEqual((first["new_submissions"],second["new_submissions"],len(calls)),(3,0,3))
     def test_production_qc_approves_or_rejects_without_erasing_attempt(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root); executor,_=self._executor()

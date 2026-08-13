@@ -30,7 +30,7 @@ The V1 workflow is:
 10. Resolve selected assets into an exact render plan and produce `final.mp4`.
 11. Generate title/description and a Flow thumbnail; human-editable before use.
 
-The CLI is the first canonical execution path. A local UI is added only after the hybrid pipeline is proven and must call the same application services rather than implement a second pipeline.
+The CLI remains a canonical execution path. The local operator UI uses the same application services rather than implementing a second pipeline.
 
 ## Canonical project knowledge
 
@@ -62,6 +62,7 @@ python -m story_auto --runtime-root runtime approve-plan prj_example
 python -m story_auto --runtime-root runtime plan-visuals prj_example
 python -m story_auto --runtime-root runtime approve-shot-plan prj_example
 python -m story_auto --runtime-root runtime execute-generation prj_example --confirm-execute-generation
+python -m story_auto --runtime-root runtime execute-generation prj_example --confirm-execute-generation --all-ready --max-requests 20
 python -m story_auto --runtime-root runtime render prj_example
 python -m story_auto --runtime-root runtime publishing-metadata prj_example
 python -m story_auto --runtime-root runtime prepare-thumbnail prj_example
@@ -75,3 +76,9 @@ scene MP4, generates SRT/ASS, mixes narration with optional local BGM, and
 atomically publishes a validated `final.mp4` plus `final_manifest.json`.
 Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
 scene and the downstream final render without submitting to a provider.
+
+Production image and video assets pause in `QC_PENDING` until the complete
+naturalness rubric passes; a visible provider watermark is always rejected.
+Long `full_video_ai` shots are partitioned into stable provider-duration request
+parts and every part must resolve to video before rendering. `NATURAL_SOFT` is an
+optional restrained finishing profile with no blur or artificial sharpening.

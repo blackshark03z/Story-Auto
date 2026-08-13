@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,10 @@ def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[st
 def _media_settings(config) -> dict[str, Any]:
     settings = config.settings.get("media", {})
     if not isinstance(settings, dict): raise PlanningError("MEDIA_POLICY_INVALID")
-    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20))}
+    clip_seconds = float(settings.get("provider_video_clip_seconds", 8.0))
+    if not math.isfinite(clip_seconds) or clip_seconds < .5 or clip_seconds > 30:
+        raise PlanningError("MEDIA_POLICY_INVALID", "provider_video_clip_seconds must be between .5 and 30")
+    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20)),"provider_video_clip_seconds":clip_seconds}
 
 def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: str, settings: dict[str, Any]) -> dict[str, Any]:
     if render_mode not in {"hybrid_hook", "full_video_ai"}: raise PlanningError("MEDIA_POLICY_INVALID")
@@ -220,13 +224,21 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
         media = media_by_shot[shot["shot_id"]]
         if media["media_type"] == "HOLD": continue
         refs = shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])
-        deps = [reference_ids[i] for i in refs]; seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot,"media":media,"refs":deps,"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed)
+        deps = [reference_ids[i] for i in refs]
         intent = f"{shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['composition_intent']}"
-        if media["media_type"] == "IMAGE":
-            prompt = compile_image_prompt(intent, visual_policy)
-        else:
-            prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"continuous action across {media['target_duration']:.3f} seconds")
-        requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"target_duration":media["target_duration"],"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
+        part_count = math.ceil(float(media["target_duration"]) / settings["provider_video_clip_seconds"]) if media["media_type"] == "VIDEO" else 1
+        part_start = float(shot["start"])
+        for part_index in range(1, part_count + 1):
+            remaining = float(shot["end"]) - part_start
+            part_duration = min(settings["provider_video_clip_seconds"], remaining)
+            part_end = float(shot["end"]) if part_index == part_count else part_start + part_duration
+            seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot,"media":media,"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed)
+            if media["media_type"] == "IMAGE":
+                prompt = compile_image_prompt(intent, visual_policy)
+            else:
+                prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
+            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
+            part_start = part_end
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
@@ -249,6 +261,11 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
     for node in graph: visit(node, set())
     expected = {m["shot_id"]:m["media_type"] for m in media_plan["shots"] if m["media_type"] != "HOLD"}; actual = {r.get("shot_id"):r.get("media_type") for r in requests if r.get("purpose") == "SHOT"}
     if expected != actual: raise PlanningError("GENERATION_MEDIA_CONSISTENCY_INVALID")
+    for shot_id, media_type in expected.items():
+        parts = sorted((r for r in requests if r.get("purpose") == "SHOT" and r.get("shot_id") == shot_id), key=lambda r:r.get("part_index",0))
+        if not parts or [r.get("part_index") for r in parts] != list(range(1, len(parts)+1)) or any(r.get("part_count") != len(parts) for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
+        if any(r.get("media_type") != media_type or float(r.get("target_duration",0)) <= 0 for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
+        if abs(sum(float(r["target_duration"]) for r in parts) - next(float(m["target_duration"]) for m in media_plan["shots"] if m["shot_id"] == shot_id)) > .001: raise PlanningError("GENERATION_PARTITION_INVALID")
 
 def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> tuple[str, str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id); model, llm_settings = _settings(config); media_settings = _media_settings(config)
@@ -267,7 +284,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             except Exception: decision=type(decision)("RUN","artifact invalid")
         if decision.action == "RUN":
             media_plan=compile_media_plan(project_id,shot_plan,config.render_mode,media_settings); media_plan["shot_plan_sha256"]=shot_sha; validate_media_plan(media_plan,shot_plan); atomic_write_json(media_path,media_plan); checkpoints.record("media_plan",fingerprint=media_fp,status="SUCCESS",outputs=["output/media_plan.json"],producer_version=MEDIA_POLICY_VERSION); media_action="RUN"
-        media_sha=sha256_file(media_path); request_path=paths.artifact_path("output/generation_requests.json"); request_fp=fingerprint(stage_name="generation_requests",producer_version=GENERATION_PROMPT_VERSION,artifact_schema_version=REQUEST_SCHEMA_VERSION,direct_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION},settings={"aspect_ratio":media_settings["aspect_ratio"],"max_attempts":media_settings["max_attempts"]}); decision=checkpoints.decide("generation_requests",request_fp)
+        media_sha=sha256_file(media_path); request_path=paths.artifact_path("output/generation_requests.json"); request_fp=fingerprint(stage_name="generation_requests",producer_version=GENERATION_PROMPT_VERSION,artifact_schema_version=REQUEST_SCHEMA_VERSION,direct_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION},settings={"aspect_ratio":media_settings["aspect_ratio"],"max_attempts":media_settings["max_attempts"],"provider_video_clip_seconds":media_settings["provider_video_clip_seconds"]}); decision=checkpoints.decide("generation_requests",request_fp)
         if decision.action == "SKIP":
             try: requests=read_json(request_path); validate_generation_requests(requests,media_plan,continuity); request_action="SKIP"
             except Exception: decision=type(decision)("RUN","artifact invalid")

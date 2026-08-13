@@ -11,7 +11,7 @@ from story_auto.core.content import narration_hash
 from story_auto.core.planning import (approve_plan, approve_shot_plan, run_planning_stages,
                                       run_visual_planning_stages, validate_continuity,
                                       validate_generation_requests, validate_timeline)
-from story_auto.core.planning.service import PlanningError
+from story_auto.core.planning.service import PlanningError, compile_generation_requests, compile_media_plan
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMResponse
 
@@ -136,6 +136,17 @@ class PlanningTests(unittest.TestCase):
             project["render_mode"] = "full_video_ai"; project["settings"]["media"]["overrides"] = {"sh_0001": {"media_type":"IMAGE"}}; atomic_write_json(paths.project_file, project)
             with self.assertRaises(PlanningError) as caught: run_visual_planning_stages(runtime.root, config.project_id, provider=fake)
             self.assertEqual(caught.exception.failure_class, "MEDIA_OVERRIDE_REJECTED")
+
+    def test_full_video_long_shot_partitions_into_deterministic_video_requests(self):
+        shot_plan={"shots":[{"shot_id":"sh_0001","start":0.0,"end":2.0,"character_ids":["char_daniel"],"prop_ids":[],"location_id":"loc_school","subject":"Daniel","action":"walks through the hall","camera_intent":"slow observational push","composition_intent":"medium environmental frame","visual_emotional_purpose":"sustained unease"}]}
+        continuity={"characters":[{"entity_id":"char_daniel","name":"Daniel","visual_design":{}}],"locations":[{"entity_id":"loc_school","name":"School","visual_design":{}}],"props":[]}
+        settings={"hook_seconds":55.0,"motion_spike_threshold":8,"overrides":{},"max_attempts":2,"aspect_ratio":"16:9","large_batch_request_threshold":20,"provider_video_clip_seconds":.75}
+        media=compile_media_plan("prj_fullvideo",shot_plan,"full_video_ai",settings)
+        requests=compile_generation_requests("prj_fullvideo",shot_plan,media,continuity,settings)
+        parts=[item for item in requests["requests"] if item.get("purpose")=="SHOT"]
+        self.assertEqual(([item["part_index"] for item in parts],[round(item["target_duration"],2) for item in parts]),([1,2,3],[.75,.75,.5]))
+        self.assertTrue(all(item["media_type"]=="VIDEO" and item["requirement"]=="REQUIRED" for item in parts))
+        validate_generation_requests(requests,media,continuity)
 
 
 if __name__ == "__main__": unittest.main()

@@ -9,7 +9,7 @@ import unittest
 
 from PIL import Image
 
-from story_auto.core.artifacts import atomic_write_json, sha256_file
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.render import (MediaTarget, RenderPlanError, compile_hold, compile_image, compile_video,
                                     compose, probe_media, resolve_render_plan, transition_output_durations,
@@ -32,6 +32,12 @@ class RenderMediaTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+
+    def test_natural_soft_finishing_remains_valid_and_bounded(self) -> None:
+        source=self.root/"natural.png"; output=self.root/"natural.mp4"
+        Image.new("RGB",(640,360),(180,140,120)).save(source)
+        metadata=compile_image(source,output,duration=.5,motion="STATIC",target=MediaTarget(320,180,10),finishing_profile="NATURAL_SOFT")
+        self.assertEqual((metadata["video"]["width"],metadata["video"]["height"]),(320,180))
 
     def image(self, name: str = "source.png") -> Path:
         path = self.root / name
@@ -149,6 +155,18 @@ class RenderPlanTests(unittest.TestCase):
         self.assertEqual(plan["segments"][0]["source_media_type"], "HOLD")
         self.assertTrue(plan["segments"][0]["fallback_resolution"]["used"])
 
+    @unittest.skipUnless(FFMPEG, "multi-video plan requires ffmpeg")
+    def test_full_video_multi_part_requests_tile_one_shot_without_stills(self) -> None:
+        videos=[]
+        for index in (1,2):
+            path=self.root/f"part_{index}.mp4"; run("ffmpeg","-y","-f","lavfi","-i",f"color=c=navy:s=320x180:r=10:d=1","-an","-c:v","libx264","-pix_fmt","yuv420p",str(path)); videos.append(path)
+        requests={"requests":[{"request_id":f"req_{i}","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","provider":"google_flow","part_index":i,"part_count":2,"target_start":float(i-1),"target_end":float(i),"target_duration":1.0} for i in (1,2)]}
+        manifest={"requests":[{"request_id":f"req_{i}","status":"SUCCEEDED","selected_asset":{"path":f"part_{i}.mp4","sha256":sha256_file(videos[i-1]),"attempt":1}} for i in (1,2)]}
+        media={"shots":[{"shot_id":"sh_0001","media_type":"VIDEO","requirement":"REQUIRED","fallback_policy":"BLOCK","image_motion_policy":"NONE"}]}
+        plan=resolve_render_plan(project_id="prj_full",project_root=self.root,render_mode="full_video_ai",alignment=self.alignment,shot_plan=self.shots,media_plan=media,generation_requests=requests,generation_manifest=manifest)
+        self.assertEqual([item["segment_id"] for item in plan["segments"]],["sh_0001_part_001","sh_0001_part_002"])
+        self.assertTrue(all(item["source_media_type"]=="VIDEO" and item["short_video_policy"]=="BLOCK" for item in plan["segments"]))
+
 
 @unittest.skipUnless(FFMPEG, "FFmpeg integration requires ffmpeg and ffprobe")
 class RenderServiceRecoveryTests(unittest.TestCase):
@@ -216,6 +234,37 @@ class RenderServiceRecoveryTests(unittest.TestCase):
             metadata = probe_media(paths.artifact_path("output/final.mp4"))
             self.assertEqual((metadata["video"]["width"], metadata["video"]["height"]), (320, 180))
             self.assertEqual(len(metadata["audio"]), 1)
+
+    def test_full_video_multi_part_render_resume_and_render_only_invalidation(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            runtime=RuntimeLayout.from_root(root)
+            config=ProjectConfig("prj_fullrender01",render_mode="full_video_ai",settings={"render":{"width":320,"height":180,"fps":10}})
+            paths=create_project(runtime,config)
+            narration_rel="assets/audio/narration.wav"; narration=paths.artifact_path(narration_rel); narration.parent.mkdir(parents=True,exist_ok=True)
+            run("ffmpeg","-y","-f","lavfi","-i","sine=frequency=600:sample_rate=48000:duration=2","-c:a","pcm_s16le",str(narration))
+            atomic_write_json(paths.artifact_path("output/alignment.json"),{"audio_path":narration_rel,"duration_seconds":2.0,"segments":[{"segment_id":"seg_1","start":0.0,"end":2.0,"text":"A continuous full video scene."}]})
+            atomic_write_json(paths.artifact_path("output/shot_plan.json"),{"shots":[{"shot_id":"sh_0001","start":0.0,"end":2.0}]})
+            atomic_write_json(paths.artifact_path("output/media_plan.json"),{"render_mode":"full_video_ai","shots":[{"shot_id":"sh_0001","media_type":"VIDEO","requirement":"REQUIRED","fallback_policy":"BLOCK","image_motion_policy":"NONE"}]})
+            requests=[]; entries=[]
+            for index,color in ((1,"navy"),(2,"maroon")):
+                rel=f"assets/video/req_{index}/attempt_001.mp4"; path=paths.artifact_path(rel); path.parent.mkdir(parents=True,exist_ok=True)
+                run("ffmpeg","-y","-f","lavfi","-i",f"color=c={color}:s=320x180:r=10:d=1.05","-an","-c:v","libx264","-pix_fmt","yuv420p",str(path))
+                requests.append({"request_id":f"req_{index}","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","provider":"google_flow","part_index":index,"part_count":2,"target_start":float(index-1),"target_end":float(index),"target_duration":1.0})
+                entries.append({"request_id":f"req_{index}","status":"SUCCEEDED","selected_asset":{"path":rel,"sha256":sha256_file(path),"attempt":1}})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":requests})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":config.project_id,"requests":entries})
+            provider_state=sha256_file(paths.artifact_path("output/generation_manifest.json"))
+            first=run_render_stages(runtime.root,config.project_id); second=run_render_stages(runtime.root,config.project_id)
+            self.assertEqual(first["actions"]["clips"],{"sh_0001_part_001":"RUN","sh_0001_part_002":"RUN"})
+            self.assertEqual(second["actions"]["clips"],{"sh_0001_part_001":"SKIP","sh_0001_part_002":"SKIP"})
+            paths.artifact_path("output/scenes/sh_0001_part_002.mp4").unlink()
+            narrow=run_render_stages(runtime.root,config.project_id)
+            self.assertEqual(narrow["actions"]["clips"],{"sh_0001_part_001":"SKIP","sh_0001_part_002":"RUN"})
+            project=read_json(paths.project_file); project["settings"]["render"]["finishing_profile"]="NATURAL_SOFT"; atomic_write_json(paths.project_file,project)
+            changed=run_render_stages(runtime.root,config.project_id)
+            self.assertTrue(all(value=="RUN" for value in changed["actions"]["clips"].values()))
+            self.assertEqual(sha256_file(paths.artifact_path("output/generation_manifest.json")),provider_state)
+            self.assertEqual(read_json(paths.artifact_path("output/render_plan.json"))["render_mode"],"full_video_ai")
 
 
 if __name__ == "__main__":

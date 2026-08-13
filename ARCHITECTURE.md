@@ -91,6 +91,11 @@ The exact source-of-truth for final composition: selected asset(s), trims, fit/c
 
 Every final shot resolves to `VIDEO / REQUIRED`. A still may never silently satisfy a required video shot.
 
+Shots longer than the configured provider clip duration compile into ordered,
+stable request parts. The render plan tiles those video parts over the original
+shot interval with internal cuts; missing parts block rendering. Full-video
+normalization never uses freeze-tail continuation.
+
 ## Provider boundaries
 
 ```text
@@ -163,6 +168,10 @@ No YouTube Auto runtime/project/browser profile may be reused. Tests use tempora
 The generation manifest is the canonical provider/provenance ledger. Each request has immutable attempts. Successful requests are reused when request identity matches.
 
 A global Flow-generation lock prevents two Story Auto production projects from driving the same browser/profile concurrently. Local planning/render work for other projects may continue when safe.
+
+Explicit production-batch execution may process repeated request kinds. It keeps
+the same request/attempt ledger and supports a per-invocation request boundary;
+successful and QC-pending identities are never resubmitted on resume.
 
 ## Human review
 

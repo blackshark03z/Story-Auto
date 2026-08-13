@@ -39,8 +39,11 @@ def _render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
         "short_video_policy": value.get("short_video_policy", "BLOCK"),
         "transition": value.get("transition", {"type": "CUT", "duration": 0.0}),
         "hold_color": value.get("hold_color", "black"),
+        "finishing_profile": str(value.get("finishing_profile", "NONE")).upper(),
         "subtitle_style": value.get("subtitle_style", {"width": 44, "font_name": "Arial", "font_size": 48}),
     }
+    if settings["finishing_profile"] not in {"NONE", "NATURAL_SOFT"}:
+        raise ValueError("settings.render.finishing_profile must be NONE or NATURAL_SOFT")
     return settings, target
 
 
@@ -103,15 +106,15 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             raise ValueError("transition duration math does not preserve narration duration")
         clips: list[Path] = []
         for segment, compile_duration in zip(render_plan["segments"], compile_durations):
-            shot_id = segment["shot_id"]
-            relative = f"output/scenes/{shot_id}.mp4"
+            segment_id = segment.get("segment_id", segment["shot_id"])
+            relative = f"output/scenes/{segment_id}.mp4"
             clip_path = paths.artifact_path(relative)
-            clip_fp = fingerprint(stage_name=f"render_clip_{shot_id}", producer_version=RENDER_STAGE_VERSION,
+            clip_fp = fingerprint(stage_name=f"render_clip_{segment_id}", producer_version=RENDER_STAGE_VERSION,
                                   artifact_schema_version="story-auto-normalized-scene/1.0.0",
                                   direct_inputs={"source_hash": segment["source_hash"]},
                                   settings={"segment": segment, "compile_duration": compile_duration,
                                             "target": settings | {"subtitle_style": None}})
-            stage = f"render_clip_{shot_id}"
+            stage = f"render_clip_{segment_id}"
             decision = checkpoints.decide(stage, clip_fp)
             valid = False
             if decision.action == "SKIP":
@@ -121,19 +124,21 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                 except Exception:
                     valid = False
             if valid:
-                actions["clips"][shot_id] = "SKIP"
+                actions["clips"][segment_id] = "SKIP"
             else:
                 if segment["source_media_type"] == "IMAGE":
                     compile_image(paths.artifact_path(segment["source_asset"]), clip_path,
-                                  duration=compile_duration, motion=segment["image_motion_policy"], target=target)
+                                  duration=compile_duration, motion=segment["image_motion_policy"], target=target,
+                                  finishing_profile=settings["finishing_profile"])
                 elif segment["source_media_type"] == "VIDEO":
                     compile_video(paths.artifact_path(segment["source_asset"]), clip_path,
-                                  duration=compile_duration, short_policy=segment["short_video_policy"], target=target)
+                                  duration=compile_duration, short_policy=segment["short_video_policy"], target=target,
+                                  finishing_profile=settings["finishing_profile"])
                 else:
                     compile_hold(clip_path, duration=compile_duration, color=settings["hold_color"], target=target)
                 checkpoints.record(stage, fingerprint=clip_fp, status="SUCCESS", outputs=[relative],
                                    producer_version=RENDER_STAGE_VERSION)
-                actions["clips"][shot_id] = "RUN"
+                actions["clips"][segment_id] = "RUN"
             clips.append(clip_path)
         style = settings["subtitle_style"]
         subtitle_fp = fingerprint(stage_name="subtitles", producer_version=SUBTITLE_VERSION,

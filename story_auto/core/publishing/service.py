@@ -12,6 +12,7 @@ from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
+from story_auto.core.visual import DEFAULT_VISUAL_POLICY, compile_image_prompt
 from story_auto.providers.flow.validation import validate_image
 from story_auto.providers.llm.gemini import GeminiProvider, LLMRequest
 
@@ -103,7 +104,8 @@ def prepare_thumbnail_request(runtime_root: Path | str, project_id: str) -> dict
         request_id = "req_thumbnail_" + identity[:16]
         request = {"request_id": request_id, "purpose": "THUMBNAIL", "shot_id": None, "entity_id": None,
                    "media_type": "IMAGE", "requirement": "REQUIRED", "provider": "google_flow",
-                   "prompt": f"{THUMBNAIL_PROMPT_VERSION}: {package['thumbnail']['brief']}. No text or logos.",
+                   "prompt": compile_image_prompt(f"{package['thumbnail']['brief']}. No text, lettering, or logos", dict(DEFAULT_VISUAL_POLICY)),
+                   "visual_policy": dict(DEFAULT_VISUAL_POLICY), "output_count": 1,
                    "reference_asset_ids": dependencies, "depends_on": dependencies, "target_duration": None,
                    "aspect_ratio": "16:9", "priority": 3, "fingerprint": identity, "execution_tier": "STANDARD_PRODUCTION"}
         prior = [item for item in requests.get("requests", []) if item.get("purpose") != "THUMBNAIL" or item.get("request_id") == request_id]
@@ -127,6 +129,8 @@ def finalize_thumbnail(runtime_root: Path | str, project_id: str) -> str:
         if not entry or entry.get("status") != "SUCCEEDED" or not isinstance(entry.get("selected_asset"), dict):
             raise PublishingError("THUMBNAIL_REQUIRED_MEDIA_UNRESOLVED")
         selected = entry["selected_asset"]
+        if selected.get("production_qc") != "APPROVED":
+            raise PublishingError("THUMBNAIL_PRODUCTION_QC_REQUIRED")
         metadata = validate_image(paths.artifact_path(selected["path"]))
         if metadata["sha256"] != selected.get("sha256"):
             raise PublishingError("THUMBNAIL_ASSET_INVALID")

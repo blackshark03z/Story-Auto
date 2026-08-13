@@ -9,7 +9,7 @@ from PIL import Image
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
-from story_auto.providers.flow.service import FlowExecutor, execute_generation
+from story_auto.providers.flow.service import FlowExecutor, execute_generation, review_production_asset
 from story_auto.providers.flow.session import FlowCapabilities
 from story_auto.providers.llm.gemini import LLMResponse
 
@@ -58,6 +58,8 @@ class PublishingTests(unittest.TestCase):
             second = execute_generation(runtime.root, config.project_id, executor=executor, execute=True,
                                         request_ids={request["request_id"]})
             self.assertEqual((first["new_submissions"], second["new_submissions"], len(calls)), (1, 0, 1))
+            qc={"results":{key:"PASS" for key in ("SKIN_REALISM","LIGHTING_NATURALISM","MATERIAL_REALISM","COMPOSITION_NATURALISM","AI_POLISH","CONTINUITY","TECHNICAL_VALIDITY")},"visible_provider_watermark":False,"reviewer":"operator"}
+            review_production_asset(runtime.root,config.project_id,request["request_id"],qc)
             finalize_thumbnail(runtime.root, config.project_id)
             package = read_json(paths.artifact_path("output/publishing_package.json"))
             self.assertEqual(package["thumbnail"]["provider"], "google_flow")

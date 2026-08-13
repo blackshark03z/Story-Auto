@@ -140,7 +140,9 @@ class FlowExecutor:
         self.capabilities.require(request["media_type"], bool(refs))
         return self.generate(request, refs, temporary)
 
-def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False, request_ids: set[str] | None = None) -> dict:
+def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False,
+                       request_ids: set[str] | None = None, production_batch: bool = False,
+                       max_requests: int | None = None) -> dict:
     """Run the bounded vertical slice while preserving every provider attempt."""
     if not execute: raise FlowError("EXECUTION_CONFIRMATION_REQUIRED", "pass explicit execute-generation permission")
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -148,9 +150,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if review.get("plan_approval", {}).get("status") != "APPROVED": raise FlowError("PLAN_APPROVAL_REQUIRED")
     requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
     selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
-    if len(selected) > 4: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits at most four selected requests")
+    if max_requests is not None:
+        if max_requests < 1: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "max_requests must be positive")
+        selected = selected[:max_requests]
+    if not production_batch and len(selected) > 4: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits at most four selected requests")
     kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
-    if any(kinds.count(kind) > 1 for kind in kinds) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
+    if (not production_batch and any(kinds.count(kind) > 1 for kind in kinds)) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
         raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
@@ -186,9 +191,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
                 final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"
                 final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
-                # Thumbnail candidate review remains owned by publishing until
-                # that service migrates to the shared production-QC contract.
-                production = request.get("execution_tier") == "STANDARD_PRODUCTION" and request.get("purpose") != "THUMBNAIL"
+                production = request.get("execution_tier") == "STANDARD_PRODUCTION"
                 resulting_status = "QC_PENDING" if production else "SUCCEEDED"
                 attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
                 entry.update({"status":resulting_status, "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}, "updated_at":_now()}); submissions += 1
