@@ -55,7 +55,8 @@ def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: s
         path, manifest = _manifest(paths, project_id); entry = next((e for e in manifest["requests"] if e.get("request_id") == request_id), None)
         if not entry or entry.get("status") != "FAILED_PERMANENT": raise FlowError("GENERATION_RECONCILIATION_INVALID")
         attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
-        if not isinstance(attempt, dict) or attempt.get("failure_class") != "FLOW_UI_CHANGED" or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        safe_pre_dispatch = {"FLOW_UI_CHANGED", "FLOW_CAPABILITY_UNAVAILABLE"}
+        if not isinstance(attempt, dict) or attempt.get("failure_class") not in safe_pre_dispatch or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
         entry["status"] = "FAILED_RETRYABLE"; entry["reconciled_at"] = _now(); entry["reconciliation"] = "verified_no_dispatch"; atomic_write_json(path, manifest)
 
 def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id: str, source: Path, *, settings: dict, attribution: str) -> dict:
