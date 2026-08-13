@@ -6,13 +6,10 @@ import json
 import uuid
 from pathlib import Path
 
-from .core.project import ProjectConfig, RuntimeLayout, create_project
-from .pipeline import run_audio_stages, run_content_stage
-from .core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
-from .providers.flow import FlowRuntime, FlowExecutor, execute_generation, launch_dedicated_session, preflight
+from .core.project import RuntimeLayout
+from .providers.flow import FlowRuntime, FlowExecutor, launch_dedicated_session, preflight
 from .providers.flow.live import FlowInspector, LiveFlowGenerator
-from .core.render import run_render_stages
-from .core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
+from .application import OperatorService
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -50,24 +47,31 @@ def main() -> int:
     generate_thumbnail.add_argument("--confirm-execute-generation", action="store_true")
     finish_thumbnail = commands.add_parser("finalize-thumbnail", help="Validate and bind the selected thumbnail")
     finish_thumbnail.add_argument("project_id")
+    ui = commands.add_parser("ui", help="Run the loopback-only local operator UI")
+    ui.add_argument("--host", default="127.0.0.1")
+    ui.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     try:
+        app = OperatorService(Path(args.runtime_root))
+        if args.command == "ui":
+            from .ui import serve
+            serve(Path(args.runtime_root),args.host,args.port); return 0
         if args.command == "new":
             project_id = args.project_id or f"prj_{uuid.uuid4().hex}"
-            create_project(RuntimeLayout.from_root(args.runtime_root), ProjectConfig(project_id=project_id, render_mode=args.render_mode))
+            app.create_project(project_id=project_id,render_mode=args.render_mode)
             print(f"CREATED {project_id}")
             return 0
         if args.command == "approve-plan":
-            approve_plan(Path(args.runtime_root), args.project_id)
+            app.approve_planning(args.project_id)
             print("review_state: APPROVED")
             return 0
         if args.command == "approve-shot-plan":
-            approve_shot_plan(Path(args.runtime_root), args.project_id)
+            app.approve_planning(args.project_id,shots=True)
             print("review_state: APPROVED")
             return 0
         if args.command == "plan-visuals":
-            shot, media, requests = run_visual_planning_stages(Path(args.runtime_root), args.project_id)
-            print(f"shot_plan: {shot}\nmedia_plan: {media}\ngeneration_requests: {requests}")
+            result=app.plan_visuals(args.project_id)
+            print(f"shot_plan: READY\nmedia_plan: READY\ngeneration_requests: {len(result['generation_requests']['requests'])}")
             return 0
         if args.command == "flow-preflight":
             from .core.project import load_project
@@ -98,49 +102,38 @@ def main() -> int:
                     candidate = next((r for r in requests if r.get("purpose") == "SHOT" and r.get("media_type") == media_type and set(r.get("depends_on", [])) <= {reference["request_id"]}), None) if reference else None
                     if candidate: selected.append(candidate)
             if not selected: raise ValueError("no Flow requests are runnable")
-            result = execute_generation(Path(args.runtime_root), args.project_id, executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True, request_ids={r["request_id"] for r in selected}, production_batch=args.all_ready, max_requests=args.max_requests)
+            result = app.generate(args.project_id,executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)),request_ids={r["request_id"] for r in selected},max_requests=args.max_requests)
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.command == "render":
-            print(json.dumps(run_render_stages(Path(args.runtime_root), args.project_id), sort_keys=True))
+            print(json.dumps(app.render(args.project_id), sort_keys=True))
             return 0
         if args.command == "publishing-metadata":
-            print(f"publishing_metadata: {run_publishing_metadata(Path(args.runtime_root), args.project_id)}")
+            print(f"publishing_metadata: {app.publishing(args.project_id,'metadata')}")
             return 0
         if args.command == "prepare-thumbnail":
-            print(json.dumps(prepare_thumbnail_request(Path(args.runtime_root), args.project_id), sort_keys=True))
+            print(json.dumps(app.publishing(args.project_id,'prepare_thumbnail'), sort_keys=True))
             return 0
         if args.command == "generate-thumbnail":
             if not args.confirm_execute_generation:
                 raise ValueError("explicit --confirm-execute-generation is required")
             from .core.project import load_project
             paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
-            request = prepare_thumbnail_request(Path(args.runtime_root), args.project_id)
+            request = app.publishing(args.project_id,"prepare_thumbnail")
             runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
             capabilities = preflight(runtime, FlowInspector(runtime))
-            result = execute_generation(Path(args.runtime_root), args.project_id,
-                                        executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True,
-                                        request_ids={request["request_id"]})
+            result = app.generate(args.project_id,executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime)),request_ids={request["request_id"]})
             print(json.dumps(result, sort_keys=True))
             return 0
         if args.command == "finalize-thumbnail":
-            print(f"thumbnail: {finalize_thumbnail(Path(args.runtime_root), args.project_id)}")
+            print(f"thumbnail: {app.publishing(args.project_id,'finalize_thumbnail')}")
             return 0
-        result = run_content_stage(Path(args.runtime_root), args.project_id)
-        print(f"content: {result}")
-        # Projects created before audio configuration remain valid content-only projects.
+        result=app.start_or_resume(args.project_id)
+        print("\n".join(f"{key}: {value}" for key,value in result.items() if key!="snapshot"))
         from .core.project import load_project
         paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
-        if "tts" in config.settings:
-            tts, alignment = run_audio_stages(Path(args.runtime_root), args.project_id)
-            print(f"tts: {tts}\nalignment: {alignment}")
-        if "llm" in config.settings:
-            if "tts" not in config.settings:
-                raise ValueError("planning requires canonical alignment; configure and run tts first")
-            timeline, continuity = run_planning_stages(Path(args.runtime_root), args.project_id)
-            print(f"story_timeline: {timeline}\ncontinuity: {continuity}")
         if paths.artifact_path("output/generation_manifest.json").is_file():
-            rendered = run_render_stages(Path(args.runtime_root), args.project_id)
+            rendered = app.render(args.project_id)
             print(f"final_render: {rendered['actions']['final_render']}")
         return 0
     except (ValueError, OSError, RuntimeError) as error:

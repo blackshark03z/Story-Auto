@@ -68,7 +68,12 @@ python -m story_auto --runtime-root runtime publishing-metadata prj_example
 python -m story_auto --runtime-root runtime prepare-thumbnail prj_example
 python -m story_auto --runtime-root runtime generate-thumbnail prj_example --confirm-execute-generation
 python -m story_auto --runtime-root runtime finalize-thumbnail prj_example
+python -m story_auto --runtime-root runtime ui --host 127.0.0.1 --port 8765
 ```
+
+The loopback-only operator UI opens at `http://127.0.0.1:8765`. It exposes the
+same project, review, generation, render, and publishing services used by the
+CLI; it does not write a parallel pipeline or require direct provider-page use.
 
 `render` resolves only validated selected assets, publishes exact
 `render_plan.json`, compiles every IMAGE/VIDEO/HOLD source to a silent normalized

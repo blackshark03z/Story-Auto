@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Story Auto Operator</title><link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <aside class="rail">
+    <div class="brand"><span class="brand-mark">SA</span><div><b>Story Auto</b><small>Production operator</small></div></div>
+    <button class="new-project" id="newProject">＋ New project</button>
+    <nav id="projectList" aria-label="Projects"></nav>
+    <div class="rail-foot">Local workspace<br><span id="runtimeState">Ready</span></div>
+  </aside>
+  <main>
+    <header class="topbar">
+      <div><p class="eyebrow">PRODUCTION RELEASE</p><h1 id="projectTitle">Select a project</h1></div>
+      <div class="top-actions"><span class="mode" id="renderMode">—</span><button id="resumeTop">Resume processing</button></div>
+    </header>
+    <section id="emptyState" class="empty"><div class="empty-orb"></div><h2>Your story workspace is ready.</h2><p>Select a project or create one to begin.</p></section>
+    <div id="workspace" hidden>
+      <section class="status-grid" id="statusGrid"></section>
+      <div class="blocked" id="blocked" hidden></div>
+      <nav class="tabs" id="tabs" aria-label="Project sections">
+        <button data-tab="content" class="active">Content</button><button data-tab="planning">Planning</button><button data-tab="references">References</button><button data-tab="shots">Shots</button><button data-tab="render">Render</button><button data-tab="publishing">Publishing</button>
+      </nav>
+      <section class="panel" id="panel"></section>
+    </div>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -105,6 +105,10 @@ not yet accepted.
   complete all-video coverage through the common compositor.
 - Optional `NATURAL_SOFT` normalization applies restrained saturation/contrast,
   highlight, and fine-grain finishing without blur or sharpening.
+- A loopback-only local operator dashboard now covers project/content status,
+  planning, references, shots, prompt edits, replacement/regeneration, production
+  QC, safe generation controls, rendering, provenance, and publishing. CLI and UI
+  mutations share `OperatorService` and the accepted core services.
 - A 71.067-second real hybrid prototype and a 5.867-second technical
   representative production passed 1080p runtime/visual review. No approved
   long-form content exists in canonical local project/kit locations, recorded as
@@ -116,7 +120,7 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 ## Explicitly not accepted yet
 
-- Product/operator UI.
+- Live operator-session usability acceptance on the representative productions.
 - Live multi-shot full-video representative production and visual acceptance.
 - A representative approved long-form creative production; no canonical fixture
   was locally available for this baseline.

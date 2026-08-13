@@ -190,7 +190,10 @@ changes cannot invalidate video stages.
 
 ## UI boundary
 
-The CLI is canonical first. Later UI invokes the same application services and artifact contracts. UI code may not write provider state or render files through a second execution path.
+The CLI and loopback-only local UI invoke `application.OperatorService` and the
+same core services/artifact contracts. HTTP handlers perform routing and input
+decoding only; they do not write provider state or render files through a
+second execution path. The UI never binds to a non-loopback address.
 
 ## Module map
 
@@ -218,7 +221,7 @@ story_auto/
     llm/
     flow/
   cli/
-  ui/                   deferred until hybrid proof
+  ui/                   loopback HTTP operator dashboard
 ```
 
 Exact filenames are implementation choices. These ownership boundaries are not.

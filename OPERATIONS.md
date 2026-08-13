@@ -30,6 +30,13 @@ Never reuse YouTube Auto project/runtime/browser roots.
 - No automation of credentials/password entry.
 - One active production Flow-generation project at a time per profile.
 
+## Local operator UI
+
+Start with `python -m story_auto --runtime-root <root> ui`. The server is
+loopback-only by design. Generation can be paused between provider requests;
+resume reuses successful and QC-pending attempts. Asset replacement accepts an
+explicit local file path and retains prior attempts in the manifest.
+
 ## Provider calls
 
 Large batches are operator-confirmed. Full-video batch generation is always confirmation-gated. A bounded live smoke test is not permission for a large batch.

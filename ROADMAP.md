@@ -1,7 +1,8 @@
 # Roadmap
 
 Current phase status: Phases 0-7 are accepted. Phase 8 (local UI) and Phase 9
-(full-video production) remain deferred to their dedicated goals.
+(full-video production) are implemented with offline integration coverage;
+representative production acceptance remains in Goal 08.
 
 ## Phase 0 — Design + Build OS baseline — ACCEPTED
 
@@ -66,6 +67,8 @@ No live provider calls.
 - [x] metadata + Flow thumbnail.
 
 ## Phase 8 — Local UI
+
+Implementation: complete; representative operator-session acceptance pending.
 
 Only after Phase 7 pipeline is stable.
 

@@ -7,6 +7,9 @@
 - Add deterministic multi-part full-video requests and render coverage,
   repeated-kind production batches, QC-gated thumbnails, and optional bounded
   `NATURAL_SOFT` render finishing.
+- Add the loopback-only operator dashboard and shared `OperatorService` for
+  project/content, planning, media review, generation, render, provenance, and
+  publishing actions while preserving CLI behavior.
 
 - Add the offline Story Auto core foundation: minimal project contract, locking,
   atomic checkpoint store, bounded retry, and CLI content-manifest vertical slice.

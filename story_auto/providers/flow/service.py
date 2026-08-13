@@ -79,7 +79,7 @@ def reject_selected_asset(runtime_root: Path | str, project_id: str, request_id:
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
-        if not entry or entry.get("status") != "SUCCEEDED" or not isinstance(entry.get("selected_asset"), dict):
+        if not entry or entry.get("status") not in {"SUCCEEDED", "QC_PENDING"} or not isinstance(entry.get("selected_asset"), dict):
             raise FlowError("CREATIVE_REJECTION_INVALID")
         selected = entry["selected_asset"]
         entry.setdefault("creative_rejections", []).append({"rejected_at": _now(), "asset_path": selected.get("path"),
@@ -108,6 +108,19 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": _now()})
         atomic_write_json(path, manifest)
 
+
+def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str) -> None:
+    """Make exactly one selected request runnable again without erasing history."""
+    if not isinstance(reason, str) or not reason.strip(): raise FlowError("REGENERATION_REASON_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        if not entry or entry.get("status") in {"GENERATING", "AMBIGUOUS"}: raise FlowError("REGENERATION_NOT_ALLOWED")
+        entry.setdefault("operator_actions", []).append({"action":"REGENERATE","reason":reason.strip(),"at":_now()})
+        entry.update({"status":"FAILED_RETRYABLE","failure_class":"OPERATOR_REGENERATION","updated_at":_now()})
+        atomic_write_json(path, manifest)
+
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
     """Only reopens an attempt with recorded proof no Generate click happened."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -127,8 +140,11 @@ def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id:
         if not entry or entry.get("status") not in {"AMBIGUOUS", "NOT_DISPATCHED", "FAILED_RETRYABLE"} or not attribution: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
         metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
         number=len(entry["attempts"])+1; rel=f"assets/{entry['media_type'].lower()}/{request_id}/manual_recovery_{number:03d}{source.suffix}"; target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
+        try: request=next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"] if item.get("request_id")==request_id)
+        except Exception: request={}
+        production=request.get("execution_tier")=="STANDARD_PRODUCTION"
         attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"metadata":metadata,"completed_at":_now()}
-        entry["attempts"].append(attempt);entry.update({"status":"SUCCEEDED","selected_asset":{"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata},"failure_class":None,"updated_at":_now()});atomic_write_json(path,manifest);return entry["selected_asset"]
+        entry["attempts"].append(attempt);entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":{"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"},"failure_class":None,"updated_at":_now()});atomic_write_json(path,manifest);return entry["selected_asset"]
 
 @dataclass
 class FlowExecutor:
@@ -159,7 +175,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
         raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
+        control_path = paths.artifact_path("output/execution_control.json")
+        paused = False
         for request in selected:
+            try: paused = read_json(control_path).get("pause_requested") is True
+            except Exception: paused = False
+            if paused: break
             if request.get("media_type") == "IMAGE" and request.get("output_count", 1) != 1:
                 raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
             entry = _entry(manifest, request)
@@ -203,4 +224,4 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})
             atomic_write_json(path, manifest); entries[request["request_id"]] = entry
-    return {"selected":len(selected), "new_submissions":submissions, "manifest":"output/generation_manifest.json"}
+    return {"selected":len(selected), "new_submissions":submissions, "paused":paused, "manifest":"output/generation_manifest.json"}
