@@ -80,7 +80,7 @@ class FlowExecutor:
         return self.generate(request, refs, temporary)
 
 def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False, request_ids: set[str] | None = None) -> dict:
-    """Explicit spend gate. Never re-submit after an unresolved post-dispatch outcome."""
+    """Run the bounded vertical slice while preserving every provider attempt."""
     if not execute: raise FlowError("EXECUTION_CONFIRMATION_REQUIRED", "pass explicit execute-generation permission")
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     review = read_json(paths.artifact_path("output/review_state.json"))
@@ -121,8 +121,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)
-                # A post-dispatch timeout/unknown result is deliberately terminal and non-resubmittable.
-                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_UI_CHANGED", "FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE"))
+                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("NOT_DISPATCHED" if error.failure_class == "FLOW_NOT_DISPATCHED" else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_UI_CHANGED", "FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
                 attempt.update({"status":state, "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})

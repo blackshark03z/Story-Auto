@@ -11,7 +11,7 @@ class FlowComposer:
         if len(values) != 1: raise FlowSessionError("FLOW_UI_CHANGED", f"expected exactly one {name}, found {len(values)}")
         return values[0]
 
-    def submit(self, prompt: str, *, references: list[str], media_type: str) -> None:
+    def submit(self, prompt: str, *, references: list[str], media_type: str, before_dispatch=None) -> None:
         choose = getattr(self.dom, "choose_mode", None)
         if choose: choose(media_type)
         editors = self.dom.active_prompt_editors()
@@ -21,6 +21,9 @@ class FlowComposer:
         if references: self.dom.add_references(references)
         controls = self.dom.generate_controls(editor, media_type)
         control = self._one("active composer Generate control", controls)
+        # Reference attachment itself changes Flow's UI.  The caller may take
+        # its dispatch baseline only after that benign transition is complete.
+        if before_dispatch: before_dispatch()
         control.click()
 
     def candidates(self): return self.dom.media_candidates()

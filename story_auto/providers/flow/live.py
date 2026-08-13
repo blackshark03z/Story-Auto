@@ -105,8 +105,13 @@ class LiveFlowGenerator:
     def __call__(self, request, references, destination: Path):
         page=CdpPage.open(self.runtime)
         try:
-            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved); before=set(dom.media_candidates()); before_text=page.evaluate("document.body.innerText")
-            FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"])
+            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
+            before, before_text = set(), ""
+            def baseline():
+                nonlocal before, before_text
+                before = set(dom.media_candidates())
+                before_text = page.evaluate("document.body.innerText")
+            FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline)
             # An immediate composer/UI transition is a dispatch acknowledgement;
             # final media remains separately attributable by pre/post comparison.
             for _ in range(8):

@@ -61,6 +61,15 @@ class FlowTests(unittest.TestCase):
         for dom in (DOM(0),DOM(2),DOM(1,2)):
             with self.assertRaises(FlowSessionError) as caught: FlowComposer(dom).submit("p",references=[],media_type="IMAGE")
             self.assertEqual(caught.exception.failure_class,"FLOW_UI_CHANGED")
+
+    def test_composer_baseline_runs_after_reference_attachment_before_click(self):
+        events=[]
+        class OrderedDom(DOM):
+            def add_references(self, _): events.append("references")
+        dom=OrderedDom()
+        FlowComposer(dom).submit("p", references=["reference.png"], media_type="IMAGE", before_dispatch=lambda: events.append("baseline"))
+        self.assertEqual(events,["references","baseline"])
+        self.assertTrue(dom.controls[0].clicked)
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
         page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0))
