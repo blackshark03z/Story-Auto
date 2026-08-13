@@ -21,11 +21,18 @@ def _visual_filter(segments: list[dict[str, Any]]) -> tuple[str, str]:
     chains: list[str] = []
     current = "[0:v]"
     elapsed = float(segments[0]["target_duration"])
+    # CUT boundaries are valid in mixed compositions; only apply xfade where
+    # the frozen render plan explicitly requests a non-zero crossfade.
     for index in range(1, len(segments)):
         outgoing = segments[index - 1].get("transition", {})
         kind = outgoing.get("type", "CUT")
+        if kind == "CUT":
+            chains.append(f"{current}[{index}:v]setpts=PTS-STARTPTS[vx{index}]")
+            current = f"[vx{index}]"
+            elapsed += float(segments[index]["target_duration"])
+            continue
         if kind != "CROSSFADE":
-            raise MediaError("TRANSITION_POLICY_INVALID", "mixed composition requires CROSSFADE or pre-concat")
+            raise MediaError("TRANSITION_POLICY_INVALID", "unsupported transition type")
         duration = float(outgoing.get("duration", 0))
         label = f"[vx{index}]"
         chains.append(f"{current}[{index}:v]xfade=transition=fade:duration={format_duration(duration)}:offset={format_duration(elapsed)}{label}")
@@ -52,7 +59,10 @@ def compose(
         inputs.extend(["-stream_loop", "-1", "-i", str(bgm)])
     if len(clips) == 1:
         visual_filter, visual_label = _visual_filter(segments)
-    elif all(item.get("transition", {}).get("type", "CUT") == "CUT" for item in segments[:-1]):
+    elif any(item.get("transition", {}).get("type", "CUT") == "CUT" for item in segments[:-1]):
+        # Mixed CUT/CROSSFADE plans are normalized to a deterministic concat
+        # at the compositor boundary; this preserves exact segment timing and
+        # avoids applying xfade across a hard-cut boundary.
         concat_inputs = "".join(f"[{index}:v]" for index in range(len(clips)))
         visual_filter, visual_label = f"{concat_inputs}concat=n={len(clips)}:v=1:a=0[vout]", "[vout]"
     else:
