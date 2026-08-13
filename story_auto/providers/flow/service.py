@@ -99,6 +99,18 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
             raise FlowError("MEDIA_QC_INVALID")
         try:
             accepted = validate_production_qc(report, provider=entry.get("provider"))
+            # Story shots require an explicit structured comparison to their
+            # narration intent. Technical/media quality alone is insufficient.
+            try:
+                requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
+            except Exception:
+                requests = []
+            request = next((item for item in requests if item.get("request_id") == request_id), {})
+            if request.get("purpose") == "SHOT":
+                classification = report.get("alignment_classification") or report.get("visual_narration_alignment")
+                if classification not in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"}:
+                    failure = "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED" if not classification else "VISUAL_NARRATION_ALIGNMENT_MISMATCH"
+                    raise MediaQualityError(failure)
         except MediaQualityError as error:
             entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class, "report": report})
             entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": _now()})

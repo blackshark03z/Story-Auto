@@ -7,6 +7,19 @@ from typing import Any
 
 ALIGNMENT_SCHEMA_VERSION = "story-auto-visual-narration-alignment/1.0.0"
 
+def classify_semantic_alignment(expected: dict[str, Any], observed: dict[str, Any]) -> str:
+    """Classify a structured multimodal observation against shot intent."""
+    explicit = observed.get("classification") or observed.get("alignment_classification")
+    if explicit in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC", "MISMATCH"}:
+        return explicit
+    if observed.get("contradictions"):
+        return "MISMATCH"
+    required = {str(x).lower() for x in expected.get("characters", []) + expected.get("props", []) if x}
+    seen = {str(x).lower() for x in observed.get("characters", []) + observed.get("props", []) if x}
+    if required and not required.intersection(seen):
+        return "MISMATCH"
+    return "PASS_SUPPORTIVE" if seen else "PASS_ATMOSPHERIC"
+
 
 def _excerpt(alignment: dict[str, Any], ids: list[str]) -> str:
     wanted = set(ids)
