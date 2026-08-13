@@ -35,6 +35,10 @@ Invalidate only downstream stages that depend on changed inputs. Examples:
 
 Provider/UI failures must be typed and retain stage/request/attempt context. Do not convert every error to a generic pipeline failure.
 
+Media stages write to isolated candidate files and atomically replace durable
+outputs only after validation. Provider destination directories exist before
+dispatch. Resource preflights happen before paid acquisition or FFmpeg work.
+
 No infinite retry loops. One initial attempt plus bounded automatic correction/retry is the normal default; further retries are an explicit new operator action or changed request.
 
 ## Credentials

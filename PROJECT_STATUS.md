@@ -109,6 +109,10 @@ not yet accepted.
   planning, references, shots, prompt edits, replacement/regeneration, production
   QC, safe generation controls, rendering, provenance, and publishing. CLI and UI
   mutations share `OperatorService` and the accepted core services.
+- Release hardening adds pre-dispatch workspace-capacity checks, atomic
+  normalized/final media publication, restart proofs for interrupted planning
+  and acquisition, zero-byte/partial-media rejection, and a credential/signed-URL/
+  runtime-import security gate.
 - A 71.067-second real hybrid prototype and a 5.867-second technical
   representative production passed 1080p runtime/visual review. No approved
   long-form content exists in canonical local project/kit locations, recorded as

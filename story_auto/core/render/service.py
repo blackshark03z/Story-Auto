@@ -12,6 +12,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
+from story_auto.core.resources import ensure_free_space
 from story_auto.core.subtitles import SUBTITLE_VERSION, build_subtitles
 
 from .compiler import compile_hold, compile_image, compile_video
@@ -63,8 +64,22 @@ def _valid_plan(path: Path, project_root: Path) -> bool:
         return False
 
 
+def _atomic_media_publish(target: Path, producer) -> Any:
+    """Publish validated media without exposing partial bytes at the target."""
+    candidate=target.with_name(f".{target.stem}.candidate{target.suffix}")
+    try:
+        result=producer(candidate)
+        os.replace(candidate,target)
+        return result
+    finally:
+        candidate.unlink(missing_ok=True)
+
+
 def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    storage=config.settings.get("storage",{})
+    if not isinstance(storage,dict): raise ValueError("settings.storage must be an object")
+    ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     settings, target = _render_settings(config)
     alignment = _load_required(paths, "alignment")
     shot_plan = _load_required(paths, "shot_plan")
@@ -126,16 +141,17 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             if valid:
                 actions["clips"][segment_id] = "SKIP"
             else:
-                if segment["source_media_type"] == "IMAGE":
-                    compile_image(paths.artifact_path(segment["source_asset"]), clip_path,
+                def produce(candidate):
+                    if segment["source_media_type"] == "IMAGE":
+                        return compile_image(paths.artifact_path(segment["source_asset"]), candidate,
                                   duration=compile_duration, motion=segment["image_motion_policy"], target=target,
                                   finishing_profile=settings["finishing_profile"])
-                elif segment["source_media_type"] == "VIDEO":
-                    compile_video(paths.artifact_path(segment["source_asset"]), clip_path,
+                    if segment["source_media_type"] == "VIDEO":
+                        return compile_video(paths.artifact_path(segment["source_asset"]), candidate,
                                   duration=compile_duration, short_policy=segment["short_video_policy"], target=target,
                                   finishing_profile=settings["finishing_profile"])
-                else:
-                    compile_hold(clip_path, duration=compile_duration, color=settings["hold_color"], target=target)
+                    return compile_hold(candidate,duration=compile_duration,color=settings["hold_color"],target=target)
+                _atomic_media_publish(clip_path,produce)
                 checkpoints.record(stage, fingerprint=clip_fp, status="SUCCESS", outputs=[relative],
                                    producer_version=RENDER_STAGE_VERSION)
                 actions["clips"][segment_id] = "RUN"
@@ -207,12 +223,12 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             actions["final_render"] = "SKIP"
             final_manifest = read_json(final_manifest_path)
         else:
-            candidate = paths.artifact_path("output/.final.candidate.mp4")
-            metadata = compose(clips=clips, segments=render_plan["segments"], narration=narration_path,
-                               output=candidate, master_duration=float(render_plan["master_duration"]),
-                               subtitles_ass=ass_path, bgm=bgm_path,
-                               bgm_volume=audio_plan["bgm"]["volume"], target=target)
-            os.replace(candidate, final_path)
+            def produce_final(candidate):
+                return compose(clips=clips, segments=render_plan["segments"], narration=narration_path,
+                                   output=candidate, master_duration=float(render_plan["master_duration"]),
+                                   subtitles_ass=ass_path, bgm=bgm_path,
+                                   bgm_volume=audio_plan["bgm"]["volume"], target=target)
+            metadata=_atomic_media_publish(final_path,produce_final)
             metadata = validate_video(final_path, target=target, silent=False,
                                       expected_duration=float(render_plan["master_duration"]), tolerance=.12)
             final_manifest = {

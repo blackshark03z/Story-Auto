@@ -10,6 +10,7 @@ import shutil
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
+from story_auto.core.resources import ensure_free_space
 from story_auto.core.visual import MediaQualityError, validate_production_qc
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
@@ -173,6 +174,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
     if (not production_batch and any(kinds.count(kind) > 1 for kind in kinds)) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
         raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
+    storage=config.settings.get("storage",{})
+    if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
+    ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
@@ -205,9 +209,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             # cannot attach a path relative to the process working directory.
             refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
             try:
+                temp.parent.mkdir(parents=True, exist_ok=True)
                 result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
-                temp.parent.mkdir(parents=True, exist_ok=True)
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
                 metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
                 final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"

@@ -71,6 +71,11 @@ Render recovery expectations are executable behavior:
 
 Before generation/render, check writable paths and free disk. Rendering/generation must stop before predictable disk exhaustion; temporary/partial files are isolated from selected assets.
 
+The application now enforces `settings.storage.minimum_free_bytes` (64 MiB by
+default) before provider acquisition and rendering. Normalized clips and the
+final video publish through validated sibling candidates, so an interruption or
+failed replace preserves the prior selected output and removes partial candidates.
+
 ## Release/deployment
 
 V1 is a local operator tool. There is no cloud deployment or YouTube publication pipeline. A release is an accepted Git baseline plus a locally runnable package/environment and verified representative runtime evidence.

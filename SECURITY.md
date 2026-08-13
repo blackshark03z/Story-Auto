@@ -18,3 +18,11 @@ Offline tests must not accidentally call TTS/Gemini/Flow. Live network/provider 
 ## Generated/content data
 
 Projects may contain private scripts, generated media, and provider responses. Keep runtime outside the source repo by default. Diagnostics must sanitize credentials/tokens and avoid dumping full cookies or authentication storage.
+
+## Release security gate
+
+`python tools/security_gate.py` scans tracked product text plus durable evidence
+for private keys, API-key shapes, bearer/cookie material, and signed provider
+URLs. It also parses every product Python module and rejects runtime imports
+from YouTube Auto. The gate reports file and classification only, never the
+matched secret value.

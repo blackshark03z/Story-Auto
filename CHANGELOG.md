@@ -10,6 +10,9 @@
 - Add the loopback-only operator dashboard and shared `OperatorService` for
   project/content, planning, media review, generation, render, provenance, and
   publishing actions while preserving CLI behavior.
+- Harden provider and render restarts with capacity preflight, atomic media
+  candidates, zero-byte/partial acquisition recovery, planning-stage resume,
+  and repository/evidence credential and runtime-import scanning.
 
 - Add the offline Story Auto core foundation: minimal project contract, locking,
   atomic checkpoint store, bounded retry, and CLI content-manifest vertical slice.

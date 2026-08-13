@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import hashlib, json, sys
+import ast
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = [
@@ -73,6 +74,13 @@ for folder in [ROOT / "contracts/schemas", ROOT / "contracts/examples"]:
             json.loads(p.read_text(encoding="utf-8"))
         except Exception as exc:
             fail(f"invalid JSON {p.relative_to(ROOT)}: {exc}")
+
+# Product modules must import cleanly without runtime coupling to YouTube Auto.
+for source in (ROOT / "story_auto").rglob("*.py"):
+    try:
+        ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+    except (OSError, SyntaxError) as exc:
+        fail(f"invalid Python source {source.relative_to(ROOT)}: {exc}")
 
 print("QUALITY_GATE=PASS")
 print("DESIGN_CONTRACT=story-auto.frozen-design/1.0.0")
