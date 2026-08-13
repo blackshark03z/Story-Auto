@@ -70,6 +70,12 @@ class FlowTests(unittest.TestCase):
         FlowComposer(dom).submit("p", references=["reference.png"], media_type="IMAGE", before_dispatch=lambda: events.append("baseline"))
         self.assertEqual(events,["references","baseline"])
         self.assertTrue(dom.controls[0].clicked)
+
+    def test_preconfigured_mode_is_not_reopened_before_submit(self):
+        class ModeDom(DOM):
+            def choose_mode(self, _): raise AssertionError("mode menu must remain closed")
+        dom=ModeDom(); FlowComposer(dom).submit("p", references=[], media_type="IMAGE", mode_already_configured=True)
+        self.assertTrue(dom.controls[0].clicked)
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
         page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0))

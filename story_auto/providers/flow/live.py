@@ -71,6 +71,12 @@ class FlowBrowserDom:
         actual["model"] = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('button[aria-haspopup="menu"]')).filter(e=>visible(e)&&e.innerText.includes('arrow_drop_down'));return xs.length===1?xs[0].innerText.replace('arrow_drop_down','').trim():null})()""")
         if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
         actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
+        # The settings popover otherwise overlays the composer submit arrow.
+        # Close it with a native key before any prompt or pointer interaction.
+        self.page.key("Escape", code="Escape")
+        time.sleep(.25)
+        open_menu = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('button[aria-haspopup=\"menu\"]')).some(e=>visible(e)&&e.getAttribute('aria-expanded')==='true')})()""")
+        if open_menu: raise FlowError("FLOW_UI_CHANGED", "Flow settings menu did not close before submit")
         return actual
     def generate_controls(self, _editor, _media_type):
         # A reference upload is asynchronous.  Do not treat a transiently
@@ -128,7 +134,7 @@ class LiveFlowGenerator:
                 nonlocal before, before_text
                 before = set(dom.media_candidates())
                 before_text = page.evaluate("document.body.innerText")
-            FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline)
+            FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline, mode_already_configured=True)
             # An immediate composer/UI transition is a dispatch acknowledgement;
             # final media remains separately attributable by pre/post comparison.
             for _ in range(8):

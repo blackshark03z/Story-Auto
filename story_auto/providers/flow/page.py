@@ -11,9 +11,9 @@ class FlowComposer:
         if len(values) != 1: raise FlowSessionError("FLOW_UI_CHANGED", f"expected exactly one {name}, found {len(values)}")
         return values[0]
 
-    def submit(self, prompt: str, *, references: list[str], media_type: str, before_dispatch=None) -> None:
+    def submit(self, prompt: str, *, references: list[str], media_type: str, before_dispatch=None, mode_already_configured: bool = False) -> None:
         choose = getattr(self.dom, "choose_mode", None)
-        if choose: choose(media_type)
+        if choose and not mode_already_configured: choose(media_type)
         editors = self.dom.active_prompt_editors()
         editor = self._one("active prompt editor", editors)
         editor.set_text(prompt)
