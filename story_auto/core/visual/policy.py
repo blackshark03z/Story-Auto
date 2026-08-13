@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import re
 from typing import Any
 
 VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.1.0"
@@ -86,8 +87,12 @@ def compile_video_prompt(
     """Compile motion only; the reference image owns appearance and treatment."""
     camera = camera_motion.strip().upper().replace(" ", "_")
     camera_text = _MOTION.get(camera, _MOTION["STATIC"])
+    motion = subject_motion.strip()
+    motion = re.sub(r"\b(?:Julian Cross|Daniel Mercer|Maya|Julian|Daniel)\b", "the subject", motion, flags=re.I)
+    motion = re.sub(r"\b(?:famous|renowned|celebrated|respected|prestigious|nationally respected)\b", "", motion, flags=re.I)
+    motion = re.sub(r"\s{2,}", " ", motion).strip(" ,;:.\n")
     parts = [
-        f"Subject motion: {subject_motion.strip() or 'natural minimal movement'}",
+        f"Subject motion: {motion or 'natural minimal movement'}",
         f"Environmental motion: {environmental_motion.strip() or 'only subtle physically plausible movement'}",
         f"Camera motion: {camera_text}",
         f"Timing: {timing.strip()}",
