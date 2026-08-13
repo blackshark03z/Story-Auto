@@ -96,10 +96,27 @@ class FlowBrowserDom:
             raise FlowError("FLOW_GENERATE_DISABLED", "Flow did not enable composer Generate after reference upload")
         return [_Control(self, x) for x in last]
     def add_references(self, files):
-        # Native file inputs are normally hidden behind a visible upload button.
+        # The only file input belongs to Flow's project media library.  Upload
+        # there first, then explicitly select the library item in the active
+        # composer's add-media dialog; uploading alone is not an ingredient.
         count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
         if count != 1: raise FlowError("FLOW_UI_CHANGED", f"expected one reference input, found {count}")
-        self.page.set_input_files("input[type=file]", [str(Path(f).resolve()) for f in files])
+        local = [str(Path(f).resolve()) for f in files]
+        self.page.set_input_files("input[type=file]", local)
+        name = Path(local[0]).name
+        open_dialog = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        if not open_dialog: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
+        deadline=time.monotonic()+15
+        while time.monotonic()<deadline:
+            selected=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(!tab)return null;if(tab.getAttribute('aria-selected')!=='true')tab.click();const image=Array.from(d.querySelectorAll('img')).find(e=>e.alt===%s);if(!image)return false;image.click();const add=Array.from(d.querySelectorAll('button')).find(e=>e.innerText.trim()==='Thêm vào câu lệnh');if(!add)return null;add.click();return true})()""" % __import__('json').dumps(name))
+            if selected is True: break
+            time.sleep(.5)
+        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded reference {name} was not selectable in Flow")
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
+            time.sleep(.2)
+        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
 
 
