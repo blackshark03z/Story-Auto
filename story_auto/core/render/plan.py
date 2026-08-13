@@ -82,6 +82,7 @@ def resolve_render_plan(
     if default_transition.get("type", "CUT") not in {"CUT", "CROSSFADE"}:
         raise RenderPlanError("TRANSITION_POLICY_INVALID")
     segments: list[dict[str, Any]] = []
+    seen_hashes: dict[str, str] = {}
 
     def successful(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
         entry = manifest_by_request.get(request.get("request_id"), {})
@@ -146,6 +147,13 @@ def resolve_render_plan(
                 if metadata["sha256"] != source_hash:
                     raise RenderPlanError("RENDER_SOURCE_INVALID", shot_id)
                 provenance = {"request_id": selected_request["request_id"], "attempt": selected_asset.get("attempt"), "provider": selected_request.get("provider"), "asset_metadata": metadata}
+                # Reuse is only safe when the frozen media item explicitly says so.
+                # Never let a valid asset silently cover an unrelated story beat.
+                if settings.get("visual_narration_alignment", {}).get("fail_on_unplanned_reuse"):
+                    prior = seen_hashes.get(source_hash)
+                    if prior and prior != shot_id and not media.get("allow_asset_reuse", False):
+                        raise RenderPlanError("VISUAL_NARRATION_ALIGNMENT_MISMATCH", f"asset {source_hash} reused by {prior} and {shot_id}")
+                    seen_hashes[source_hash] = shot_id
             transition = dict(default_transition if is_last else {"type": "CUT", "duration": 0.0})
             if transition.get("type", "CUT") == "CUT": transition["duration"] = 0.0
             segment_id = shot_id if len(render_parts) == 1 else f"{shot_id}_part_{index:03d}"

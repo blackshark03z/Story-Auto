@@ -14,6 +14,7 @@ from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
 from story_auto.core.subtitles import SUBTITLE_VERSION, build_subtitles
+from story_auto.core.visual_alignment import build_shot_mapping_audit
 
 from .compiler import compile_hold, compile_image, compile_video
 from .compositor import COMPOSER_VERSION, compose
@@ -46,6 +47,7 @@ def _render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
             "margin_left": 90, "margin_right": 260,
             "provider_mark_safe_area": "BOTTOM_RIGHT",
         }),
+        "visual_narration_alignment": value.get("visual_narration_alignment", {"fail_on_unplanned_reuse": True}),
     }
     if settings["finishing_profile"] not in {"NONE", "NATURAL_SOFT"}:
         raise ValueError("settings.render.finishing_profile must be NONE or NATURAL_SOFT")
@@ -120,6 +122,11 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             checkpoints.record("render_plan", fingerprint=plan_fp, status="SUCCESS",
                                outputs=["output/render_plan.json"], producer_version=RENDER_STAGE_VERSION)
             actions["render_plan"] = "RUN"
+        # Persist the complete identity chain even when later rendering fails.
+        alignment_audit = build_shot_mapping_audit(alignment=alignment, shot_plan=shot_plan,
+            media_plan=media_plan, generation_requests=requests, generation_manifest=manifest,
+            render_plan=render_plan)
+        atomic_write_json(paths.artifact_path("output/visual_narration_alignment.json"), alignment_audit)
         compile_durations, computed_duration = transition_output_durations(render_plan["segments"])
         if abs(computed_duration - float(render_plan["master_duration"])) > .01:
             raise ValueError("transition duration math does not preserve narration duration")
