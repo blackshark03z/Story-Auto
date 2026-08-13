@@ -48,6 +48,44 @@ def _valid_selected(paths, entry):
 
 def _runnable(request, entries): return all(entries.get(dep, {}).get("status") == "SUCCEEDED" for dep in request.get("depends_on", []))
 
+
+def reconcile_local_assets(runtime_root: Path | str, project_id: str) -> set[str]:
+    """Invalidate only provider selections whose exact local bytes no longer validate."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    invalidated: set[str] = set()
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        for entry in manifest["requests"]:
+            if entry.get("status") != "SUCCEEDED" or _valid_selected(paths, entry):
+                continue
+            selected = entry.get("selected_asset") if isinstance(entry.get("selected_asset"), dict) else {}
+            entry.setdefault("asset_invalidations", []).append({
+                "detected_at": _now(), "path": selected.get("path"),
+                "expected_sha256": selected.get("sha256"), "failure_class": "ASSET_INVALID",
+            })
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": "ASSET_INVALID", "updated_at": _now()})
+            invalidated.add(entry["request_id"])
+        if invalidated:
+            atomic_write_json(path, manifest)
+    return invalidated
+
+
+def reject_selected_asset(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str) -> None:
+    """Record a visual-review rejection without deleting or rewriting its attempt."""
+    if not isinstance(reason, str) or not reason.strip():
+        raise FlowError("CREATIVE_REJECTION_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        if not entry or entry.get("status") != "SUCCEEDED" or not isinstance(entry.get("selected_asset"), dict):
+            raise FlowError("CREATIVE_REJECTION_INVALID")
+        selected = entry["selected_asset"]
+        entry.setdefault("creative_rejections", []).append({"rejected_at": _now(), "asset_path": selected.get("path"),
+                                                              "asset_sha256": selected.get("sha256"), "reason": reason.strip()})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": "CREATIVE_REJECTED", "updated_at": _now()})
+        atomic_write_json(path, manifest)
+
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
     """Only reopens an attempt with recorded proof no Generate click happened."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -88,16 +126,17 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if review.get("plan_approval", {}).get("status") != "APPROVED": raise FlowError("PLAN_APPROVAL_REQUIRED")
     requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
     selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
-    if len(selected) > 3: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "Goal 06 permits only the three-request vertical slice")
+    if len(selected) > 4: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits at most four selected requests")
     kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
-    if any(kinds.count(kind) > 1 for kind in kinds) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO")} for kind in kinds):
-        raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "Goal 06 permits at most one reference image, shot image, and shot video")
+    if any(kinds.count(kind) > 1 for kind in kinds) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
+        raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         for request in selected:
             entry = _entry(manifest, request)
             if entry is None: continue # identity changed: retain old provenance, a planner-generated id is required
             if entry.get("status") == "SUCCEEDED" and _valid_selected(paths, entry): continue
+            if entry.get("status") == "AMBIGUOUS": continue # reconcile provider-visible state before any new dispatch
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
             if not _runnable(request, entries): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]

@@ -14,7 +14,12 @@
     "render_plan_sha256",
     "alignment_sha256",
     "audio_plan_sha256",
-    "selected_asset_hashes"
+    "selected_asset_hashes",
+    "subtitle_hashes",
+    "narration_sha256",
+    "bgm_sha256",
+    "composer",
+    "streams"
   ],
   "properties": {
     "schema_version": {
@@ -61,6 +66,19 @@
         "type": "string"
       }
     },
+    "subtitle_hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["srt", "ass"],
+      "properties": {
+        "srt": {"type": "string"},
+        "ass": {"type": "string"}
+      }
+    },
+    "narration_sha256": {"type": "string"},
+    "bgm_sha256": {"type": ["string", "null"]},
+    "composer": {"type": "object"},
+    "streams": {"type": "object"},
     "publishing_package_sha256": {
       "type": [
         "string",

@@ -16,6 +16,7 @@ _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r
 _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',is_empty:e.tagName==='TEXTAREA'?!e.value:!!e.querySelector('[data-slate-zero-width][data-slate-length="0"]'),tag:e.tagName})))()"""
 _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
+_CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);key=parsed.origin+parsed.pathname}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName})}}return out})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
@@ -118,6 +119,7 @@ class FlowBrowserDom:
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
+    def media_candidate_records(self): return self.page.evaluate(_CANDIDATE_RECORDS_JS) or []
     def video_candidates(self): return self.page.evaluate("""(()=>Array.from(document.querySelectorAll('video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()""") or []
 
 
@@ -149,27 +151,57 @@ class LiveFlowGenerator:
             before, before_output, before_text = set(), set(), ""
             def baseline():
                 nonlocal before, before_output, before_text
-                before = set(dom.media_candidates())
-                before_output = set(dom.video_candidates() if request["media_type"] == "VIDEO" else before)
+                records = dom.media_candidate_records()
+                before = {item["key"] for item in records}
+                before_output = {item["key"] for item in records if request["media_type"] != "VIDEO" or item.get("kind") in {"VIDEO", "SOURCE"}}
                 before_text = page.evaluate("document.body.innerText")
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline, mode_already_configured=True)
             # An immediate composer/UI transition is a dispatch acknowledgement;
             # final media remains separately attributable by pre/post comparison.
             for _ in range(8):
                 now_text=page.evaluate("document.body.innerText")
-                if now_text != before_text or set(dom.media_candidates()) != before:
+                if now_text != before_text or {item["key"] for item in dom.media_candidate_records()} != before:
                     self.dispatch_confirmed = True; self.last_settings["dispatch_ack_method"]="composer_or_output_transition"; break
                 time.sleep(.25)
             if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "native click produced no Flow acknowledgement")
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
-                pool = dom.video_candidates() if request["media_type"] == "VIDEO" else dom.media_candidates()
-                added=[x for x in pool if x not in before_output]
-                if len(added)==1:
-                    payload=page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(added[0]))
+                pool = dom.media_candidate_records()
+                if request["media_type"] == "VIDEO":
+                    pool = [item for item in pool if item.get("kind") in {"VIDEO", "SOURCE"}]
+                added=[item for item in pool if item["key"] not in before_output]
+                if len(added)==resolved.output_count:
+                    self.last_settings["observed_output_count"] = len(added)
+                    self.last_settings["selected_candidate_index"] = 0
+                    payload=page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(added[0]["url"]))
                     if not isinstance(payload,dict) or not isinstance(payload.get("data"),str): raise FlowError("ASSET_ACQUISITION_FAILED")
                     atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True)); return destination
-                if len(added)>1: raise FlowError("FLOW_RESULT_AMBIGUOUS", "multiple new provider outputs")
+                if len(added)>resolved.output_count: raise FlowError("FLOW_RESULT_AMBIGUOUS", "more provider outputs than requested")
                 time.sleep(2)
             raise FlowError("FLOW_TIMEOUT", "submitted request has no uniquely attributable result")
         finally: page.close()
+
+
+def download_latest_image_group_candidate(runtime, destination: Path, *, expected_count: int) -> Path:
+    """Acquire one candidate from the newest exact-count Flow image group.
+
+    This is reconciliation only: it never enters a prompt or presses Generate.
+    The caller remains responsible for binding human/operator attribution to the
+    ambiguous dispatched attempt before adopting the bytes.
+    """
+    if expected_count < 1:
+        raise FlowError("FLOW_RESULT_AMBIGUOUS", "invalid expected output count")
+    page = CdpPage.open(runtime)
+    try:
+        groups = page.evaluate("""(()=>{const expected=%d;const valid=e=>{const u=e.currentSrc||e.src||e.getAttribute('src');return e.tagName==='IMG'&&e.naturalWidth>=512&&typeof u==='string'&&u&&!u.startsWith('data:')};const images=Array.from(document.querySelectorAll('img')).filter(valid),out=[];for(const image of images){let p=image.parentElement,group=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('img')).filter(valid);if(xs.length===expected){group=xs.map(e=>e.currentSrc||e.src||e.getAttribute('src'));break}if(xs.length>expected)break;p=p.parentElement}if(group&&!out.some(x=>JSON.stringify(x)===JSON.stringify(group)))out.push(group)}return out})()""" % expected_count) or []
+        # Flow prepends the newest result group to the project media grid.
+        if not groups or not isinstance(groups[0], list) or len(groups[0]) != expected_count:
+            raise FlowError("FLOW_RESULT_AMBIGUOUS", "no newest exact-count image group")
+        candidate = groups[0][0]
+        payload = page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(candidate))
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
+            raise FlowError("ASSET_ACQUISITION_FAILED")
+        atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True))
+        return destination
+    finally:
+        page.close()

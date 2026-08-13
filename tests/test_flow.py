@@ -8,7 +8,8 @@ from unittest.mock import patch
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
-from story_auto.providers.flow.service import FlowError, FlowExecutor, execute_generation
+from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
+                                                reject_selected_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 
@@ -109,6 +110,29 @@ class FlowTests(unittest.TestCase):
             manifest=read_json(paths.artifact_path("output/generation_manifest.json")); selected=paths.artifact_path(manifest["requests"][0]["selected_asset"]["path"]); selected.unlink()
             third=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(third["new_submissions"],1)
 
+    def test_local_reconciliation_invalidates_only_missing_selected_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,calls=self._executor()
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            image_entry=next(item for item in manifest["requests"] if item["request_id"]=="shot")
+            paths.artifact_path(image_entry["selected_asset"]["path"]).unlink()
+            self.assertEqual(reconcile_local_assets(runtime.root,cfg.project_id), {"shot"})
+            reconciled=read_json(paths.artifact_path("output/generation_manifest.json"))
+            self.assertEqual(next(item for item in reconciled["requests"] if item["request_id"]=="shot")["status"], "FAILED_RETRYABLE")
+            self.assertEqual(next(item for item in reconciled["requests"] if item["request_id"]=="ref")["status"], "SUCCEEDED")
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True)
+            self.assertEqual(result["new_submissions"],1)
+
+    def test_visual_rejection_preserves_successful_attempt_provenance(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,_=self._executor()
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            reject_selected_asset(runtime.root,cfg.project_id,"ref",reason="visual review mismatch")
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((entry["status"],entry["failure_class"],len(entry["attempts"])),("FAILED_RETRYABLE","CREATIVE_REJECTED",1))
+            self.assertEqual(entry["creative_rejections"][0]["reason"],"visual review mismatch")
+
     def test_dependent_generation_receives_absolute_reference_file(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root); executor,calls=self._executor()
@@ -121,7 +145,7 @@ class FlowTests(unittest.TestCase):
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),timeout)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            self.assertEqual(len(calls),2)
+            self.assertEqual(len(calls),1)
     def test_execution_gate(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); executor,_=self._executor()

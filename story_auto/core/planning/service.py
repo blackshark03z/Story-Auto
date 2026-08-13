@@ -63,20 +63,30 @@ def _resolve_timeline(project_id: str, alignment: dict[str, Any], grouping: dict
         used.update(ids); first, last = lookup[ids[0]], lookup[ids[-1]]
         scenes.append({"scene_id": f"scn_{index:04d}", "start": first["start"], "end": last["end"], "narration_segment_ids": ids, "narration_text": "".join(lookup[item]["text"] for item in ids), "story_role": group.get("story_role", "story_beat"), "summary": group.get("summary", ""), "entity_ids": group.get("entity_ids", [])})
     if used != set(lookup): raise PlanningError("STORY_TIMELINE_INVALID", "all narration must be covered exactly once")
+    # Spoken spans may leave canonical leading/trailing/inter-segment silence.
+    # Assign silence deterministically to adjacent visual scenes so coverage
+    # tiles the full narration master without changing alignment timestamps.
+    scenes[0]["start"] = 0.0
+    for index in range(1, len(scenes)):
+        boundary = (float(scenes[index - 1]["end"]) + float(scenes[index]["start"])) / 2
+        scenes[index - 1]["end"] = boundary
+        scenes[index]["start"] = boundary
+    scenes[-1]["end"] = float(alignment["duration_seconds"])
     return {"schema_version": TIMELINE_SCHEMA_VERSION, "project_id": project_id, "alignment_sha256": provenance["direct_input_hashes"]["alignment_sha256"], "scenes": scenes, "provenance": provenance, "review_status": "VALIDATED"}
 
 def validate_timeline(value: Any, alignment: dict[str, Any]) -> None:
     try: scenes = value["scenes"]; segments = {s["segment_id"]: s for s in alignment["segments"]}
     except (KeyError, TypeError): raise PlanningError("STORY_TIMELINE_INVALID")
     if value.get("schema_version") != TIMELINE_SCHEMA_VERSION or not isinstance(scenes, list) or not scenes: raise PlanningError("STORY_TIMELINE_INVALID")
-    used, previous = set(), -1.0
+    used, previous = set(), 0.0
     for index, scene in enumerate(scenes, 1):
         ids = scene.get("narration_segment_ids") if isinstance(scene, dict) else None
         if scene.get("scene_id") != f"scn_{index:04d}" or not isinstance(ids, list) or not ids or any(i not in segments for i in ids): raise PlanningError("STORY_TIMELINE_INVALID")
-        if used.intersection(ids) or float(scene["start"]) < previous or float(scene["end"]) <= float(scene["start"]): raise PlanningError("STORY_TIMELINE_INVALID")
-        if scene["start"] != segments[ids[0]]["start"] or scene["end"] != segments[ids[-1]]["end"]: raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
+        start, end = float(scene["start"]), float(scene["end"])
+        if used.intersection(ids) or abs(start - previous) > .001 or end <= start: raise PlanningError("STORY_TIMELINE_INVALID")
+        if start > float(segments[ids[0]]["start"]) or end < float(segments[ids[-1]]["end"]): raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
         used.update(ids); previous = float(scene["end"])
-    if used != set(segments) or abs(float(scenes[-1]["end"]) - float(alignment["duration_seconds"])) > .15: raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
+    if used != set(segments) or abs(float(scenes[0]["start"])) > .001 or abs(float(scenes[-1]["end"]) - float(alignment["duration_seconds"])) > .001: raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
 
 def _continuity(project_id: str, proposed: dict[str, Any], timeline: dict[str, Any], provenance: dict[str, Any]) -> dict[str, Any]:
     result = {"schema_version": CONTINUITY_SCHEMA_VERSION, "project_id": project_id, "style": proposed.get("style", {}), "characters": [], "locations": [], "props": [], "provenance": provenance, "review_status": "VALIDATED"}
@@ -170,7 +180,7 @@ def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: 
         if override:
             media_type, requirement = override.get("media_type", media_type), override.get("requirement", requirement)
         if render_mode == "full_video_ai" and (media_type != "VIDEO" or requirement != "REQUIRED"): raise PlanningError("MEDIA_OVERRIDE_REJECTED")
-        planned.append({"shot_id":shot["shot_id"],"media_type":media_type,"requirement":requirement,"target_duration":duration,"fallback_policy":"BLOCK" if requirement == "REQUIRED" else "SKIP","reference_strategy":"CONTINUITY_REFERENCES","image_motion_policy":"SLOW_PUSH" if media_type == "IMAGE" else "NONE","generation_priority":0 if is_hook else (1 if requirement == "REQUIRED" else 2),"motion_spike": media_type == "VIDEO" and not is_hook and render_mode == "hybrid_hook"})
+        planned.append({"shot_id":shot["shot_id"],"media_type":media_type,"requirement":requirement,"target_duration":duration,"fallback_policy":"BLOCK" if requirement == "REQUIRED" else "HOLD","reference_strategy":"CONTINUITY_REFERENCES","image_motion_policy":"SLOW_PUSH" if media_type == "IMAGE" else "NONE","generation_priority":0 if is_hook else (1 if requirement == "REQUIRED" else 2),"motion_spike": media_type == "VIDEO" and not is_hook and render_mode == "hybrid_hook"})
     return {"schema_version":MEDIA_SCHEMA_VERSION,"project_id":project_id,"render_mode":render_mode,"shot_plan_sha256":_hash_text(str(shot_plan)),"hook_target_seconds":hook_target,"resolved_hook_end":hook_end,"shots":planned,"review_status":"VALIDATED"}
 
 def validate_media_plan(value: Any, shot_plan: dict[str, Any]) -> None:
@@ -179,6 +189,8 @@ def validate_media_plan(value: Any, shot_plan: dict[str, Any]) -> None:
     if expected != actual: raise PlanningError("MEDIA_COVERAGE_INVALID")
     for media in value["shots"]:
         if media.get("media_type") not in {"IMAGE","VIDEO","HOLD"} or media.get("requirement") not in {"REQUIRED","PREFERRED"}: raise PlanningError("MEDIA_PLAN_INVALID")
+        if media.get("fallback_policy") not in {"BLOCK", "HOLD", "IMAGE"}: raise PlanningError("MEDIA_PLAN_INVALID")
+        if media.get("requirement") == "REQUIRED" and media.get("fallback_policy") != "BLOCK": raise PlanningError("MEDIA_PLAN_INVALID")
         if value["render_mode"] == "full_video_ai" and (media["media_type"], media["requirement"]) != ("VIDEO","REQUIRED"): raise PlanningError("FULL_VIDEO_POLICY_INVALID")
     if value["render_mode"] == "hybrid_hook":
         hook = [m for m in value["shots"] if m["generation_priority"] == 0]

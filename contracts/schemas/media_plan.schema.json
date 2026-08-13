@@ -33,6 +33,18 @@
       "items": {
         "type": "object"
       }
+    },
+    "hook_target_seconds": {
+      "type": "number"
+    },
+    "resolved_hook_end": {
+      "type": ["number", "null"]
+    },
+    "review_status": {
+      "type": "string"
+    },
+    "technical_reuse": {
+      "type": "object"
     }
   }
 }

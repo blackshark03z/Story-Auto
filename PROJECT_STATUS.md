@@ -2,13 +2,13 @@
 
 ## Current accepted state
 
-**DESIGN_FROZEN / FOUNDATION_IN_PROGRESS**
+**DESIGN_FROZEN / HYBRID_PRODUCTION_MVP_ACCEPTED**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
-The repository contains the frozen product authorities, Build OS adoption tooling,
-the accepted audio foundation, and the Gemini story-planning foundation. Rendering,
-visual generation, and UI implementation remain deferred.
+The repository contains the frozen product authorities and a production-capable
+CLI/application pipeline through hybrid rendering and publishing assets. Local UI
+and full-video production execution remain deferred to later goals.
 
 ## Accepted feature inventory
 
@@ -76,12 +76,29 @@ visual generation, and UI implementation remain deferred.
   atomic local image/video asset selection. Offline fixtures prove selector
   ambiguity rejection, auth/project capability results, resume reuse, invalid
   selected-asset invalidation, and no blind post-timeout resubmission.
-- Live Flow execution remains unaccepted: no Story Auto CDP endpoint was
-  reachable on this machine, so no login state, project identity, capabilities,
-  paid generation, or provider media result was accessed.
+- Live Flow image/video execution, reference attachment, local acquisition,
+  append-only attempt provenance, ambiguous-result reconciliation, and unchanged
+  provider resume are accepted with real Story Auto assets.
 - Bounded live Gemini fixture validation passed for `gemini-3.5-flash`; the
   identical `gemini-3.6-flash` benchmark was available and passed without
   changing the production baseline. Safe metrics are in runtime evidence.
+- `render_plan.json` resolves exact validated local sources and fails closed for
+  missing required video. Preferred hybrid fallback is explicit and inspectable.
+- FFmpeg/FFprobe helpers normalize IMAGE (STATIC/SLOW_PUSH/SLOW_PAN), 720p VIDEO,
+  and HOLD sources into deterministic silent scene MP4s. The common compositor
+  owns crossfades, canonical-duration accounting, subtitle burn-in, narration,
+  optional local BGM, final validation, and atomic publication.
+- Render checkpoints isolate render-plan, per-shot clip, subtitle, audio-plan,
+  final-render, publishing-metadata, and thumbnail dependencies. Real recovery
+  cases prove render-only recovery, one-clip recovery, selected-asset
+  invalidation/reconciliation, and zero-work unchanged resume.
+- Gemini title/description generation and Flow thumbnail generation publish a
+  project-bound `publishing_package.json`; visually rejected provider candidates
+  remain append-only provenance and cannot become the selected thumbnail.
+- A 71.067-second real hybrid prototype and a 5.867-second technical
+  representative production passed 1080p runtime/visual review. No approved
+  long-form content exists in canonical local project/kit locations, recorded as
+  `LONG_FORM_CONTENT_NOT_AVAILABLE` rather than inventing creative content.
 
 ## Configuration/schema authority
 
@@ -89,5 +106,7 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 ## Explicitly not accepted yet
 
-No live Google Flow adapter/session, generated Story Auto production media,
-or final compositor has been accepted at this baseline.
+- Product/operator UI.
+- Full-video production mode execution (render safety is implemented and tested).
+- A representative approved long-form creative production; no canonical fixture
+  was locally available for this baseline.

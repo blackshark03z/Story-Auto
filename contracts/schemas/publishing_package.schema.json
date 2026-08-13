@@ -38,6 +38,9 @@
     },
     "approved": {
       "type": "boolean"
+    },
+    "provenance": {
+      "type": "object"
     }
   }
 }

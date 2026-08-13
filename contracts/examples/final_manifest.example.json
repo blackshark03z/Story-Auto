@@ -10,6 +10,20 @@
   "alignment_sha256": "sha256:alignment",
   "audio_plan_sha256": "sha256:audio",
   "subtitle_sha256": "sha256:subs",
+  "subtitle_hashes": {
+    "srt": "sha256:srt",
+    "ass": "sha256:ass"
+  },
+  "narration_sha256": "sha256:narration",
+  "bgm_sha256": null,
+  "composer": {
+    "version": "story-auto-compositor/1.0.0",
+    "settings": {}
+  },
+  "streams": {
+    "video": {"codec": "h264"},
+    "audio": [{"codec": "aac"}]
+  },
   "selected_asset_hashes": [
     "sha256:asset"
   ],

@@ -172,6 +172,13 @@ Review decisions live in a durable `review_state.json`, separate from plan artif
 
 Every selected visual source compiles to a normalized silent MP4 clip before the common final compositor. The final compositor therefore remains media-provider agnostic.
 
+The implemented boundary lives under `core/render`, with separate render-plan,
+FFmpeg/FFprobe, compiler, compositor, and checkpoint-aware service modules.
+`core/subtitles` consumes canonical alignment directly; `core/publishing` owns
+Gemini metadata and Flow thumbnail provenance. Publishing requests share the
+generation ledger but are excluded from render fingerprints, so publishing
+changes cannot invalidate video stages.
+
 ## UI boundary
 
 The CLI is canonical first. Later UI invokes the same application services and artifact contracts. UI code may not write provider state or render files through a second execution path.

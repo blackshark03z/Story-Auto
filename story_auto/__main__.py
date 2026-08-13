@@ -11,6 +11,8 @@ from .pipeline import run_audio_stages, run_content_stage
 from .core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from .providers.flow import FlowRuntime, FlowExecutor, execute_generation, launch_dedicated_session, preflight
 from .providers.flow.live import FlowInspector, LiveFlowGenerator
+from .core.render import run_render_stages
+from .core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="story-auto")
@@ -35,6 +37,17 @@ def main() -> int:
     generate = commands.add_parser("execute-generation", help="Explicitly execute a bounded approved Flow generation slice")
     generate.add_argument("project_id")
     generate.add_argument("--confirm-execute-generation", action="store_true", help="Required: authorizes paid provider submissions")
+    render = commands.add_parser("render", help="Resolve, normalize, subtitle, mix, and render final.mp4")
+    render.add_argument("project_id")
+    publishing = commands.add_parser("publishing-metadata", help="Generate title candidates and description with Gemini")
+    publishing.add_argument("project_id")
+    thumbnail = commands.add_parser("prepare-thumbnail", help="Compile the publishing thumbnail Flow request")
+    thumbnail.add_argument("project_id")
+    generate_thumbnail = commands.add_parser("generate-thumbnail", help="Execute the prepared bounded Flow thumbnail request")
+    generate_thumbnail.add_argument("project_id")
+    generate_thumbnail.add_argument("--confirm-execute-generation", action="store_true")
+    finish_thumbnail = commands.add_parser("finalize-thumbnail", help="Validate and bind the selected thumbnail")
+    finish_thumbnail.add_argument("project_id")
     args = parser.parse_args()
     try:
         if args.command == "new":
@@ -85,11 +98,36 @@ def main() -> int:
             result = execute_generation(Path(args.runtime_root), args.project_id, executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True, request_ids={r["request_id"] for r in selected})
             print(json.dumps(result, sort_keys=True))
             return 0
+        if args.command == "render":
+            print(json.dumps(run_render_stages(Path(args.runtime_root), args.project_id), sort_keys=True))
+            return 0
+        if args.command == "publishing-metadata":
+            print(f"publishing_metadata: {run_publishing_metadata(Path(args.runtime_root), args.project_id)}")
+            return 0
+        if args.command == "prepare-thumbnail":
+            print(json.dumps(prepare_thumbnail_request(Path(args.runtime_root), args.project_id), sort_keys=True))
+            return 0
+        if args.command == "generate-thumbnail":
+            if not args.confirm_execute_generation:
+                raise ValueError("explicit --confirm-execute-generation is required")
+            from .core.project import load_project
+            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+            request = prepare_thumbnail_request(Path(args.runtime_root), args.project_id)
+            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            capabilities = preflight(runtime, FlowInspector(runtime))
+            result = execute_generation(Path(args.runtime_root), args.project_id,
+                                        executor=FlowExecutor(capabilities, LiveFlowGenerator(runtime)), execute=True,
+                                        request_ids={request["request_id"]})
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if args.command == "finalize-thumbnail":
+            print(f"thumbnail: {finalize_thumbnail(Path(args.runtime_root), args.project_id)}")
+            return 0
         result = run_content_stage(Path(args.runtime_root), args.project_id)
         print(f"content: {result}")
         # Projects created before audio configuration remain valid content-only projects.
         from .core.project import load_project
-        _, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+        paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
         if "tts" in config.settings:
             tts, alignment = run_audio_stages(Path(args.runtime_root), args.project_id)
             print(f"tts: {tts}\nalignment: {alignment}")
@@ -98,6 +136,9 @@ def main() -> int:
                 raise ValueError("planning requires canonical alignment; configure and run tts first")
             timeline, continuity = run_planning_stages(Path(args.runtime_root), args.project_id)
             print(f"story_timeline: {timeline}\ncontinuity: {continuity}")
+        if paths.artifact_path("output/generation_manifest.json").is_file():
+            rendered = run_render_stages(Path(args.runtime_root), args.project_id)
+            print(f"final_render: {rendered['actions']['final_render']}")
         return 0
     except (ValueError, OSError, RuntimeError) as error:
         parser.exit(2, f"error: {error}\n")

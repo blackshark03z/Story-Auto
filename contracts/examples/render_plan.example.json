@@ -3,6 +3,12 @@
   "project_id": "prj_demo001",
   "render_mode": "hybrid_hook",
   "master_duration": 6.0,
+  "settings": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "pixel_format": "yuv420p"
+  },
   "segments": [
     {
       "segment_id": "rnd_0001",

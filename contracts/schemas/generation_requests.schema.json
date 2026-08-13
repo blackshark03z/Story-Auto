@@ -21,6 +21,18 @@
       "items": {
         "type": "object"
       }
+    },
+    "prompt_version": {
+      "type": "string"
+    },
+    "guardrail_estimate": {
+      "type": "object"
+    },
+    "provider_execution_authorized": {
+      "type": "boolean"
+    },
+    "review_status": {
+      "type": "string"
     }
   }
 }

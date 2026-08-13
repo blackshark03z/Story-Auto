@@ -57,10 +57,13 @@ Every production bug becomes the smallest reproducible fixture/test before the r
 ## Baseline executable quality gate
 
 ```text
+python -m unittest discover -s tests -v
 python tools/quality_gate.py
 ```
 
-As implementation appears, accepted project quality gates should evolve to include the real offline test suite. Task-specific Build OS checks remain focused and bounded.
+The offline suite includes tiny FFmpeg/FFprobe integration fixtures. A production
+artifact review is still required for accepted runtime evidence and can veto both
+commands when frame fit, transitions, subtitle readability, audio, or pacing fail.
 
 ## Provider-call policy
 

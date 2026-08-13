@@ -22,6 +22,20 @@
   attempt manifest, explicit generation gate, dependency-aware resume, and
   local Pillow/FFprobe validation. Offline evidence passes; live Flow evidence
   remains operator-session-gated.
+- Add the production hybrid renderer: exact validated render-plan resolution,
+  fail-closed full-video safety, reusable FFmpeg/FFprobe primitives, normalized
+  silent IMAGE/VIDEO/HOLD clips, explicit crossfade duration math, SRT/ASS,
+  narration/BGM mix, common composition, final validation, and durable final
+  manifest provenance.
+- Add per-stage/per-shot render checkpoints and real recovery behavior for
+  missing final output, missing scene clips, invalid provider selections, and
+  unchanged zero-work resume.
+- Add Gemini title/description generation and Flow thumbnail requests,
+  append-only visual rejection/reconciliation, stable signed-URL attribution,
+  and project-bound publishing-package provenance.
+- Accept a 71.067-second real 1080p hybrid prototype plus a 5.867-second
+  technical representative run using the largest approved local content fixture.
+  Record `LONG_FORM_CONTENT_NOT_AVAILABLE`; no creative content was invented.
 
 ## 2026-08-12 — Design baseline v1.0.0
 

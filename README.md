@@ -49,17 +49,29 @@ The CLI is the first canonical execution path. A local UI is added only after th
 
 Build OS v1.22 is adopted **outside this repository**. The product repository contains only its tracked adoption policy/authority records after bootstrap; `.buildos/` remains local control state and is excluded from Git by the OS.
 
-## Foundation CLI
+## Production CLI
 
-The current offline foundation owns a separate runtime root and proves the
-first artifact boundary only. It makes no provider or network calls.
+The CLI and application services are the canonical production path. Provider
+execution remains explicit; local render and resume do not call Flow.
 
 ```text
 python -m story_auto --runtime-root runtime new --project-id prj_example
 python -m story_auto --runtime-root runtime run prj_example
 python -m story_auto --runtime-root runtime resume prj_example
+python -m story_auto --runtime-root runtime approve-plan prj_example
+python -m story_auto --runtime-root runtime plan-visuals prj_example
+python -m story_auto --runtime-root runtime approve-shot-plan prj_example
+python -m story_auto --runtime-root runtime execute-generation prj_example --confirm-execute-generation
+python -m story_auto --runtime-root runtime render prj_example
+python -m story_auto --runtime-root runtime publishing-metadata prj_example
+python -m story_auto --runtime-root runtime prepare-thumbnail prj_example
+python -m story_auto --runtime-root runtime generate-thumbnail prj_example --confirm-execute-generation
+python -m story_auto --runtime-root runtime finalize-thumbnail prj_example
 ```
 
-`run` writes `output/content_manifest.json` from the required `## Narration`
-section in `content.md`. `resume` skips only when its deterministic checkpoint
-matches and the expected artifact is still present; changing narration reruns it.
+`render` resolves only validated selected assets, publishes exact
+`render_plan.json`, compiles every IMAGE/VIDEO/HOLD source to a silent normalized
+scene MP4, generates SRT/ASS, mixes narration with optional local BGM, and
+atomically publishes a validated `final.mp4` plus `final_manifest.json`.
+Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
+scene and the downstream final render without submitting to a provider.

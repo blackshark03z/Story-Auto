@@ -1,5 +1,8 @@
 # Roadmap
 
+Current phase status: Phases 0-7 are accepted. Phase 8 (local UI) and Phase 9
+(full-video production) remain deferred to their dedicated goals.
+
 ## Phase 0 — Design + Build OS baseline — ACCEPTED
 
 - Freeze product requirements and architecture.
@@ -58,9 +61,9 @@ No live provider calls.
 
 ## Phase 7 — Hybrid production MVP
 
-- 60–90 second live hybrid prototype.
-- full-length hybrid pipeline capability after operator cost confirmation.
-- metadata + Flow thumbnail.
+- [x] 60–90 second live hybrid prototype.
+- [x] technical representative hybrid production; approved long-form fixture was unavailable.
+- [x] metadata + Flow thumbnail.
 
 ## Phase 8 — Local UI
 

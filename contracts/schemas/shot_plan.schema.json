@@ -30,6 +30,15 @@
       "items": {
         "type": "object"
       }
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "review_status": {
+      "type": "string"
+    },
+    "fixture_kind": {
+      "type": "string"
     }
   }
 }

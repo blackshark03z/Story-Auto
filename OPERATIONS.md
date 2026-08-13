@@ -41,6 +41,25 @@ Large batches are operator-confirmed. Full-video batch generation is always conf
 - Resume reconciles ambiguous provider outcomes before re-submit.
 - Composition writes to temporary outputs and atomically publishes only validated final artifacts where practical.
 
+Render recovery expectations are executable behavior:
+
+- missing `final.mp4` -> reuse provider/audio/planning/scene artifacts and compose only;
+- missing normalized scene -> rebuild that scene and final render;
+- invalid selected provider asset -> mark only that request retryable, preserve all
+  attempts, reconcile/regenerate it, then rebuild render descendants;
+- unchanged complete project -> no provider submissions and all stages SKIP.
+
+## Hybrid production evidence
+
+- Real prototype: `runtime/goal07_hybrid/projects/prj_goal07hybrid/output/final.mp4`
+  (71.067 s, 1920x1080 H.264/AAC).
+- Technical representative: `runtime/goal07_representative/projects/prj_goal07representative/output/final.mp4`
+  (5.867 s, largest approved local content fixture).
+- Representative publishing thumbnail:
+  `runtime/goal07_representative/projects/prj_goal07representative/assets/image/req_thumbnail_884edd3158597839/manual_recovery_002.png`.
+- Runtime roots are excluded from Git and contain no browser-profile copies in
+  product artifacts. Evidence records hashes/metadata, never cookies or signed URLs.
+
 ## Disk preflight
 
 Before generation/render, check writable paths and free disk. Rendering/generation must stop before predictable disk exhaustion; temporary/partial files are isolated from selected assets.

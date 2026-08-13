@@ -12,5 +12,10 @@
     "asset_path": "assets/thumbnail/selected.png",
     "asset_sha256": "sha256:thumb"
   },
-  "approved": false
+  "approved": false,
+  "provenance": {
+    "provider": "gemini",
+    "model": "gemini-3.5-flash",
+    "prompt_version": "story-auto-publishing-prompt/1.0.0"
+  }
 }
