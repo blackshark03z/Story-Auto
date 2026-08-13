@@ -90,7 +90,7 @@ class FlowTests(unittest.TestCase):
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),timeout)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            self.assertEqual(len(calls),1)
+            self.assertEqual(len(calls),2)
     def test_execution_gate(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); executor,_=self._executor()

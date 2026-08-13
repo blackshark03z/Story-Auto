@@ -14,7 +14,7 @@ from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
-FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED", "AMBIGUOUS"}
+FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
 
 class FlowError(RuntimeError):
     def __init__(self, failure_class: str, detail: str = ""):
@@ -101,7 +101,10 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if not _runnable(request, entries): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             attempt_number = len(entry["attempts"]) + 1
-            if attempt_number > 2: entry["status"] = "FAILED_PERMANENT"; continue
+            # Ambiguous/retryable attempts are append-only.  A finite higher
+            # ceiling prevents loops while accepted-goal policy permits recovery.
+            maximum = int(config.settings.get("flow", {}).get("max_attempts", 4))
+            if attempt_number > maximum: entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"; continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             refs = [entries[d].get("selected_asset", {}).get("path") for d in request.get("depends_on", [])]
