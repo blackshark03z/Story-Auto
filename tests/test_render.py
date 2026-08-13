@@ -168,6 +168,30 @@ class RenderPlanTests(unittest.TestCase):
                                 alignment=self.alignment, shot_plan=self.shots, media_plan=media,
                                 generation_requests=requests, generation_manifest=manifest)
 
+    def test_explicit_request_from_another_shot_cannot_resolve_target_shot(self) -> None:
+        media = {"shots": [{"shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED",
+                             "selected_request_id": "req_other", "image_motion_policy": "STATIC", "fallback_policy": "BLOCK"}]}
+        requests = {"requests": [{"request_id": "req_other", "purpose": "SHOT", "shot_id": "sh_9999",
+                                    "media_type": "IMAGE", "provider": "google_flow"}]}
+        manifest = {"requests": [{"request_id": "req_other", "status": "SUCCEEDED",
+                                    "selected_asset": self.manifest["requests"][0]["selected_asset"]}]}
+        with self.assertRaisesRegex(RenderPlanError, "RENDER_SHOT_ASSET_UNRESOLVED"):
+            resolve_render_plan(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                                alignment=self.alignment, shot_plan=self.shots, media_plan=media,
+                                generation_requests=requests, generation_manifest=manifest)
+
+    def test_image_fallback_cannot_choose_success_from_another_shot(self) -> None:
+        media = {"shots": [{"shot_id": "sh_0001", "media_type": "VIDEO", "requirement": "PREFERRED",
+                             "image_motion_policy": "NONE", "fallback_policy": "IMAGE"}]}
+        requests = {"requests": [{"request_id": "req_other", "purpose": "SHOT", "shot_id": "sh_9999",
+                                    "media_type": "IMAGE", "provider": "google_flow"}]}
+        manifest = {"requests": [{"request_id": "req_other", "status": "SUCCEEDED",
+                                    "selected_asset": self.manifest["requests"][0]["selected_asset"]}]}
+        with self.assertRaisesRegex(RenderPlanError, "RENDER_SHOT_ASSET_UNRESOLVED"):
+            resolve_render_plan(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                                alignment=self.alignment, shot_plan=self.shots, media_plan=media,
+                                generation_requests=requests, generation_manifest=manifest)
+
     def test_manifest_reordering_does_not_change_exact_request_resolution(self) -> None:
         other = self.root / "other.png"; Image.new("RGB", (320, 180), "red").save(other)
         media = {"shots": [{"shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED",
@@ -273,9 +297,11 @@ class RenderServiceRecoveryTests(unittest.TestCase):
                     {"request_id": "req_image", "status": "SUCCEEDED", "selected_asset": {"path": image_rel, "sha256": sha256_file(image_path), "attempt": 1}},
                 ]})
             first = run_render_stages(runtime.root, config.project_id)
+            frozen_identity_chain = read_json(paths.artifact_path("output/render_plan.json"))
             self.assertEqual(first["actions"]["final_render"], "RUN")
             second = run_render_stages(runtime.root, config.project_id)
             self.assertEqual(second["actions"]["final_render"], "SKIP")
+            self.assertEqual(read_json(paths.artifact_path("output/render_plan.json")), frozen_identity_chain)
             self.assertTrue(all(action == "SKIP" for action in second["actions"]["clips"].values()))
             paths.artifact_path("output/final.mp4").unlink()
             case_a = run_render_stages(runtime.root, config.project_id)

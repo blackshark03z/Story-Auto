@@ -107,7 +107,8 @@ def resolve_render_plan(
         candidates = [item for item in requests_by_shot.get(shot_id, []) if item.get("media_type") == desired]
         if media.get("selected_request_id"):
             explicit = requests_by_id.get(media["selected_request_id"])
-            candidates = [explicit] if explicit else []
+            candidates = [explicit] if (explicit and explicit.get("purpose") == "SHOT" and
+                explicit.get("shot_id") == shot_id and explicit.get("media_type") == desired) else []
         candidates.sort(key=lambda item: (int(item.get("part_index", 1)), item.get("request_id", "")))
         resolved = [pair for request in candidates if (pair := successful(request)) is not None]
         expected_parts = max((int(item.get("part_count", 1)) for item in candidates), default=1)

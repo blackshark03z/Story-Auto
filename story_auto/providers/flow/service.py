@@ -111,6 +111,14 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
                 if classification not in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"}:
                     failure = "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED" if not classification else "VISUAL_NARRATION_ALIGNMENT_MISMATCH"
                     raise MediaQualityError(failure)
+                if classification == "PASS_ATMOSPHERIC":
+                    try:
+                        shots = read_json(paths.artifact_path("output/shot_plan.json")).get("shots", [])
+                    except Exception:
+                        shots = []
+                    shot = next((item for item in shots if item.get("shot_id") == request.get("shot_id")), {})
+                    if not shot.get("atmospheric"):
+                        raise MediaQualityError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
         except MediaQualityError as error:
             entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class, "report": report})
             entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": _now()})

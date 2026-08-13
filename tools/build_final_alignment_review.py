@@ -62,6 +62,7 @@ for page, offset in enumerate(range(0, len(rows), 6), 1):
     canvas.save(path, quality=92)
     sheets.append(path.relative_to(output).as_posix())
 
+metrics = audit["metrics"]
 body = []
 for row in rows:
     body.append("<tr>" +
@@ -70,11 +71,17 @@ for row in rows:
         f"<td><img src='{html.escape(row['frame'])}' loading='lazy'></td>" +
         f"<td>{html.escape(row['narration_excerpt'])}<br><em>{html.escape(row['observation'] or '')}</em></td></tr>")
 page = """<!doctype html><meta charset='utf-8'><title>Corrected visual alignment review</title>
-<style>body{font:15px Arial;margin:24px;background:#eee;color:#181818}h1{margin-bottom:4px}.gate{padding:14px;background:#fff4c2;border:2px solid #9a7000}table{border-collapse:collapse;background:white;width:100%}th,td{border:1px solid #bbb;padding:9px;vertical-align:top}img{width:420px}em{color:#555}</style>
+<style>body{font:15px Arial;margin:24px;background:#eee;color:#181818}h1{margin-bottom:4px}.gate{padding:14px;background:#fff4c2;border:2px solid #9a7000}table{border-collapse:collapse;background:white;width:100%%}th,td{border:1px solid #bbb;padding:9px;vertical-align:top}img{width:420px}em{color:#555}</style>
 <h1>Corrected long-form visual alignment review</h1>
 <p class='gate'><b>REVIEW_REQUIRED — CORRECTED_LONG_FORM_VISUAL_ALIGNMENT</b><br>Operator decision: approve or reject the corrected output. This package does not self-approve release.</p>
+<p><b>Audit:</b> %d final parts · %d unique assets · DIRECT %d · SUPPORTIVE %d · ATMOSPHERIC %d · MISMATCH %d · longest still %.3fs.</p>
 <p>Every final shot part is sampled at its midpoint. The first 55 seconds contain six separate hook samples. Review narration meaning, entity continuity, visible action, and provider watermark limitations.</p>
-<table><thead><tr><th>Time</th><th>Shot</th><th>Class</th><th>Frame</th><th>Narration / semantic observation</th></tr></thead><tbody>""" + "".join(body) + "</tbody></table>"
+<table><thead><tr><th>Time</th><th>Shot</th><th>Class</th><th>Frame</th><th>Narration / semantic observation</th></tr></thead><tbody>""" % (
+    metrics["total_final_shots"], metrics["unique_selected_asset_hashes"],
+    metrics["classification_counts"]["DIRECT"], metrics["classification_counts"]["SUPPORTIVE"],
+    metrics["classification_counts"]["ATMOSPHERIC"], metrics["classification_counts"]["MISMATCH"],
+    metrics["maximum_single_still_screen_duration_seconds"],
+) + "".join(body) + "</tbody></table>"
 (review / "visual_alignment_review.html").write_text(page, encoding="utf-8")
 manifest = {"schema_version": "story-auto-human-alignment-review/1.0.0",
             "decision": "REVIEW_REQUIRED — CORRECTED_LONG_FORM_VISUAL_ALIGNMENT",

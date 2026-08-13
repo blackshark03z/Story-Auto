@@ -9,13 +9,22 @@ ALIGNMENT_SCHEMA_VERSION = "story-auto-visual-narration-alignment/1.0.0"
 
 def classify_semantic_alignment(expected: dict[str, Any], observed: dict[str, Any]) -> str:
     """Classify a structured multimodal observation against shot intent."""
+    # Mandatory contradictions override even a claimed passing label.
+    if observed.get("contradictions") or any(observed.get(key) is False for key in (
+        "primary_subject_compatible", "action_compatible", "location_compatible",
+        "critical_props_present", "continuity_acceptable",
+    )):
+        return "MISMATCH"
     explicit = observed.get("classification") or observed.get("alignment_classification")
     if explicit in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC", "MISMATCH"}:
+        if explicit == "PASS_ATMOSPHERIC" and not expected.get("atmospheric"):
+            return "MISMATCH"
         return explicit
-    if observed.get("contradictions"):
-        return "MISMATCH"
+    mandatory = {str(x).lower() for x in expected.get("mandatory_characters", []) if x}
     required = {str(x).lower() for x in expected.get("characters", []) + expected.get("props", []) if x}
     seen = {str(x).lower() for x in observed.get("characters", []) + observed.get("props", []) if x}
+    if mandatory and not mandatory.issubset(seen):
+        return "MISMATCH"
     if required and not required.intersection(seen):
         return "MISMATCH"
     return "PASS_SUPPORTIVE" if seen else "PASS_ATMOSPHERIC"
@@ -85,9 +94,30 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
         if len({r["shot_id"] for r in values}) > 1:
             for row in values:
                 row["alignment_classification"] = "MISMATCH"
-    reuse = [{"sha256": sha, "shot_ids": [r["shot_id"] for r in values],
-              "reuse_count": len(values), "cumulative_screen_duration": sum(float(r["final_timeline_end"] or 0)-float(r["final_timeline_start"] or 0) for r in values)}
-             for sha, values in by_sha.items() if len(values) > 1]
+    reuse = []
+    longest_continuous = 0.0
+    for sha, values in by_sha.items():
+        ordered = sorted(values, key=lambda r: float(r["final_timeline_start"] or 0))
+        durations = [float(r["final_timeline_end"] or 0) - float(r["final_timeline_start"] or 0) for r in ordered]
+        run_start = run_end = None
+        longest = 0.0
+        for row in ordered:
+            start, end = float(row["final_timeline_start"] or 0), float(row["final_timeline_end"] or 0)
+            if run_end is not None and abs(start - run_end) <= .01:
+                run_end = end
+            else:
+                if run_start is not None: longest = max(longest, run_end - run_start)
+                run_start, run_end = start, end
+        if run_start is not None: longest = max(longest, run_end - run_start)
+        longest_continuous = max(longest_continuous, longest)
+        if len(values) > 1:
+            narration_spans = {(r["narration_start"], r["narration_end"]) for r in values}
+            cross_shot = len({r["shot_id"] for r in values}) > 1
+            reuse.append({"sha256": sha, "shot_ids": [r["shot_id"] for r in values],
+                          "reuse_count": len(values), "narration_span_count": len(narration_spans),
+                          "cumulative_screen_duration": sum(durations),
+                          "longest_continuous_screen_duration": longest,
+                          "suspicious_unplanned_reuse": cross_shot})
     classes = {name: sum(r["alignment_classification"] == name for r in rows)
                for name in ("DIRECT", "SUPPORTIVE", "ATMOSPHERIC", "MISMATCH", "UNREVIEWED")}
     cross_shot_reuse = any(len({r["shot_id"] for r in values}) > 1 for values in by_sha.values())
@@ -95,6 +125,12 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
             "metrics": {"total_final_shots": len(rows), "unique_selected_asset_hashes": len(by_sha),
                         "unique_asset_ratio": (len(by_sha) / len(rows)) if rows else 0.0,
                         "asset_reuse": reuse, "max_asset_reuse_count": max((x["reuse_count"] for x in reuse), default=1),
+                        "longest_continuous_asset_use_seconds": longest_continuous,
+                        "maximum_single_still_screen_duration_seconds": max((
+                            float(r["final_timeline_end"] or 0) - float(r["final_timeline_start"] or 0)
+                            for r in rows if r.get("render_plan_entry", {}).get("source_media_type") == "IMAGE"
+                        ), default=0.0),
+                        "maximum_narration_spans_per_asset": max((x["narration_span_count"] for x in reuse), default=1),
                         "classification_counts": classes,
                         "mismatch_count": classes["MISMATCH"],
                         "unreviewed_count": classes["UNREVIEWED"]},

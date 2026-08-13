@@ -191,6 +191,17 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(reviewed["quality_reviews"][-1]["report"]["watermark_disposition"],
                              "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION")
             self.assertEqual(len(reviewed["attempts"]),1)
+
+    def test_atmospheric_qc_requires_explicitly_planned_atmospheric_shot(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,_=self._executor()
+            requests=read_json(paths.artifact_path("output/generation_requests.json")); shot=next(x for x in requests["requests"] if x["request_id"]=="shot"); shot.update({"execution_tier":"STANDARD_PRODUCTION","output_count":1,"shot_id":"sh_0001","depends_on":[]}); atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            atomic_write_json(paths.artifact_path("output/shot_plan.json"),{"shots":[{"shot_id":"sh_0001","atmospheric":False}]})
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"shot"})
+            report={"results":{key:"PASS" for key in ("SKIN_REALISM","LIGHTING_NATURALISM","MATERIAL_REALISM","COMPOSITION_NATURALISM","AI_POLISH","CONTINUITY","TECHNICAL_VALIDITY")},"visible_provider_watermark":False,"reviewer":"operator","alignment_classification":"PASS_ATMOSPHERIC"}
+            with self.assertRaisesRegex(FlowError,"VISUAL_NARRATION_ALIGNMENT_MISMATCH"):
+                review_production_asset(runtime.root,cfg.project_id,"shot",report)
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"FAILED_RETRYABLE")
     def test_pre_dispatch_failure_can_only_be_reopened_with_evidence(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
