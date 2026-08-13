@@ -25,8 +25,9 @@ def resolve_settings(request: dict, *, execution_tier: str = "STANDARD_PRODUCTIO
     tier = str(request.get("execution_tier", execution_tier)).upper()
     ratio = str(request.get("aspect_ratio", "16:9"))
     if media_type == "IMAGE":
-        output = 1 if tier == "DEV_SMOKE" or request.get("purpose") == "SHOT" else 2
-        return ResolvedFlowGenerationSettings("IMAGE", "IMAGE_GENERATION", request.get("model_override") or "Nano Banana 2", ratio, output, None, "INGREDIENTS" if references else None, tier)
+        # Story Auto V1 owns this invariant. Provider/UI state and stale request
+        # artifacts may never reintroduce Flow's x2/x3/x4 defaults.
+        return ResolvedFlowGenerationSettings("IMAGE", "IMAGE_GENERATION", request.get("model_override") or "Nano Banana 2", ratio, 1, None, "INGREDIENTS" if references else None, tier)
     return ResolvedFlowGenerationSettings("VIDEO", "REFERENCE_TO_VIDEO" if references else "TEXT_TO_VIDEO", request.get("model_override"), ratio, int(request.get("output_count", 1)), request.get("target_duration"), "FRAME_OR_INGREDIENT" if references else None, tier)
 
 

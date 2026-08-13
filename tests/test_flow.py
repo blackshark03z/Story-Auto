@@ -9,7 +9,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
-                                                reject_selected_asset)
+                                                reject_selected_asset, review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 
@@ -156,8 +156,25 @@ class FlowTests(unittest.TestCase):
         reference=resolve_settings({"purpose":"REFERENCE","media_type":"IMAGE","aspect_ratio":"16:9"})
         shot=resolve_settings({"purpose":"SHOT","media_type":"IMAGE","aspect_ratio":"16:9"})
         video=resolve_settings({"purpose":"SHOT","media_type":"VIDEO","depends_on":["ref"],"target_duration":5,"aspect_ratio":"16:9"})
-        self.assertEqual((smoke.output_count, reference.output_count, shot.output_count), (1,2,1)); self.assertEqual(video.workflow_mode,"REFERENCE_TO_VIDEO")
+        self.assertEqual((smoke.output_count, reference.output_count, shot.output_count), (1,1,1)); self.assertEqual(video.workflow_mode,"REFERENCE_TO_VIDEO")
         self.assertEqual(select_model(reference,[{"name":"fallback","media_types":["IMAGE"]}])["name"],"fallback")
+    def test_stale_image_output_count_is_forced_to_one(self):
+        resolved=resolve_settings({"purpose":"REFERENCE","media_type":"IMAGE","output_count":4})
+        self.assertEqual(resolved.output_count,1)
+    def test_production_qc_approves_or_rejects_without_erasing_attempt(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,_=self._executor()
+            requests=read_json(paths.artifact_path("output/generation_requests.json")); requests["requests"][0]["execution_tier"]="STANDARD_PRODUCTION"; requests["requests"][0]["output_count"]=1; atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"QC_PENDING")
+            report={"results":{key:"PASS" for key in ("SKIN_REALISM","LIGHTING_NATURALISM","MATERIAL_REALISM","COMPOSITION_NATURALISM","AI_POLISH","CONTINUITY","TECHNICAL_VALIDITY")},"visible_provider_watermark":False,"reviewer":"operator"}
+            review_production_asset(runtime.root,cfg.project_id,"ref",report)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((entry["status"],len(entry["attempts"]),entry["selected_asset"]["production_qc"]),("SUCCEEDED",1,"APPROVED"))
+            report["visible_provider_watermark"]=True
+            with self.assertRaises(FlowError) as caught: review_production_asset(runtime.root,cfg.project_id,"ref",report)
+            self.assertEqual(caught.exception.failure_class,"VISIBLE_PROVIDER_WATERMARK")
+            self.assertEqual(len(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["attempts"]),1)
     def test_pre_dispatch_failure_can_only_be_reopened_with_evidence(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)

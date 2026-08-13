@@ -10,6 +10,7 @@ import shutil
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
+from story_auto.core.visual import MediaQualityError, validate_production_qc
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
 
@@ -86,6 +87,27 @@ def reject_selected_asset(runtime_root: Path | str, project_id: str, request_id:
         entry.update({"status": "FAILED_RETRYABLE", "failure_class": "CREATIVE_REJECTED", "updated_at": _now()})
         atomic_write_json(path, manifest)
 
+
+def review_production_asset(runtime_root: Path | str, project_id: str, request_id: str, report: dict) -> None:
+    """Approve or reject selected bytes using the complete production QC rubric."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        if not entry or entry.get("status") not in {"SUCCEEDED", "QC_PENDING"} or not isinstance(entry.get("selected_asset"), dict):
+            raise FlowError("MEDIA_QC_INVALID")
+        try:
+            accepted = validate_production_qc(report)
+        except MediaQualityError as error:
+            entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class, "report": report})
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": _now()})
+            atomic_write_json(path, manifest)
+            raise FlowError(error.failure_class) from error
+        entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "APPROVED", "report": accepted})
+        entry["selected_asset"]["production_qc"] = "APPROVED"
+        entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(path, manifest)
+
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
     """Only reopens an attempt with recorded proof no Generate click happened."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -133,9 +155,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         for request in selected:
+            if request.get("media_type") == "IMAGE" and request.get("output_count", 1) != 1:
+                raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
             entry = _entry(manifest, request)
             if entry is None: continue # identity changed: retain old provenance, a planner-generated id is required
             if entry.get("status") == "SUCCEEDED" and _valid_selected(paths, entry): continue
+            if entry.get("status") == "QC_PENDING" and _valid_selected(paths, entry): continue
             if entry.get("status") == "AMBIGUOUS": continue # reconcile provider-visible state before any new dispatch
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
             if not _runnable(request, entries): continue
@@ -161,8 +186,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
                 final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"
                 final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
+                # Thumbnail candidate review remains owned by publishing until
+                # that service migrates to the shared production-QC contract.
+                production = request.get("execution_tier") == "STANDARD_PRODUCTION" and request.get("purpose") != "THUMBNAIL"
+                resulting_status = "QC_PENDING" if production else "SUCCEEDED"
                 attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
-                entry.update({"status":"SUCCEEDED", "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata}, "updated_at":_now()}); submissions += 1
+                entry.update({"status":resulting_status, "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}, "updated_at":_now()}); submissions += 1
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)

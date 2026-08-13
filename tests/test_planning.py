@@ -116,6 +116,11 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(requests["guardrail_estimate"]["preferred_video_requests"], 1)
             self.assertTrue(requests["guardrail_estimate"]["requires_later_execution_confirmation"])
             self.assertTrue(all(request["request_id"].startswith("req_") for request in requests["requests"]))
+            self.assertTrue(all(request["visual_policy"]["realism_style"] == "NATURAL_SOFT_REALISM" for request in requests["requests"]))
+            self.assertTrue(all(request.get("output_count") == 1 for request in requests["requests"] if request["media_type"] == "IMAGE"))
+            video_prompts=[request["prompt"] for request in requests["requests"] if request["media_type"] == "VIDEO"]
+            self.assertTrue(all("Subject motion:" in prompt and "Preserve the supplied reference image" in prompt for prompt in video_prompts))
+            self.assertTrue(all("masterpiece" not in request["prompt"].lower() and "8k" not in request["prompt"].lower() for request in requests["requests"]))
             validate_generation_requests(requests, read_json(paths.artifact_path("output/media_plan.json")), read_json(paths.artifact_path("output/continuity_bible.json")))
             self.assertEqual(run_visual_planning_stages(runtime.root, config.project_id, provider=fake), ("SKIP", "SKIP", "SKIP"))
             approve_shot_plan(runtime.root, config.project_id)

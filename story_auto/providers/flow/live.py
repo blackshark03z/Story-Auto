@@ -75,7 +75,9 @@ class FlowBrowserDom:
         # was closed; do not re-query an icon variant that exists only while
         # the popover is open.
         if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
-        actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
+        actual.update({"requested_model":resolved.model_preference,"requested_output_count":resolved.output_count,"actual_output_count":resolved.output_count,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
+        if resolved.media_type == "IMAGE" and not (actual["requested_output_count"] == actual["actual_output_count"] == 1):
+            raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
         if not actual.pop("menu_closed", False): raise FlowError("FLOW_UI_CHANGED", "Flow settings menu did not close before submit")
         return actual
     def generate_controls(self, _editor, _media_type):
@@ -148,6 +150,8 @@ class LiveFlowGenerator:
         page=CdpPage.open(self.runtime)
         try:
             dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
+            if request["media_type"] == "IMAGE" and not (self.last_settings.get("requested_output_count") == self.last_settings.get("actual_output_count") == 1):
+                raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
             before, before_output, before_text = set(), set(), ""
             def baseline():
                 nonlocal before, before_output, before_text

@@ -11,6 +11,12 @@ from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import narration_hash, parse_content_markdown
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
+from story_auto.core.visual import (
+    DEFAULT_VISUAL_POLICY,
+    compile_image_prompt,
+    compile_video_prompt,
+    validate_visual_policy,
+)
 from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMRequest
 
 TIMELINE_SCHEMA_VERSION = "story-auto-story-timeline/1.0.0"
@@ -20,7 +26,7 @@ TIMELINE_PROMPT_VERSION = "story-auto-timeline-prompt/1.0.0"
 CONTINUITY_PROMPT_VERSION = "story-auto-continuity-prompt/1.0.0"
 SHOT_PROMPT_VERSION = "story-auto-shot-prompt/1.0.0"
 MEDIA_POLICY_VERSION = "story-auto-media-policy/1.0.0"
-GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/1.0.0"
+GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.0.0"
 SHOT_SCHEMA_VERSION = "story-auto-shot-plan/1.0.0"
 MEDIA_SCHEMA_VERSION = "story-auto-media-plan/1.0.0"
 REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
@@ -199,20 +205,28 @@ def validate_media_plan(value: Any, shot_plan: dict[str, Any]) -> None:
 def _request_id(payload: dict[str, Any]) -> str: return "req_" + _hash_text(repr(sorted(payload.items())))[:20]
 def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], media_plan: dict[str, Any], continuity: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
     requests, reference_ids = [], {}
+    visual_policy = dict(DEFAULT_VISUAL_POLICY)
+    validate_visual_policy(visual_policy)
     used = {i for s in shot_plan["shots"] for i in (s.get("character_ids", []) + s.get("prop_ids", []) + ([s["location_id"]] if s.get("location_id") else []))}
     kinds, _ = _entity_maps(continuity)
     entity_by_id = {entity["entity_id"]: entity for kind in ("characters", "locations", "props") for entity in continuity.get(kind, [])}
     for entity_id in sorted(used):
         purpose = f"{kinds[entity_id].upper()}_REFERENCE"; seed = {"purpose":purpose,"entity_id":entity_id,"continuity_entity":entity_by_id[entity_id],"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed); reference_ids[entity_id] = request_id
-        requests.append({"request_id":request_id,"purpose":"REFERENCE","reference_type":purpose,"entity_id":entity_id,"media_type":"IMAGE","provider":"google_flow","prompt":f"{GENERATION_PROMPT_VERSION}: canonical continuity reference for {entity_id}","reference_asset_ids":[],"depends_on":[],"target_duration":None,"aspect_ratio":settings["aspect_ratio"],"priority":0,"fingerprint":_hash_text(repr(seed))})
+        entity = entity_by_id[entity_id]
+        intent = f"Canonical continuity reference for {entity['name']}. {entity.get('visual_design', {})}"
+        requests.append({"request_id":request_id,"purpose":"REFERENCE","reference_type":purpose,"entity_id":entity_id,"media_type":"IMAGE","provider":"google_flow","prompt":compile_image_prompt(intent, visual_policy),"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":[],"depends_on":[],"target_duration":None,"aspect_ratio":settings["aspect_ratio"],"priority":0,"fingerprint":_hash_text(repr(seed))})
     media_by_shot = {m["shot_id"]:m for m in media_plan["shots"]}
     for shot in shot_plan["shots"]:
         media = media_by_shot[shot["shot_id"]]
         if media["media_type"] == "HOLD": continue
         refs = shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])
         deps = [reference_ids[i] for i in refs]; seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot,"media":media,"refs":deps,"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed)
-        prompt = f"{GENERATION_PROMPT_VERSION}: {shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['camera_intent']}; {shot['composition_intent']}."
-        requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"reference_asset_ids":refs,"depends_on":deps,"target_duration":media["target_duration"],"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
+        intent = f"{shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['composition_intent']}"
+        if media["media_type"] == "IMAGE":
+            prompt = compile_image_prompt(intent, visual_policy)
+        else:
+            prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"continuous action across {media['target_duration']:.3f} seconds")
+        requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"target_duration":media["target_duration"],"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
@@ -225,6 +239,9 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
         if not isinstance(request, dict) or not isinstance(request.get("request_id"), str) or request["request_id"] in ids or not isinstance(request.get("prompt"), str) or not request["prompt"].strip(): raise PlanningError("GENERATION_REQUESTS_INVALID")
         ids.add(request["request_id"]); graph[request["request_id"]] = request.get("depends_on", [])
         if request.get("media_type") not in {"IMAGE","VIDEO"}: raise PlanningError("GENERATION_REQUESTS_INVALID")
+        try: validate_visual_policy(request.get("visual_policy"))
+        except ValueError as error: raise PlanningError("VISUAL_POLICY_INVALID") from error
+        if request.get("media_type") == "IMAGE" and request.get("output_count") != 1: raise PlanningError("IMAGE_OUTPUT_COUNT_INVALID")
     if any(dep not in ids or dep == node for node, deps in graph.items() for dep in deps): raise PlanningError("REQUEST_DEPENDENCY_INVALID")
     def visit(node, trail):
         if node in trail: raise PlanningError("REQUEST_DEPENDENCY_CYCLE")
