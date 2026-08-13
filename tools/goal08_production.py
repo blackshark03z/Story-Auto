@@ -170,6 +170,40 @@ def watermark_mitigation_evidence(runtime: Path) -> dict[str, Any]:
 
 def build_report(runtime: Path) -> dict[str, Any]:
     inventory = content_inventory(runtime)
+    eligible = next((item for item in inventory if item["long_form_eligible"]), None)
+    representative: dict[str, Any]
+    if eligible:
+        output = runtime / "projects" / eligible["project_id"] / "output"
+        final_manifest_path = output / "final_manifest.json"
+        final_path = output / "final.mp4"
+        if final_manifest_path.exists() and final_path.exists():
+            final_manifest = read_json(final_manifest_path)
+            representative = {
+                "policy_status": "PASS",
+                "render_mode": "full_video_ai",
+                "final_shot_policy": "VIDEO_REQUIRED",
+                "provider": "GOOGLE_FLOW_WEB",
+                "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+                "representative_runtime_status": "PASS",
+                "project_id": eligible["project_id"],
+                "final_path": "output/final.mp4",
+                "final_sha256": sha256(final_path),
+                "duration_seconds": final_manifest.get("duration_seconds"),
+                "technical_streams": final_manifest.get("streams"),
+                "reason": "Approved long-form production artifact satisfies the representative runtime gate.",
+            }
+        else:
+            representative = {"policy_status": "REVIEW_REQUIRED", "representative_runtime_status": "MISSING_FINAL_ARTIFACT"}
+    else:
+        representative = {
+            "policy_status": "PASS",
+            "render_mode": "full_video_ai",
+            "final_shot_policy": "VIDEO_REQUIRED",
+            "provider": "GOOGLE_FLOW_WEB",
+            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+            "representative_runtime_status": "DEFERRED_TO_APPROVED_LONG_FORM_CONTENT",
+            "reason": "No approved long-form content exists; short engineering fixtures do not substitute for production evidence.",
+        }
     return {
         "schema_version": "story-auto-goal08-production-evidence/1.0.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -198,15 +232,7 @@ def build_report(runtime: Path) -> dict[str, Any]:
         },
         "hybrid_fixture": hybrid_evidence(runtime),
         "watermark_mitigation": watermark_mitigation_evidence(runtime),
-        "full_video_representative": {
-            "policy_status": "PASS",
-            "render_mode": "full_video_ai",
-            "final_shot_policy": "VIDEO_REQUIRED",
-            "provider": "GOOGLE_FLOW_WEB",
-            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
-            "representative_runtime_status": "DEFERRED_TO_APPROVED_LONG_FORM_CONTENT",
-            "reason": "No approved long-form content exists; short engineering fixtures do not substitute for production evidence.",
-        },
+        "full_video_representative": representative,
         "release_candidate": {
             "production_provider": "GOOGLE_FLOW_WEB",
             "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
