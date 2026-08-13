@@ -105,7 +105,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             # ceiling prevents loops while accepted-goal policy permits recovery.
             # The default permits an evidence-led correction after an initial
             # bounded retry cycle; it is a stop-loss, never a cost ceiling.
-            maximum = int(config.settings.get("flow", {}).get("max_attempts", 8))
+            maximum = int(config.settings.get("flow", {}).get("max_attempts", 12))
             if attempt_number > maximum: entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"; continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")

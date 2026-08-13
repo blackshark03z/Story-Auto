@@ -37,6 +37,10 @@ class _Control:
     def __init__(self, dom, evidence): self.dom,self.evidence=dom,evidence
     def click(self):
         if not self.evidence.get("enabled"): raise FlowError("FLOW_GENERATE_DISABLED")
+        # Flow ignores the trusted pointer sequence while its dedicated Chrome
+        # window is minimized.  Foreground the exact CDP page, never another
+        # browser profile, immediately before native input.
+        self.dom.page.command("Page.bringToFront")
         self.dom.page.click(float(self.evidence["x"]), float(self.evidence["y"]))
 
 

@@ -28,8 +28,9 @@ class DOM:
     def media_candidates(self): return []
 
 class NativePage:
-    def __init__(self): self.clicked = None
+    def __init__(self): self.clicked = None; self.commands=[]
     def evaluate(self, _): return {"x":10,"y":20}
+    def command(self, method): self.commands.append(method)
     def click(self, x, y): self.clicked=(x,y)
 
 class Inspector:
@@ -78,7 +79,7 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(dom.controls[0].clicked)
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
-        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0))
+        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0)); self.assertEqual(page.commands,["Page.bringToFront"])
 
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:
