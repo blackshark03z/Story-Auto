@@ -66,5 +66,8 @@ class CdpPage:
         self.command("Input.dispatchKeyEvent", {**params, "type":"keyUp"})
 
     def click(self, x: float, y: float) -> None:
+        # Move first so Flow receives the same trusted pointer sequence as a
+        # human click; some controls update hover/focus state before press.
+        self.command("Input.dispatchMouseEvent", {"type":"mouseMoved", "x":x, "y":y})
         self.command("Input.dispatchMouseEvent", {"type":"mousePressed", "x":x, "y":y, "button":"left", "clickCount":1})
         self.command("Input.dispatchMouseEvent", {"type":"mouseReleased", "x":x, "y":y, "button":"left", "clickCount":1})

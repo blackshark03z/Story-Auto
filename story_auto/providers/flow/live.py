@@ -72,7 +72,24 @@ class FlowBrowserDom:
         if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
         actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
         return actual
-    def generate_controls(self, _editor, _media_type): return [_Control(self, x) for x in self.page.evaluate(_CONTROL_JS) or [] if x.get("enabled")]
+    def generate_controls(self, _editor, _media_type):
+        # A reference upload is asynchronous.  Do not treat a transiently
+        # disabled Generate button as a selector mismatch or click it early.
+        deadline = time.monotonic() + 12
+        last = []
+        while time.monotonic() < deadline:
+            last = self.page.evaluate(_CONTROL_JS) or []
+            if len(last) == 1 and last[0].get("enabled"):
+                time.sleep(.25)
+                confirmed = self.page.evaluate(_CONTROL_JS) or []
+                if len(confirmed) == 1 and confirmed[0].get("enabled"):
+                    return [_Control(self, confirmed[0])]
+            elif len(last) > 1:
+                return [_Control(self, x) for x in last]
+            time.sleep(.25)
+        if len(last) == 1 and not last[0].get("enabled"):
+            raise FlowError("FLOW_GENERATE_DISABLED", "Flow did not enable composer Generate after reference upload")
+        return [_Control(self, x) for x in last]
     def add_references(self, files):
         # Native file inputs are normally hidden behind a visible upload button.
         count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")

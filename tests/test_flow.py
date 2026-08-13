@@ -73,6 +73,15 @@ class FlowTests(unittest.TestCase):
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
         page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0))
+
+    def test_not_dispatched_remains_runnable(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,_=self._project(root); calls=[]
+            def no_dispatch(*_): calls.append(1); raise FlowError("FLOW_NOT_DISPATCHED")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_dispatch)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual(len(calls),2)
     def test_preflight_auth_and_project(self):
         runtime=FlowRuntime(Path("profile"),"http://test","url","story-auto")
         opener=lambda *_args,**_kw: Response(b'{"Browser":"Chrome"}')
