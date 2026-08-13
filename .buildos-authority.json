@@ -1,14 +1,14 @@
 {
-  "canonical_admin_executor": "D:\\Story Auto\\story_auto_implementation_kit_v1.0.0\\build-os-v1.22\\scripts\\ai_os.py",
-  "canonical_executor": "D:\\Story Auto\\story_auto_implementation_kit_v1.0.0\\build-os-v1.22\\scripts\\ai.py",
-  "canonical_executor_sha256": "4419a7e7a11dce824ecc41c64c65919ef8308ac7b5d4e27566c9409ced209714",
+  "canonical_admin_executor": "D:\\Youtube\\_packages\\build-os-v1.22-lifecycle-v1.1.2\\scripts\\ai_os.py",
+  "canonical_executor": "D:\\Youtube\\_packages\\build-os-v1.22-lifecycle-v1.1.2\\scripts\\ai.py",
+  "canonical_executor_sha256": "194e6af8302568bd3a7ae5536bd32b98dbd8d13dfc6026e698021118c8525eb2",
   "continuity_skill_version": "1.1.0",
   "invariant": "SINGLE_ACTIVE_EXECUTION_AUTHORITY",
   "kernel_commit": "e41ca10826b32b2d46a3b859345f734c113e00ae",
   "kernel_version": "1.22",
   "legacy_archive_is_provenance_only": true,
-  "package_root": "D:\\Story Auto\\story_auto_implementation_kit_v1.0.0\\build-os-v1.22",
-  "project_lifecycle_kit_version": "1.1.0",
+  "package_root": "D:\\Youtube\\_packages\\build-os-v1.22-lifecycle-v1.1.2",
+  "project_lifecycle_kit_version": "1.1.2",
   "resolution_rule": "python <package_root>/scripts/ai.py --root <project-root> <lifecycle-command>; never fall back to project-local or PATH executors",
   "schema": "buildos.execution-authority.v1"
 }
