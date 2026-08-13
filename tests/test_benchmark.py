@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 
+from story_auto.core.artifacts import atomic_write_json
 from story_auto.core.benchmark import build_benchmark_workspace, write_review_package
 
 
@@ -15,8 +16,20 @@ class ProviderBenchmarkTests(unittest.TestCase):
             self.assertEqual(len(manifest["requests"]), 24)
             self.assertEqual({item["output_settings"]["output_count"] for item in manifest["requests"]}, {1})
             self.assertNotIn("actual_model", (root / "review.html").read_text(encoding="utf-8"))
+            self.assertIn("Export review JSON", (root / "review.html").read_text(encoding="utf-8"))
             self.assertIn("google_flow_web", json.loads((root / "provider_mapping.json").read_text())["mapping"]["IMAGE"].values())
             self.assertTrue((root / "contact_sheet_image-a.jpg").is_file())
+            manifest["requests"][0].update({
+                "status": "SUCCEEDED", "local_asset": "assets/a.png", "asset_sha256": "hash",
+            })
+            atomic_write_json(root / "benchmark_manifest.json", manifest)
+            rebuilt, _ = build_benchmark_workspace(
+                root, capability_evidence=[], credential_probe={"status": "READY"},
+            )
+            self.assertEqual(
+                (rebuilt["requests"][0]["status"], rebuilt["requests"][0]["local_asset"]),
+                ("SUCCEEDED", "assets/a.png"),
+            )
 
 
 if __name__ == "__main__":

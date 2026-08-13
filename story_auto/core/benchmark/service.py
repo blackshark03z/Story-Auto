@@ -14,7 +14,7 @@ from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
-from story_auto.core.artifacts import atomic_write_json, sha256_file
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.visual import DEFAULT_VISUAL_POLICY, compile_image_prompt, compile_video_prompt
 
 
@@ -95,6 +95,9 @@ def _mapping(seed: str) -> dict[str, dict[str, str]]:
 def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str, Any]],
                               credential_probe: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     root.mkdir(parents=True, exist_ok=True)
+    existing_path = root / "benchmark_manifest.json"
+    existing = read_json(existing_path) if existing_path.exists() else {"requests": []}
+    prior = {item.get("request_id"): item for item in existing.get("requests", [])}
     fixtures = _fixtures()
     mapping = _mapping("story-auto-goal08-provider-benchmark-v1")
     requests: list[dict[str, Any]] = []
@@ -132,6 +135,16 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
                     "failure_class": failure,
                     "attempt_history": [],
                 })
+    durable = ("reference_hashes", "local_asset", "asset_sha256", "technical_validation",
+               "visible_watermark", "automated_qc_scores", "human_review", "status",
+               "failure_class", "attempt_history", "review_frames")
+    for request in requests:
+        old = prior.get(request["request_id"])
+        if (old and old.get("actual_model") == request["actual_model"]
+                and old.get("prompt_sha256") == request["prompt_sha256"]):
+            for key in durable:
+                if key in old:
+                    request[key] = old[key]
     manifest = {
         "schema_version": SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -145,7 +158,7 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
         "automated_review_is_advisory": True,
         "human_review_required": True,
     }
-    atomic_write_json(root / "benchmark_manifest.json", manifest)
+    atomic_write_json(existing_path, manifest)
     atomic_write_json(root / "provider_mapping.json", {
         "schema_version": "story-auto-provider-mapping/1.0.0", "mapping": mapping,
         "notice": "Reveal only after blind quality scoring. No production default has been selected.",
@@ -216,10 +229,34 @@ def write_review_package(root: Path, manifest: dict[str, Any]) -> None:
         else:
             media = '<div class="unavailable">VIDEO OUTPUT UNAVAILABLE</div>'
             dimensions = VIDEO_DIMENSIONS
-        scores = "".join(f'<label>{dimension}<input type="number" min="1" max="5" step="1"></label>' for dimension in dimensions)
-        defects = "".join(f'<label><input type="checkbox"> {defect}</label>' for defect in DEFECTS)
-        cards.append(f'<article><h2>{html.escape(title)}</h2>{media}<details><summary>Score 1–5</summary><div class="scores">{scores}</div><h3>Hard defects</h3><div class="defects">{defects}</div></details><textarea placeholder="Operator notes"></textarea></article>')
+        request_id = html.escape(request["request_id"])
+        scores = "".join(
+            f'<label>{dimension}<input data-review-control data-request="{request_id}" '
+            f'data-field="score.{dimension}" type="number" min="1" max="5" step="1"></label>'
+            for dimension in dimensions
+        )
+        defects = "".join(
+            f'<label><input data-review-control data-request="{request_id}" '
+            f'data-field="defect.{html.escape(defect)}" type="checkbox"> {defect}</label>'
+            for defect in DEFECTS
+        )
+        failure = f' · {request["failure_class"]}' if request.get("failure_class") else ""
+        state = html.escape(f'{request["status"]}{failure} · watermark: {request["visible_watermark"]}')
+        cards.append(f'<article><h2>{html.escape(title)}</h2><p class="status">{state}</p>{media}<details><summary>Score 1–5</summary><div class="scores">{scores}</div><h3>Hard defects</h3><div class="defects">{defects}</div></details><label class="notes">Operator notes<textarea data-review-control data-request="{request_id}" data-field="notes"></textarea></label></article>')
+    availability = (
+        "All required outputs are present. Score every candidate before revealing the provider mapping."
+        if manifest.get("benchmark_status") == "PROVIDER_QUALITY_REVIEW_REQUIRED"
+        else "Some outputs are unavailable and are not scoreable; inspect each card's explicit status."
+    )
     document = f'''<!doctype html><html><head><meta charset="utf-8"><title>Story Auto blind provider review</title><style>
-body{{margin:0;background:#080d14;color:#e7eef8;font:15px system-ui}}header{{position:sticky;top:0;background:#111a27;padding:18px 28px;z-index:2}}main{{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:18px;padding:22px}}article{{background:#111925;border:1px solid #26354a;border-radius:12px;padding:16px}}img,video,.unavailable{{width:100%;aspect-ratio:16/9;object-fit:contain;background:#0b1018}}.frames{{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}}.frames .frame{{width:100%}}.unavailable{{display:grid;place-items:center;color:#f2bd67}}.scores{{display:grid;grid-template-columns:1fr 70px;gap:6px}}.scores label{{display:contents}}.defects{{display:grid;grid-template-columns:1fr 1fr;gap:5px}}textarea{{width:100%;min-height:80px;margin-top:12px;background:#0b1018;color:white}}a{{color:#8ec5ff}}</style></head><body><header><h1>Story Auto · Blind Provider Quality Review</h1><p>Do not open <code>provider_mapping.json</code> until scoring is complete. Watch every video; frames alone cannot establish temporal quality. Current API outputs are blocked by account quota, so unavailable cards are not scoreable.</p><p>Contact sheets: {' · '.join(f'<a href="{s}">{s}</a>' for s in sheets)}</p></header><main>{''.join(cards)}</main></body></html>'''
+body{{margin:0;background:#080d14;color:#e7eef8;font:15px system-ui}}header{{position:sticky;top:0;background:#111a27;padding:18px 28px;z-index:2}}main{{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:18px;padding:22px}}article{{background:#111925;border:1px solid #26354a;border-radius:12px;padding:16px}}.status{{color:#b8c7d9}}img,video,.unavailable{{width:100%;aspect-ratio:16/9;object-fit:contain;background:#0b1018}}.frames{{display:grid;grid-template-columns:repeat(3,1fr);gap:5px}}.frames .frame{{width:100%}}.unavailable{{display:grid;place-items:center;color:#f2bd67}}.scores{{display:grid;grid-template-columns:1fr 70px;gap:6px}}.scores label{{display:contents}}.defects{{display:grid;grid-template-columns:1fr 1fr;gap:5px}}textarea{{box-sizing:border-box;width:100%;min-height:80px;margin-top:6px;background:#0b1018;color:white}}.notes{{display:block;margin-top:12px}}button{{background:#8ec5ff;color:#08111d;border:0;border-radius:6px;padding:9px 13px;font-weight:700}}input,textarea,summary,a,video,button{{outline-offset:3px}}input:focus-visible,textarea:focus-visible,summary:focus-visible,a:focus-visible,video:focus-visible,button:focus-visible{{outline:3px solid #fff}}a{{color:#8ec5ff}}</style></head><body><header><h1>Story Auto · Blind Provider Quality Review</h1><p>Do not open <code>provider_mapping.json</code> until scoring is complete. Watch every video; frames alone cannot establish temporal quality. {html.escape(availability)}</p><p>Scores are saved in this browser only. Export a JSON copy before clearing browser data or moving computers.</p><button id="export-review" type="button">Export review JSON</button> <span id="review-save-status" role="status" aria-live="polite">Ready</span><p>Contact sheets: {' · '.join(f'<a href="{s}">{s}</a>' for s in sheets)}</p></header><main>{''.join(cards)}</main><script>
+const storageKey='story-auto-provider-review-v1';
+let review={{}};try{{review=JSON.parse(localStorage.getItem(storageKey)||'{{}}')}}catch{{review={{}}}}
+const controls=[...document.querySelectorAll('[data-review-control]')];
+function valueOf(control){{return control.type==='checkbox'?control.checked:control.value}}
+function save(){{for(const control of controls){{const id=control.dataset.request;review[id]??={{}};review[id][control.dataset.field]=valueOf(control)}}try{{localStorage.setItem(storageKey,JSON.stringify(review));document.getElementById('review-save-status').textContent='Saved locally'}}catch{{document.getElementById('review-save-status').textContent='Local save unavailable; export now'}}}}
+for(const control of controls){{const saved=review[control.dataset.request]?.[control.dataset.field];if(saved!==undefined){{if(control.type==='checkbox')control.checked=Boolean(saved);else control.value=saved}}control.addEventListener('change',save);control.addEventListener('input',save)}}
+document.getElementById('export-review').addEventListener('click',()=>{{save();const blob=new Blob([JSON.stringify({{schema_version:'story-auto-blind-review/1.0.0',review}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='provider_quality_scores.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}});
+</script></body></html>'''
     (root / "review.html").write_text(document, encoding="utf-8")
     atomic_write_json(root / "benchmark_manifest.json", manifest)
