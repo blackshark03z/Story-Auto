@@ -73,6 +73,21 @@ the sanitized inventory. A `VISIBLE_PROVIDER_WATERMARK` QC failure must remain
 rejected even when the image/video validates technically. Dependent generation
 must stay blocked; do not approve, crop, cover, erase, or inpaint the mark.
 
+## Provider quality benchmark
+
+Run `python tools/goal08_benchmark.py --valid-quota-denials <count>
+--invalid-credentials <count>` to rebuild the sanitized blind-review workspace
+after capability/account probing. `review.html` intentionally hides the reveal
+mapping. `provider_mapping.json` must remain unopened until operator scoring is
+complete.
+
+The current Gemini API projects have zero generative-media quota. Enabling a
+paid Gemini API project/key is a human account action. Once available, resume
+the existing request identities through `GeminiMediaClient` and
+`execute_media_request`; successful local selections skip, while a persisted
+Veo operation resumes polling without resubmission. Never copy API keys, job
+download URLs, or browser/session material into the review package.
+
 ## Disk preflight
 
 Before generation/render, check writable paths and free disk. Rendering/generation must stop before predictable disk exhaustion; temporary/partial files are isolated from selected assets.

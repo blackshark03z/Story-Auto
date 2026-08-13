@@ -98,6 +98,17 @@ normalization never uses freeze-tail continuation.
 
 ## Provider boundaries
 
+`story_auto.providers.gemini_media` is the official Gemini API media boundary.
+It accepts provider-independent prompts and local continuity references, owns
+model discovery, key rotation, Interactions image/Omni execution, Veo long-running
+job polling, atomic local acquisition, and append-only attempt provenance. Veo
+operation identity is committed before polling so restart never blindly submits
+a second paid job. Signed result URLs and API keys never cross the adapter.
+
+This adapter does not change production routing by itself. Flow and Gemini API
+remain benchmark candidates until the owner completes the anonymous quality
+review and explicitly accepts routing.
+
 ```text
 core/application request
   ↓

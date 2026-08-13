@@ -46,6 +46,11 @@
   five-point hybrid visual review, unchanged zero-work resume, and verified
   one-clip narrow invalidation. Record clean-provider output and approved
   long-form creative content as explicit release dependencies.
+- Add the Goal 08 Gemini media benchmark boundary: live current-model discovery,
+  Nano Banana 2/Pro image and reference input, Omni video, resumable Veo jobs,
+  atomic validated acquisition, append-only attempt integration, anonymous
+  review packaging, contact sheets, and supplemental video frames. Record the
+  current zero-quota provider-account block without changing production routing.
 - Add Gemini title/description generation and Flow thumbnail requests,
   append-only visual rejection/reconciliation, stable signed-URL attribution,
   and project-bound publishing-package provenance.

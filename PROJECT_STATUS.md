@@ -150,3 +150,26 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 - `tools/goal08_production.py` creates a hash-bound, secret-free local summary at
   `runtime/evidence/goal08/goal08-production-summary.json` and never submits a
   provider or approves creative work.
+
+## Goal 08 provider-quality corrective
+
+- Live capability discovery found the current official model identities:
+  `gemini-3.1-flash-image` (Nano Banana 2), `gemini-3-pro-image` (Nano Banana
+  Pro), `gemini-omni-flash-preview`, and `veo-3.1-generate-preview`.
+- The Gemini media adapter now supports x1 image generation, reference image
+  input, Omni image/reference-to-video, Veo reference submission, durable job
+  polling, atomic acquisition, validation, append-only attempts, and idempotent
+  resume. No production default changed.
+- Actual execution is account-blocked: all 18 valid credentials in the isolated
+  pool report zero Nano Banana 2 quota; three legacy pool entries are invalid or
+  unauthenticated. Bounded Nano Banana Pro, Omni, and corrected Veo reference
+  probes also reach the API but return zero-quota rate limits. No API media job
+  or result was accepted.
+- The partial anonymous review workspace is at
+  `runtime/evidence/goal08/provider_benchmark/`. It contains the exact semantic
+  fixtures, randomized reveal mapping, rubric, contact sheets, Flow baseline,
+  and unavailable API attempt identities. It is not a completed benchmark and
+  cannot support a provider recommendation.
+- Current terminal dependency is `GEMINI_API_PAID_QUOTA_REQUIRED`. After paid
+  quota is enabled, resume the same benchmark identities; do not create a new
+  Goal and do not select production routing before owner review.
