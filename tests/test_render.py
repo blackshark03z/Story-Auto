@@ -148,6 +148,58 @@ class RenderPlanTests(unittest.TestCase):
                                 alignment=self.alignment, shot_plan=self.shots, media_plan=media,
                                 generation_requests={"requests": []}, generation_manifest={"requests": []})
 
+    def test_missing_required_image_fails_closed_with_shot_asset_class(self) -> None:
+        media = {"shots": [{"shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED",
+                             "image_motion_policy": "STATIC", "fallback_policy": "BLOCK"}]}
+        with self.assertRaisesRegex(RenderPlanError, "RENDER_SHOT_ASSET_UNRESOLVED"):
+            resolve_render_plan(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                                alignment=self.alignment, shot_plan=self.shots, media_plan=media,
+                                generation_requests=self.requests, generation_manifest={"requests": []})
+
+    def test_reference_asset_cannot_resolve_a_story_shot(self) -> None:
+        media = {"shots": [{"shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED",
+                             "image_motion_policy": "STATIC", "fallback_policy": "BLOCK"}]}
+        requests = {"requests": [{"request_id": "req_ref", "purpose": "REFERENCE", "shot_id": "sh_0001",
+                                    "media_type": "IMAGE", "provider": "google_flow"}]}
+        manifest = {"requests": [{"request_id": "req_ref", "status": "SUCCEEDED",
+                                    "selected_asset": self.manifest["requests"][0]["selected_asset"]}]}
+        with self.assertRaisesRegex(RenderPlanError, "RENDER_SHOT_ASSET_UNRESOLVED"):
+            resolve_render_plan(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                                alignment=self.alignment, shot_plan=self.shots, media_plan=media,
+                                generation_requests=requests, generation_manifest=manifest)
+
+    def test_manifest_reordering_does_not_change_exact_request_resolution(self) -> None:
+        other = self.root / "other.png"; Image.new("RGB", (320, 180), "red").save(other)
+        media = {"shots": [{"shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED",
+                             "image_motion_policy": "STATIC", "fallback_policy": "BLOCK"}]}
+        extra = {"request_id": "req_other", "status": "SUCCEEDED",
+                 "selected_asset": {"path": "other.png", "sha256": sha256_file(other), "attempt": 1}}
+        forward = {"requests": [extra, self.manifest["requests"][0]]}
+        reverse = {"requests": list(reversed(forward["requests"]))}
+        kwargs = dict(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                      alignment=self.alignment, shot_plan=self.shots, media_plan=media,
+                      generation_requests=self.requests)
+        self.assertEqual(resolve_render_plan(**kwargs, generation_manifest=forward)["segments"][0]["source_hash"],
+                         resolve_render_plan(**kwargs, generation_manifest=reverse)["segments"][0]["source_hash"])
+
+    def test_unplanned_cross_shot_hash_reuse_fails_but_explicit_reuse_passes(self) -> None:
+        shots = {"shots": [{"shot_id": "sh_0001", "start": 0.0, "end": 1.0},
+                           {"shot_id": "sh_0002", "start": 1.0, "end": 2.0}]}
+        requests = {"requests": [{"request_id": f"req_{i}", "purpose": "SHOT", "shot_id": f"sh_000{i}",
+                                    "media_type": "IMAGE", "provider": "google_flow"} for i in (1, 2)]}
+        manifest = {"requests": [{"request_id": f"req_{i}", "status": "SUCCEEDED",
+                                    "selected_asset": {"path": "shot.png", "sha256": sha256_file(self.image), "attempt": 1}}
+                                   for i in (1, 2)]}
+        base = [{"shot_id": f"sh_000{i}", "media_type": "IMAGE", "requirement": "REQUIRED",
+                 "image_motion_policy": "STATIC", "fallback_policy": "BLOCK"} for i in (1, 2)]
+        kwargs = dict(project_id="prj_test", project_root=self.root, render_mode="hybrid_hook",
+                      alignment=self.alignment, shot_plan=shots, generation_requests=requests,
+                      generation_manifest=manifest, settings={"visual_narration_alignment": {"fail_on_unplanned_reuse": True}})
+        with self.assertRaisesRegex(RenderPlanError, "VISUAL_NARRATION_ALIGNMENT_MISMATCH"):
+            resolve_render_plan(**kwargs, media_plan={"shots": base})
+        base[1]["allow_asset_reuse"] = True
+        self.assertEqual(len(resolve_render_plan(**kwargs, media_plan={"shots": base})["segments"]), 2)
+
     def test_explicit_preferred_hold_fallback_is_recorded(self) -> None:
         media = {"shots": [{"shot_id": "sh_0001", "media_type": "VIDEO", "requirement": "PREFERRED",
                              "image_motion_policy": "NONE", "fallback_policy": "HOLD"}]}

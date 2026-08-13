@@ -87,7 +87,12 @@ def resolve_render_plan(
     def successful(request: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
         entry = manifest_by_request.get(request.get("request_id"), {})
         selected = entry.get("selected_asset")
-        return (request, selected) if entry.get("status") == "SUCCEEDED" and isinstance(selected, dict) else None
+        valid = entry.get("status") == "SUCCEEDED" and isinstance(selected, dict)
+        if valid and settings.get("visual_narration_alignment", {}).get("require_semantic_qc"):
+            valid = selected.get("alignment_classification") in {
+                "PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"
+            }
+        return (request, selected) if valid else None
 
     for shot in shot_plan.get("shots", []):
         shot_id = shot["shot_id"]
@@ -97,7 +102,7 @@ def resolve_render_plan(
                 raise RenderPlanError("VISUAL_BEAT_UNDERSEGMENTED", shot_id)
         media = media_by_shot.get(shot_id)
         if not media:
-            raise RenderPlanError("REQUIRED_MEDIA_UNRESOLVED", shot_id)
+            raise RenderPlanError("RENDER_SHOT_ASSET_UNRESOLVED", shot_id)
         desired, source_kind = media["media_type"], media["media_type"]
         candidates = [item for item in requests_by_shot.get(shot_id, []) if item.get("media_type") == desired]
         if media.get("selected_request_id"):
@@ -114,7 +119,7 @@ def resolve_render_plan(
             complete = True
         elif not complete:
             if media.get("requirement") == "REQUIRED":
-                failure = "RENDER_BLOCKED_REQUIRED_VIDEO_MISSING" if desired == "VIDEO" else "REQUIRED_MEDIA_UNRESOLVED"
+                failure = "RENDER_BLOCKED_REQUIRED_VIDEO_MISSING" if desired == "VIDEO" else "RENDER_SHOT_ASSET_UNRESOLVED"
                 raise RenderPlanError(failure, shot_id)
             policy = media.get("fallback_policy", "BLOCK")
             if policy == "HOLD":
@@ -126,9 +131,9 @@ def resolve_render_plan(
                     resolved, source_kind = [replacement], "IMAGE"
                     fallback = {"used": True, "policy": "IMAGE", "reason": "preferred_video_unavailable"}
                 else:
-                    raise RenderPlanError("REQUIRED_MEDIA_UNRESOLVED", shot_id)
+                    raise RenderPlanError("RENDER_SHOT_ASSET_UNRESOLVED", shot_id)
             else:
-                raise RenderPlanError("REQUIRED_MEDIA_UNRESOLVED", shot_id)
+                raise RenderPlanError("RENDER_SHOT_ASSET_UNRESOLVED", shot_id)
 
         render_parts: list[tuple[dict[str, Any] | None, dict[str, Any] | None]] = resolved or [(None, None)]
         cursor = float(shot["start"])

@@ -34,6 +34,19 @@ def _intent(shot: dict[str, Any]) -> dict[str, Any]:
             "emotional_beat": shot.get("visual_emotional_purpose")}
 
 
+def _durable_classification(selected: dict[str, Any] | None, shot: dict[str, Any]) -> str:
+    value = (selected or {}).get("alignment_classification")
+    mapping = {
+        "PASS_DIRECT": "DIRECT",
+        "PASS_SUPPORTIVE": "SUPPORTIVE",
+        "PASS_ATMOSPHERIC": "ATMOSPHERIC",
+        "MISMATCH": "MISMATCH",
+    }
+    if value in mapping:
+        return mapping[value]
+    return "ATMOSPHERIC" if shot.get("atmospheric") else "UNREVIEWED"
+
+
 def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, Any],
                              media_plan: dict[str, Any], generation_requests: dict[str, Any],
                              generation_manifest: dict[str, Any], render_plan: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +76,8 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
                 "final_timeline_start": seg.get("target_start", shot.get("start")),
                 "final_timeline_end": seg.get("target_end", shot.get("end")),
                 "explicit_atmospheric": bool(shot.get("atmospheric")),
-                "alignment_classification": "ATMOSPHERIC" if shot.get("atmospheric") else "UNREVIEWED"})
+                "alignment_observation": (selected or {}).get("alignment_observation"),
+                "alignment_classification": _durable_classification(selected, shot)})
     by_sha = defaultdict(list)
     for row in rows:
         if row["selected_asset_sha"]: by_sha[row["selected_asset_sha"]].append(row)
@@ -74,11 +88,17 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
     reuse = [{"sha256": sha, "shot_ids": [r["shot_id"] for r in values],
               "reuse_count": len(values), "cumulative_screen_duration": sum(float(r["final_timeline_end"] or 0)-float(r["final_timeline_start"] or 0) for r in values)}
              for sha, values in by_sha.items() if len(values) > 1]
+    classes = {name: sum(r["alignment_classification"] == name for r in rows)
+               for name in ("DIRECT", "SUPPORTIVE", "ATMOSPHERIC", "MISMATCH", "UNREVIEWED")}
+    cross_shot_reuse = any(len({r["shot_id"] for r in values}) > 1 for values in by_sha.values())
     return {"schema_version": ALIGNMENT_SCHEMA_VERSION, "rows": rows,
             "metrics": {"total_final_shots": len(rows), "unique_selected_asset_hashes": len(by_sha),
+                        "unique_asset_ratio": (len(by_sha) / len(rows)) if rows else 0.0,
                         "asset_reuse": reuse, "max_asset_reuse_count": max((x["reuse_count"] for x in reuse), default=1),
-                        "mismatch_count": sum(r["alignment_classification"] == "MISMATCH" for r in rows)},
-            "root_cause": "SHOT_REQUEST_GENERATION_SEMANTICS" if any(len(v) > 1 for v in by_sha.values()) else "UNKNOWN",
+                        "classification_counts": classes,
+                        "mismatch_count": classes["MISMATCH"],
+                        "unreviewed_count": classes["UNREVIEWED"]},
+            "root_cause": "UNPLANNED_CROSS_SHOT_REUSE" if cross_shot_reuse else "NONE_CORRECTED",
             "acceptance": "REVIEW_REQUIRED"}
 
 
@@ -87,3 +107,5 @@ def validate_visual_alignment_audit(value: dict[str, Any]) -> None:
         raise ValueError("VISUAL_NARRATION_ALIGNMENT_INVALID")
     if value.get("metrics", {}).get("mismatch_count", 0):
         raise ValueError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
+    if value.get("metrics", {}).get("unreviewed_count", 0):
+        raise ValueError("VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED")

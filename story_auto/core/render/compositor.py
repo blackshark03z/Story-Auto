@@ -45,7 +45,7 @@ def _visual_filter(segments: list[dict[str, Any]]) -> tuple[str, str]:
 def compose(
     *, clips: list[Path], segments: list[dict[str, Any]], narration: Path, output: Path,
     master_duration: float, subtitles_ass: Path | None = None, bgm: Path | None = None,
-    bgm_volume: float = 0.12, target: MediaTarget = MediaTarget(),
+    bgm_volume: float = 0.12, target: MediaTarget = MediaTarget(), video_crf: int = 18,
 ) -> dict[str, Any]:
     if not clips or len(clips) != len(segments):
         raise MediaError("COMPOSITOR_INPUT_INVALID")
@@ -86,7 +86,7 @@ def compose(
     output.parent.mkdir(parents=True, exist_ok=True)
     command = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters),
                "-map", visual_label, "-map", audio_label, "-t", format_duration(master_duration),
-               "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", target.pixel_format,
+               "-c:v", "libx264", "-preset", "medium", "-crf", str(video_crf), "-pix_fmt", target.pixel_format,
                "-r", str(target.fps), "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(output)]
     run_command(command)
     return validate_video(output, target=target, silent=False, expected_duration=master_duration, tolerance=.12)

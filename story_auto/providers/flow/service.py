@@ -118,6 +118,12 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
             raise FlowError(error.failure_class) from error
         entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "APPROVED", "report": accepted})
         entry["selected_asset"]["production_qc"] = "APPROVED"
+        if request.get("purpose") == "SHOT":
+            # validate_production_qc intentionally returns only the technical
+            # rubric. Keep the separately validated narrative verdict with the
+            # exact selected bytes so the final render audit is self-contained.
+            entry["selected_asset"]["alignment_classification"] = classification
+            entry["selected_asset"]["alignment_observation"] = str(report.get("notes", "")).strip()
         entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": _now()})
         atomic_write_json(path, manifest)
 

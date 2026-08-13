@@ -12,6 +12,7 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 reject_selected_asset, review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
+from story_auto.providers.flow.live import records_for_media
 
 
 class Editor:
@@ -31,7 +32,7 @@ class DOM:
 class NativePage:
     def __init__(self): self.clicked = None; self.commands=[]
     def evaluate(self, _): return {"x":10,"y":20}
-    def command(self, method): self.commands.append(method)
+    def command(self, method, params=None): self.commands.append(method); return {"windowId":1} if method=="Browser.getWindowForTarget" else {}
     def click(self, x, y): self.clicked=(x,y)
 
 class Inspector:
@@ -44,6 +45,10 @@ class Response:
     def read(self): return self.data
 
 class FlowTests(unittest.TestCase):
+    def test_acquisition_filters_candidates_by_requested_media_type(self):
+        records=[{"key":"stale-video","kind":"VIDEO"},{"key":"avatar","kind":"IMG","width":96},{"key":"new-image","kind":"IMG","width":1376},{"key":"video-source","kind":"SOURCE"}]
+        self.assertEqual([x["key"] for x in records_for_media(records,"IMAGE")],["new-image"])
+        self.assertEqual([x["key"] for x in records_for_media(records,"VIDEO")],["stale-video","video-source"])
     def _project(self, root):
         runtime=RuntimeLayout.from_root(root); cfg=ProjectConfig("prj_flow001")
         paths=create_project(runtime,cfg)
@@ -80,7 +85,7 @@ class FlowTests(unittest.TestCase):
         self.assertTrue(dom.controls[0].clicked)
     def test_live_generate_control_uses_native_mouse_click(self):
         from story_auto.providers.flow.live import _Control
-        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0)); self.assertEqual(page.commands,["Page.bringToFront"])
+        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0)); self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
 
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:

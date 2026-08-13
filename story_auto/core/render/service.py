@@ -14,7 +14,7 @@ from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
 from story_auto.core.subtitles import SUBTITLE_VERSION, build_subtitles
-from story_auto.core.visual_alignment import build_shot_mapping_audit
+from story_auto.core.visual_alignment import build_shot_mapping_audit, validate_visual_alignment_audit
 
 from .compiler import compile_hold, compile_image, compile_video
 from .compositor import COMPOSER_VERSION, compose
@@ -87,6 +87,7 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
     if not isinstance(storage,dict): raise ValueError("settings.storage must be an object")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     settings, target = _render_settings(config)
+    final_video_crf = int(config.settings.get("render", {}).get("video_crf", 18))
     alignment = _load_required(paths, "alignment")
     shot_plan = _load_required(paths, "shot_plan")
     media_plan = _load_required(paths, "media_plan")
@@ -127,6 +128,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             media_plan=media_plan, generation_requests=requests, generation_manifest=manifest,
             render_plan=render_plan)
         atomic_write_json(paths.artifact_path("output/visual_narration_alignment.json"), alignment_audit)
+        if settings.get("visual_narration_alignment", {}).get("require_semantic_qc"):
+            validate_visual_alignment_audit(alignment_audit)
         compile_durations, computed_duration = transition_output_durations(render_plan["segments"])
         if abs(computed_duration - float(render_plan["master_duration"])) > .01:
             raise ValueError("transition duration math does not preserve narration duration")
@@ -217,7 +220,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                         "bgm_sha256": bgm_hash or "NONE", **{f"clip_{i}": value for i, value in enumerate(clip_hashes)}}
         final_fp = fingerprint(stage_name="final_render", producer_version=COMPOSER_VERSION,
                                artifact_schema_version=FINAL_MANIFEST_VERSION, direct_inputs=final_inputs,
-                               settings={"target": settings, "bgm_volume": audio_plan["bgm"]["volume"]})
+                               settings={"target": settings, "bgm_volume": audio_plan["bgm"]["volume"],
+                                         "video_crf": final_video_crf})
         final_rel, manifest_rel = "output/final.mp4", "output/final_manifest.json"
         final_path, final_manifest_path = paths.artifact_path(final_rel), paths.artifact_path(manifest_rel)
         decision = checkpoints.decide("final_render", final_fp)
@@ -240,7 +244,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                 return compose(clips=clips, segments=render_plan["segments"], narration=narration_path,
                                    output=candidate, master_duration=float(render_plan["master_duration"]),
                                    subtitles_ass=ass_path, bgm=bgm_path,
-                                   bgm_volume=audio_plan["bgm"]["volume"], target=target)
+                                   bgm_volume=audio_plan["bgm"]["volume"], target=target,
+                                   video_crf=final_video_crf)
             metadata=_atomic_media_publish(final_path,produce_final)
             metadata = validate_video(final_path, target=target, silent=False,
                                       expected_duration=float(render_plan["master_duration"]), tolerance=.12)
