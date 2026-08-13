@@ -124,7 +124,29 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 
 ## Explicitly not accepted yet
 
-- Live operator-session usability acceptance on the representative productions.
+- A production-clean Flow output path. A current direct x1 image acquisition
+  was technically valid and resumable but production QC rejected the embedded
+  bottom-right Flow sparkle watermark. The existing reference-video sample has
+  the same visible mark; removal, covering, and provenance-disguising crops are
+  prohibited.
 - Live multi-shot full-video representative production and visual acceptance.
-- A representative approved long-form creative production; no canonical fixture
-  was locally available for this baseline.
+  The two-shot Mara plan is approved, but required reference QC correctly blocks
+  video dispatch after the watermark rejection; it is also only six seconds and
+  has no meaningful scene transition.
+- A representative approved long-form creative production. Exhaustive runtime
+  inventory found only short fixtures and the repetitive 71.067-second technical
+  fixture, so the durable terminal dependency is `LONG_FORM_CONTENT_REQUIRED`.
+
+## Goal 08 production evidence
+
+- The 71.067-second hybrid fixture rerendered under release code and passed
+  technical H.264/AAC validation. Five visual samples (hook, early, middle,
+  continuity-sensitive, ending) all showed the same scene/repeated line and a
+  visible provider watermark, so it remains rejected as production evidence.
+- Unchanged render resume skipped render plan, all ten normalized clips,
+  subtitles, audio plan, and final composition without rewriting `final.mp4`.
+- Removing only normalized `sh_0005` rebuilt exactly that clip and the final
+  composite; all independent stages and the other nine clips skipped.
+- `tools/goal08_production.py` creates a hash-bound, secret-free local summary at
+  `runtime/evidence/goal08/goal08-production-summary.json` and never submits a
+  provider or approves creative work.

@@ -67,6 +67,12 @@ Render recovery expectations are executable behavior:
 - Runtime roots are excluded from Git and contain no browser-profile copies in
   product artifacts. Evidence records hashes/metadata, never cookies or signed URLs.
 
+Goal 08 release evidence distinguishes technical fixtures from production
+acceptance. Run `python tools/goal08_production.py` after local reviews to rebuild
+the sanitized inventory. A `VISIBLE_PROVIDER_WATERMARK` QC failure must remain
+rejected even when the image/video validates technically. Dependent generation
+must stay blocked; do not approve, crop, cover, erase, or inpaint the mark.
+
 ## Disk preflight
 
 Before generation/render, check writable paths and free disk. Rendering/generation must stop before predictable disk exhaustion; temporary/partial files are isolated from selected assets.

@@ -42,6 +42,10 @@
 - Add per-stage/per-shot render checkpoints and real recovery behavior for
   missing final output, missing scene clips, invalid provider selections, and
   unchanged zero-work resume.
+- Add Goal 08 production-evidence auditing, current Flow x1 watermark rejection,
+  five-point hybrid visual review, unchanged zero-work resume, and verified
+  one-clip narrow invalidation. Record clean-provider output and approved
+  long-form creative content as explicit release dependencies.
 - Add Gemini title/description generation and Flow thumbnail requests,
   append-only visual rejection/reconciliation, stable signed-URL attribution,
   and project-bound publishing-package provenance.
