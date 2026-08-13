@@ -118,6 +118,7 @@ class FlowBrowserDom:
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
+    def video_candidates(self): return self.page.evaluate("""(()=>Array.from(document.querySelectorAll('video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()""") or []
 
 
 class FlowInspector:
@@ -145,10 +146,11 @@ class LiveFlowGenerator:
         page=CdpPage.open(self.runtime)
         try:
             dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
-            before, before_text = set(), ""
+            before, before_output, before_text = set(), set(), ""
             def baseline():
-                nonlocal before, before_text
+                nonlocal before, before_output, before_text
                 before = set(dom.media_candidates())
+                before_output = set(dom.video_candidates() if request["media_type"] == "VIDEO" else before)
                 before_text = page.evaluate("document.body.innerText")
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline, mode_already_configured=True)
             # An immediate composer/UI transition is a dispatch acknowledgement;
@@ -161,7 +163,8 @@ class LiveFlowGenerator:
             if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "native click produced no Flow acknowledgement")
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
-                added=[x for x in dom.media_candidates() if x not in before]
+                pool = dom.video_candidates() if request["media_type"] == "VIDEO" else dom.media_candidates()
+                added=[x for x in pool if x not in before_output]
                 if len(added)==1:
                     payload=page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(added[0]))
                     if not isinstance(payload,dict) or not isinstance(payload.get("data"),str): raise FlowError("ASSET_ACQUISITION_FAILED")
