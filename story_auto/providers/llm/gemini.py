@@ -87,18 +87,29 @@ class GeminiProvider:
                 body["generationConfig"][key] = request.settings[key]
         attempts = 0
         started = time.monotonic()
-        def call() -> dict[str, Any]:
+        keys = provider_keys(self.name)
+        if not keys:
+            raise GeminiProviderError("GEMINI_CREDENTIAL_MISSING")
+        key_index = 0
+        def call() -> tuple[dict[str, Any], dict[str, Any]]:
             nonlocal attempts
+            nonlocal key_index
             attempts += 1
-            return self.transport(f"{self.api_base}/models/{urllib.parse.quote(request.model, safe='')}:generateContent", body, self._key(), timeout)
-        payload = retry(call, attempts=attempts_limit, retryable=lambda e: isinstance(e, GeminiProviderError) and e.failure_class in {"GEMINI_RATE_LIMIT", "GEMINI_TIMEOUT", "GEMINI_PROVIDER_ERROR"})
-        try:
-            text = payload["candidates"][0]["content"]["parts"][0]["text"]
-            value = json.loads(text)
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
-            raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID") from error
-        if not isinstance(value, dict):
-            raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID")
+            try:
+                payload = self.transport(f"{self.api_base}/models/{urllib.parse.quote(request.model, safe='')}:generateContent", body, keys[key_index], timeout)
+                try:
+                    text = payload["candidates"][0]["content"]["parts"][0]["text"]
+                    value = json.loads(text)
+                except (KeyError, IndexError, TypeError, json.JSONDecodeError) as error:
+                    raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID") from error
+                if not isinstance(value, dict):
+                    raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID")
+                return payload, value
+            except GeminiProviderError as error:
+                if error.failure_class in {"GEMINI_RATE_LIMIT", "GEMINI_STRUCTURED_OUTPUT_INVALID"} and key_index + 1 < len(keys):
+                    key_index += 1
+                raise
+        payload, value = retry(call, attempts=attempts_limit, retryable=lambda e: isinstance(e, GeminiProviderError) and e.failure_class in {"GEMINI_RATE_LIMIT", "GEMINI_STRUCTURED_OUTPUT_INVALID", "GEMINI_TIMEOUT", "GEMINI_PROVIDER_ERROR"})
         usage = payload.get("usageMetadata") if isinstance(payload.get("usageMetadata"), dict) else {}
         return LLMResponse(value, request.model, request.request_id, attempts, round((time.monotonic() - started) * 1000), usage)
 

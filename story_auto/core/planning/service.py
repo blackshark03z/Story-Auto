@@ -137,7 +137,26 @@ def _resolve_shots(project_id: str, proposed: dict[str, Any], timeline: dict[str
     candidates = proposed.get("shots") if isinstance(proposed, dict) else None
     if not isinstance(candidates, list) or not candidates: raise PlanningError("SHOT_PLAN_INVALID", "shots required")
     scene_map = {s["scene_id"]: s for s in timeline["scenes"]}; kinds, entity_ids = _entity_maps(continuity); shots = []
-    for index, raw in enumerate(candidates, 1):
+    # Gemini is authoritative for shot intent and continuity references, but
+    # alignment-derived scene bounds are authoritative for timing.  Preserve
+    # the model's shot order/content while assigning deterministic contiguous
+    # intervals inside each referenced scene.  This prevents a malformed
+    # timestamp from blocking an otherwise valid long-form plan or leaking
+    # invented timing into the render contract.
+    grouped: dict[str, list[dict[str, Any]]] = {scene["scene_id"]: [] for scene in timeline["scenes"]}
+    for raw in candidates:
+        if not isinstance(raw, dict) or raw.get("scene_id") not in scene_map: raise PlanningError("SHOT_SCENE_REFERENCE_INVALID")
+        grouped[raw["scene_id"]].append(raw)
+    normalized: list[dict[str, Any]] = []
+    for scene in timeline["scenes"]:
+        scene_candidates = grouped[scene["scene_id"]]
+        if not scene_candidates: continue
+        start, end = float(scene["start"]), float(scene["end"])
+        step = (end - start) / len(scene_candidates)
+        for offset, raw in enumerate(scene_candidates):
+            normalized.append({**raw, "start": start + offset * step, "end": start + (offset + 1) * step})
+    if not normalized: raise PlanningError("SHOT_PLAN_INVALID", "shots required")
+    for index, raw in enumerate(normalized, 1):
         if not isinstance(raw, dict) or raw.get("scene_id") not in scene_map: raise PlanningError("SHOT_SCENE_REFERENCE_INVALID")
         scene = scene_map[raw["scene_id"]]
         try: start, end = float(raw["start"]), float(raw["end"])
@@ -230,7 +249,7 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
         part_start = float(shot["start"])
         for part_index in range(1, part_count + 1):
             remaining = float(shot["end"]) - part_start
-            part_duration = min(settings["provider_video_clip_seconds"], remaining)
+            part_duration = min(settings["provider_video_clip_seconds"], remaining) if media["media_type"] == "VIDEO" else remaining
             part_end = float(shot["end"]) if part_index == part_count else part_start + part_duration
             seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot,"media":media,"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed)
             if media["media_type"] == "IMAGE":
@@ -277,7 +296,27 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             try: shot_plan = read_json(shot_path); validate_shot_plan(shot_plan, timeline, continuity); shot_action="SKIP"
             except Exception: decision = type(decision)("RUN", "artifact invalid")
         if decision.action == "RUN":
-            response = active.generate_structured(LLMRequest(model, f"{SHOT_PROMPT_VERSION}\\nProduce coherent visual shots wholly within scene time bounds. Cover every scene exactly with ordered shots. Use only continuity IDs.\\nTimeline:{timeline['scenes']}\\nContinuity:{continuity}", _shot_schema(), llm_settings, _hash_text(shot_fp)[:24], "shot_plan")); shot_plan = _resolve_shots(project_id, response.value, timeline, continuity, _provenance(model,"shot_plan",SHOT_PROMPT_VERSION,{"timeline_sha256":timeline_sha,"continuity_sha256":continuity_sha},response)); validate_shot_plan(shot_plan,timeline,continuity); atomic_write_json(shot_path,shot_plan); checkpoints.record("shot_plan",fingerprint=shot_fp,status="SUCCESS",outputs=["output/shot_plan.json"],producer_version=SHOT_PROMPT_VERSION); shot_action="RUN"
+            # Keep each structured response bounded: long-form stories can
+            # exceed provider JSON-output limits when all scenes are requested
+            # in one call. The normal planner still owns the schema, intent,
+            # continuity IDs, and final validation; only request granularity
+            # changes.
+            proposed = []
+            last_response = None
+            if isinstance(active, GeminiProvider):
+                for scene in timeline["scenes"]:
+                    prompt = f"{SHOT_PROMPT_VERSION}\\nReturn exactly one shot in the required JSON schema for this scene. Use only continuity IDs. Keep strings concise. Timing fields may be placeholders; Story Auto normalizes them to the authoritative scene bounds.\\nScene:{scene}\\nContinuity:{continuity}"
+                    last_response = active.generate_structured(LLMRequest(model, prompt, _shot_schema(), llm_settings, _hash_text(shot_fp + scene["scene_id"])[:24], "shot_plan"))
+                    values = last_response.value.get("shots") if isinstance(last_response.value, dict) else None
+                    if not isinstance(values, list) or len(values) != 1:
+                        raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID")
+                    proposed.extend(values)
+            else:
+                prompt = f"{SHOT_PROMPT_VERSION}\\nProduce coherent visual shots wholly within scene time bounds. Cover every scene exactly with ordered shots. Use only continuity IDs.\\nTimeline:{timeline['scenes']}\\nContinuity:{continuity}"
+                last_response = active.generate_structured(LLMRequest(model, prompt, _shot_schema(), llm_settings, _hash_text(shot_fp)[:24], "shot_plan"))
+                proposed = last_response.value.get("shots") if isinstance(last_response.value, dict) else None
+            shot_provenance = _provenance(model,"shot_plan",SHOT_PROMPT_VERSION,{"timeline_sha256":timeline_sha,"continuity_sha256":continuity_sha},last_response)
+            shot_plan = _resolve_shots(project_id, {"shots": proposed}, timeline, continuity, shot_provenance); validate_shot_plan(shot_plan,timeline,continuity); atomic_write_json(shot_path,shot_plan); checkpoints.record("shot_plan",fingerprint=shot_fp,status="SUCCESS",outputs=["output/shot_plan.json"],producer_version=SHOT_PROMPT_VERSION); shot_action="RUN"
         shot_sha=sha256_file(shot_path); media_path=paths.artifact_path("output/media_plan.json"); media_fp=fingerprint(stage_name="media_plan",producer_version=MEDIA_POLICY_VERSION,artifact_schema_version=MEDIA_SCHEMA_VERSION,direct_inputs={"shot_plan_sha256":shot_sha,"render_mode":config.render_mode},settings=media_settings); decision=checkpoints.decide("media_plan",media_fp)
         if decision.action == "SKIP":
             try: media_plan=read_json(media_path); validate_media_plan(media_plan,shot_plan); media_action="SKIP"
