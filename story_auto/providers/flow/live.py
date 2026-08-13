@@ -72,8 +72,10 @@ class FlowBrowserDom:
         if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
         actual.update({"requested_model":resolved.model_preference,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
         # The settings popover otherwise overlays the composer submit arrow.
-        # Close it with a native key before any prompt or pointer interaction.
-        self.page.key("Escape", code="Escape")
+        # Toggle its own trigger with a native click before any submit input.
+        menu_trigger = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(e=>visible(e)&&e.getAttribute('aria-expanded')==='true');if(xs.length!==1)return null;const r=xs[0].getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()""")
+        if not isinstance(menu_trigger, dict): raise FlowError("FLOW_UI_CHANGED", "Flow settings menu trigger was ambiguous before submit")
+        self.page.click(float(menu_trigger["x"]), float(menu_trigger["y"]))
         time.sleep(.25)
         open_menu = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('button[aria-haspopup=\"menu\"]')).some(e=>visible(e)&&e.getAttribute('aria-expanded')==='true')})()""")
         if open_menu: raise FlowError("FLOW_UI_CHANGED", "Flow settings menu did not close before submit")
