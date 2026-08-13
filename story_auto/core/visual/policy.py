@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.0.0"
+VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.1.0"
 
 DEFAULT_VISUAL_POLICY: dict[str, Any] = {
     "schema_version": VISUAL_POLICY_VERSION,
@@ -19,6 +19,8 @@ DEFAULT_VISUAL_POLICY: dict[str, Any] = {
     "composition_style": "OBSERVATIONAL_ASYMMETRY",
     "grain_policy": "SUBTLE_ORGANIC",
     "motion_style": "RESTRAINED",
+    "provider_mark_safe_area": "BOTTOM_RIGHT",
+    "provider_mark_safe_area_strength": "SOFT_COMPOSITION_CONSTRAINT",
 }
 
 _REQUIRED = tuple(key for key in DEFAULT_VISUAL_POLICY if key != "schema_version")
@@ -38,6 +40,11 @@ _ANTI_POLISH = (
     "Avoid waxy or porcelain skin, glossy beauty retouching, plastic sheen, "
     "over-sharpened HDR, excessive bokeh, studio-perfect illumination, gratuitous rim light, "
     "volumetric god rays, default teal-orange grading, pristine showroom surfaces, perfect symmetry, and CGI material response."
+)
+_FLOW_MARK_SAFE_AREA = (
+    "Where practical, keep faces, eyes, critical hand actions, important props, story text, subtitles, captions, "
+    "and focal details away from the bottom-right provider-mark safe area; preserve natural composition and do not "
+    "distort the shot solely to satisfy this soft constraint"
 )
 _MOTION = {
     "STATIC": "locked observational camera",
@@ -68,6 +75,7 @@ def compile_image_prompt(intent: str, policy: dict[str, Any], *, continuity: str
     if continuity.strip():
         parts.append("Continuity identity and environment: " + continuity.strip())
     parts.extend(_IMAGE_RENDERING[key] for key in _IMAGE_RENDERING)
+    parts.append(_FLOW_MARK_SAFE_AREA)
     parts.append(_ANTI_POLISH)
     return ". ".join(part.rstrip(". ") for part in parts if part) + "."
 
@@ -85,5 +93,6 @@ def compile_video_prompt(
         f"Timing: {timing.strip()}",
         "Preserve the supplied reference image identity, environment, lighting, palette, and material treatment",
         "Restrained realistic motion; no floating, orbiting, sweeping, morphing, or artificial speed ramps",
+        _FLOW_MARK_SAFE_AREA,
     ]
     return ". ".join(part.rstrip(". ") for part in parts) + "."

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Lock Story Auto V1 production images and videos to Google Flow Web by owner
+  decision; close unfinished provider benchmarking while preserving all Flow,
+  Gemini API 429, and partial Gemini Web provenance.
+- Accept the visible Flow sparkle mark as a documented known limitation, add a
+  soft bottom-right composition safe area and right-cleared subtitles, retain
+  x1 image enforcement, and keep all naturalness/continuity QC failures active.
+
 - Add structured `NATURAL_SOFT_REALISM` visual DNA, anti-AI-polish prompts,
   production naturalness/watermark QC, and the project-wide x1 image invariant.
 - Add deterministic multi-part full-video requests and render coverage,

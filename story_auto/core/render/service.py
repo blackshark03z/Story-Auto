@@ -41,7 +41,11 @@ def _render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
         "transition": value.get("transition", {"type": "CUT", "duration": 0.0}),
         "hold_color": value.get("hold_color", "black"),
         "finishing_profile": str(value.get("finishing_profile", "NONE")).upper(),
-        "subtitle_style": value.get("subtitle_style", {"width": 44, "font_name": "Arial", "font_size": 48}),
+        "subtitle_style": value.get("subtitle_style", {
+            "width": 44, "font_name": "Arial", "font_size": 48,
+            "margin_left": 90, "margin_right": 260,
+            "provider_mark_safe_area": "BOTTOM_RIGHT",
+        }),
     }
     if settings["finishing_profile"] not in {"NONE", "NATURAL_SOFT"}:
         raise ValueError("settings.render.finishing_profile must be NONE or NATURAL_SOFT")
@@ -167,7 +171,9 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
             actions["subtitles"] = "SKIP"
         else:
             build_subtitles(alignment, srt_path, ass_path, width=int(style.get("width", 44)),
-                            font_name=str(style.get("font_name", "Arial")), font_size=int(style.get("font_size", 48)))
+                            font_name=str(style.get("font_name", "Arial")), font_size=int(style.get("font_size", 48)),
+                            margin_left=int(style.get("margin_left", 90)),
+                            margin_right=int(style.get("margin_right", 260)))
             checkpoints.record("subtitles", fingerprint=subtitle_fp, status="SUCCESS", outputs=[srt_rel, ass_rel],
                                producer_version=SUBTITLE_VERSION)
             actions["subtitles"] = "RUN"

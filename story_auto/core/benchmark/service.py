@@ -18,9 +18,9 @@ from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.visual import DEFAULT_VISUAL_POLICY, compile_image_prompt, compile_video_prompt
 
 
-SCHEMA = "story-auto-provider-benchmark/1.0.0"
-IMAGE_MODELS = ("google_flow_web", "gemini-3.1-flash-image", "gemini-3-pro-image")
-VIDEO_MODELS = ("google_flow_web", "gemini-omni-flash-preview", "veo-3.1-generate-preview")
+SCHEMA = "story-auto-provider-benchmark/2.0.0"
+IMAGE_MODELS = ("google_flow_web", "gemini_web_product_mode")
+VIDEO_MODELS = ("google_flow_web", "gemini_web_product_mode")
 IMAGE_DIMENSIONS = (
     "SKIN_REALISM", "FACE_NATURALNESS", "HAIR_REALISM", "MATERIAL_REALISM",
     "LIGHTING_NATURALISM", "COLOR_NATURALISM", "COMPOSITION_NATURALISM",
@@ -39,6 +39,23 @@ DEFECTS = (
     "excessive bokeh", "synthetic material sheen", "floating camera", "subject sliding",
     "inconsistent shadows", "unexplained lighting changes", "visible watermark",
 )
+
+
+def _eligibility(item: dict[str, Any]) -> dict[str, Any]:
+    flow_mark_accepted = item.get("provider") == "google_flow" and item.get("visible_watermark") == "YES"
+    return {
+        "request_id": item["request_id"],
+        "provider": item.get("provider"),
+        "visible_watermark": item["visible_watermark"],
+        "watermark_disposition": (
+            "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION" if flow_mark_accepted
+            else "NO_VISIBLE_PROVIDER_WATERMARK" if item.get("visible_watermark") == "NO"
+            else "NOT_SELECTED_OR_UNCERTAIN"
+        ),
+        "production_eligible": item.get("status") == "SUCCEEDED" and (
+            item.get("visible_watermark") == "NO" or flow_mark_accepted
+        ),
+    }
 
 
 def _hash_text(value: str) -> str:
@@ -99,7 +116,14 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
     existing = read_json(existing_path) if existing_path.exists() else {"requests": []}
     prior = {item.get("request_id"): item for item in existing.get("requests", [])}
     fixtures = _fixtures()
-    mapping = _mapping("story-auto-goal08-provider-benchmark-v1")
+    mapping = _mapping("story-auto-goal08-provider-benchmark-v2-gemini-web")
+    historical = list(existing.get("historical_provider_requests", []))
+    historical.extend(item for item in existing.get("requests", []) if item.get("provider") == "google_gemini_api")
+    historical_by_identity = {
+        (item.get("request_id"), item.get("provider"), item.get("actual_model"), item.get("attempt")): item
+        for item in historical
+    }
+    historical = list(historical_by_identity.values())
     requests: list[dict[str, Any]] = []
     for case, fixture in fixtures.items():
         family = fixture["media_type"]
@@ -109,14 +133,11 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
                 request_id = f"{case.lower()}-{label[-1].lower()}-{attempt}"
                 status = "PENDING"
                 failure = None
-                if model.startswith("gemini-") or model.startswith("veo-"):
-                    status = "BLOCKED"
-                    failure = "GEMINI_API_PAID_QUOTA_REQUIRED"
                 requests.append({
                     "request_id": request_id,
                     "case": case,
                     "anonymous_candidate": label,
-                    "provider": "google_flow" if model == "google_flow_web" else "google_gemini_api",
+                    "provider": "google_flow" if model == "google_flow_web" else "google_gemini_web",
                     "actual_model": model,
                     "attempt": attempt,
                     "pass": "FAIR_BASELINE",
@@ -140,20 +161,27 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
                "failure_class", "attempt_history", "review_frames")
     for request in requests:
         old = prior.get(request["request_id"])
-        if (old and old.get("actual_model") == request["actual_model"]
-                and old.get("prompt_sha256") == request["prompt_sha256"]):
+        if not (old and old.get("actual_model") == request["actual_model"]):
+            old = next((
+                item for item in existing.get("requests", [])
+                if item.get("case") == request["case"]
+                and item.get("attempt") == request["attempt"]
+                and item.get("actual_model") == request["actual_model"]
+            ), None)
+        if old and old.get("prompt_sha256") == request["prompt_sha256"]:
             for key in durable:
                 if key in old:
                     request[key] = old[key]
     manifest = {
         "schema_version": SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "benchmark_status": "BLOCKED_PROVIDER_ACCOUNT",
+        "benchmark_status": "GEMINI_WEB_BENCHMARK_PENDING",
         "selection_status": "NO_PRODUCTION_DEFAULT_CHANGE",
         "visual_policy": deepcopy(DEFAULT_VISUAL_POLICY),
         "fixtures": fixtures,
         "capability_evidence": capability_evidence,
-        "credential_probe": credential_probe,
+        "historical_gemini_api_probe": credential_probe,
+        "historical_provider_requests": historical,
         "requests": requests,
         "automated_review_is_advisory": True,
         "human_review_required": True,
@@ -162,6 +190,12 @@ def build_benchmark_workspace(root: Path, *, capability_evidence: list[dict[str,
     atomic_write_json(root / "provider_mapping.json", {
         "schema_version": "story-auto-provider-mapping/1.0.0", "mapping": mapping,
         "notice": "Reveal only after blind quality scoring. No production default has been selected.",
+    })
+    atomic_write_json(root / "production_eligibility.json", {
+        "schema_version": "story-auto-production-eligibility/1.0.0",
+        "notice": "Owner selected Flow for V1. Flow's visible provider mark is an accepted known limitation; no mark may be removed or covered.",
+        "production_provider": "GOOGLE_FLOW_WEB",
+        "candidates": [_eligibility(item) for item in requests],
     })
     return manifest, mapping
 
@@ -241,7 +275,7 @@ def write_review_package(root: Path, manifest: dict[str, Any]) -> None:
             for defect in DEFECTS
         )
         failure = f' · {request["failure_class"]}' if request.get("failure_class") else ""
-        state = html.escape(f'{request["status"]}{failure} · watermark: {request["visible_watermark"]}')
+        state = html.escape(f'{request["status"]}{failure}')
         cards.append(f'<article><h2>{html.escape(title)}</h2><p class="status">{state}</p>{media}<details><summary>Score 1–5</summary><div class="scores">{scores}</div><h3>Hard defects</h3><div class="defects">{defects}</div></details><label class="notes">Operator notes<textarea data-review-control data-request="{request_id}" data-field="notes"></textarea></label></article>')
     availability = (
         "All required outputs are present. Score every candidate before revealing the provider mapping."
@@ -259,4 +293,10 @@ for(const control of controls){{const saved=review[control.dataset.request]?.[co
 document.getElementById('export-review').addEventListener('click',()=>{{save();const blob=new Blob([JSON.stringify({{schema_version:'story-auto-blind-review/1.0.0',review}},null,2)],{{type:'application/json'}});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='provider_quality_scores.json';link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}});
 </script></body></html>'''
     (root / "review.html").write_text(document, encoding="utf-8")
+    atomic_write_json(root / "production_eligibility.json", {
+        "schema_version": "story-auto-production-eligibility/1.0.0",
+        "notice": "Owner selected Flow for V1. Flow's visible provider mark is an accepted known limitation; no mark may be removed or covered.",
+        "production_provider": "GOOGLE_FLOW_WEB",
+        "candidates": [_eligibility(item) for item in manifest["requests"]],
+    })
     atomic_write_json(root / "benchmark_manifest.json", manifest)

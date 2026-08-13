@@ -199,6 +199,13 @@ Gemini metadata and Flow thumbnail provenance. Publishing requests share the
 generation ledger but are excluded from render fingerprints, so publishing
 changes cannot invalidate video stages.
 
+For V1, the provider execution boundary resolves both image and video requests
+to `GOOGLE_FLOW_WEB`; upstream narration, continuity, shot/media planning,
+generation requests, and rendering remain provider-independent. Flow-bound
+prompt policy carries a soft bottom-right provider-mark safe area, and subtitle
+styles reserve extra right clearance. The visible Flow mark is retained as an
+accepted known limitation; no processing stage removes or covers it.
+
 ## UI boundary
 
 The CLI and loopback-only local UI invoke `application.OperatorService` and the

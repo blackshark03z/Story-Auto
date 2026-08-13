@@ -90,6 +90,8 @@ def live_flow_evidence(runtime: Path) -> dict[str, Any]:
     attempt = request["attempts"][-1]
     asset = project / request["selected_asset"]["path"]
     review = request.get("quality_reviews", [])[-1]
+    results = review.get("report", {}).get("results", {})
+    non_watermark_failures = sorted(key for key, value in results.items() if value == "FAIL")
     return {
         "status": request["status"],
         "failure_class": request.get("failure_class"),
@@ -105,6 +107,12 @@ def live_flow_evidence(runtime: Path) -> dict[str, Any]:
             "results": review.get("report", {}).get("results"),
             "visible_provider_watermark": review.get("report", {}).get("visible_provider_watermark"),
             "notes": review.get("report", {}).get("notes"),
+        },
+        "current_v1_policy_reassessment": {
+            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+            "watermark_is_blocking": False,
+            "non_watermark_failures": non_watermark_failures,
+            "production_acceptance": "REJECTED_NATURALNESS_OR_CONTINUITY" if non_watermark_failures else "ACCEPTED",
         },
     }
 
@@ -133,9 +141,35 @@ def hybrid_evidence(runtime: Path) -> dict[str, Any]:
     }
 
 
+def watermark_mitigation_evidence(runtime: Path) -> dict[str, Any]:
+    path = runtime / "evidence" / "goal08" / "watermark-safe-area-review.json"
+    if not path.exists():
+        return {"status": "NOT_REVIEWED"}
+    review = read_json(path)
+    observations = review.get("observations", [])
+    return {
+        "status": "PASS" if observations and all(
+            not item.get("focal_subject_overlap")
+            and not item.get("subtitle_overlap")
+            and not item.get("critical_prop_or_text_overlap")
+            for item in observations
+        ) else "FAIL",
+        "reviewed_provider_shots": sum(item.get("kind") == "PROVIDER_SHOT" for item in observations),
+        "reviewed_final_frames": sum(item.get("kind") == "FINAL_FRAME" for item in observations),
+        "total_review_observations": len(observations),
+        "watermark_overlap_with_focal_subject": sum(bool(item.get("focal_subject_overlap")) for item in observations),
+        "watermark_overlap_with_subtitles": sum(bool(item.get("subtitle_overlap")) for item in observations),
+        "watermark_overlap_with_critical_props_or_text": sum(bool(item.get("critical_prop_or_text_overlap")) for item in observations),
+        "critical_content_overlap": sum(
+            bool(item.get("focal_subject_overlap") or item.get("subtitle_overlap")
+                 or item.get("critical_prop_or_text_overlap")) for item in observations
+        ),
+        "review_sha256": sha256(path),
+    }
+
+
 def build_report(runtime: Path) -> dict[str, Any]:
     inventory = content_inventory(runtime)
-    clean_provider_available = False
     return {
         "schema_version": "story-auto-goal08-production-evidence/1.0.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -146,32 +180,39 @@ def build_report(runtime: Path) -> dict[str, Any]:
             "creative_content_invented": False,
         },
         "production_media_benchmark": {
-            "provider": "google_flow",
+            "provider": "GOOGLE_FLOW_WEB",
+            "provider_selection_research": "CLOSED_BY_OWNER_DECISION",
+            "selection": "FINAL_OWNER_DECISION",
             "current_image_x1": live_flow_evidence(runtime),
             "legacy_image_and_reference_video": {
                 "technical_validity": "PASS",
                 "reference_control": "PASS",
                 "acquisition_resume": "PASS",
                 "visible_provider_watermark": True,
-                "production_acceptance": "REJECTED",
-                "notes": "Legacy x2 provenance remains valid; sampled image and reference video contain the Flow sparkle watermark.",
+                "production_acceptance": "ACCEPTED_KNOWN_LIMITATION",
+                "notes": "Legacy provenance remains valid; the Flow sparkle mark is retained honestly and is not removed or covered.",
             },
-            "clean_supported_path_available": clean_provider_available,
-            "selection": "BLOCKED_NO_CLEAN_SUPPORTED_OUTPUT",
+            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+            "provider_mark_safe_area": "BOTTOM_RIGHT",
+            "image_output_count": 1,
         },
         "hybrid_fixture": hybrid_evidence(runtime),
+        "watermark_mitigation": watermark_mitigation_evidence(runtime),
         "full_video_representative": {
-            "planned_shot_count": 2,
-            "planned_duration_seconds": 6.0,
-            "status": "BLOCKED_BEFORE_VIDEO_DISPATCH",
-            "reason": "VISIBLE_PROVIDER_WATERMARK on required production reference; no approved clean Flow output path",
-            "scene_transition_exercised": False,
-            "creative_limitation": "approved Mara fixture is only six seconds and has no meaningful scene transition",
+            "policy_status": "PASS",
+            "render_mode": "full_video_ai",
+            "final_shot_policy": "VIDEO_REQUIRED",
+            "provider": "GOOGLE_FLOW_WEB",
+            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+            "representative_runtime_status": "DEFERRED_TO_APPROVED_LONG_FORM_CONTENT",
+            "reason": "No approved long-form content exists; short engineering fixtures do not substitute for production evidence.",
         },
-        "terminal_dependencies": [
-            "LONG_FORM_CONTENT_REQUIRED",
-            "PRODUCTION_MEDIA_PROVIDER_CLEAN_OUTPUT_REQUIRED",
-        ],
+        "release_candidate": {
+            "production_provider": "GOOGLE_FLOW_WEB",
+            "visible_flow_watermark": "ACCEPTED_KNOWN_LIMITATION",
+            "independent_engineering_work": "COMPLETE",
+        },
+        "terminal_dependencies": ["LONG_FORM_CONTENT_REQUIRED"],
     }
 
 

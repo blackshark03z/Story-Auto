@@ -9,7 +9,10 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_text
 
 
-SUBTITLE_VERSION = "story-auto-subtitles/1.0.0"
+SUBTITLE_VERSION = "story-auto-subtitles/1.1.0"
+FLOW_MARK_SAFE_AREA = "BOTTOM_RIGHT"
+DEFAULT_MARGIN_LEFT = 90
+DEFAULT_MARGIN_RIGHT = 260
 
 
 class SubtitleError(RuntimeError):
@@ -54,7 +57,9 @@ def validate_subtitle_timing(alignment: dict[str, Any]) -> None:
 
 
 def build_subtitles(alignment: dict[str, Any], srt_path: Path, ass_path: Path, *, width: int = 44,
-                    font_name: str = "Arial", font_size: int = 48) -> None:
+                    font_name: str = "Arial", font_size: int = 48,
+                    margin_left: int = DEFAULT_MARGIN_LEFT,
+                    margin_right: int = DEFAULT_MARGIN_RIGHT) -> None:
     validate_subtitle_timing(alignment)
     srt: list[str] = []
     dialogues: list[str] = []
@@ -71,7 +76,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,90,90,54,1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00101010,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,{margin_left},{margin_right},54,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

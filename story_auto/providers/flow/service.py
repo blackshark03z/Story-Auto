@@ -98,7 +98,7 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         if not entry or entry.get("status") not in {"SUCCEEDED", "QC_PENDING"} or not isinstance(entry.get("selected_asset"), dict):
             raise FlowError("MEDIA_QC_INVALID")
         try:
-            accepted = validate_production_qc(report)
+            accepted = validate_production_qc(report, provider=entry.get("provider"))
         except MediaQualityError as error:
             entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class, "report": report})
             entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": _now()})

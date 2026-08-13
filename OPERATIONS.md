@@ -69,24 +69,26 @@ Render recovery expectations are executable behavior:
 
 Goal 08 release evidence distinguishes technical fixtures from production
 acceptance. Run `python tools/goal08_production.py` after local reviews to rebuild
-the sanitized inventory. A `VISIBLE_PROVIDER_WATERMARK` QC failure must remain
-rejected even when the image/video validates technically. Dependent generation
-must stay blocked; do not approve, crop, cover, erase, or inpaint the mark.
+the sanitized inventory. Story Auto V1 uses `GOOGLE_FLOW_WEB` for both images and
+videos. Its visible sparkle mark is an `ACCEPTED_KNOWN_LIMITATION`, not a QC or
+release failure. Preserve it honestly: never remove, erase, inpaint, mask, cover,
+or crop specifically to hide it.
 
-## Provider quality benchmark
+Flow-bound prompts use a soft `BOTTOM_RIGHT` provider-mark safe area. Keep faces,
+eyes, critical hand actions, important props/text, and focal details out of that
+region where practical without making the shot unnatural. Subtitles remain a
+centered lower-third with extra right-side clearance; subtitle boxes must not
+cover the mark. Naturalness, anatomy, identity, continuity, material, and motion
+defects remain normal QC failures. Every Flow image request must resolve and
+verify `output_count=1` before dispatch.
 
-Run `python tools/goal08_benchmark.py --valid-quota-denials <count>
---invalid-credentials <count>` to rebuild the sanitized blind-review workspace
-after capability/account probing. `review.html` intentionally hides the reveal
-mapping. `provider_mapping.json` must remain unopened until operator scoring is
-complete.
+## Provider quality benchmark (closed)
 
-The current Gemini API projects have zero generative-media quota. Enabling a
-paid Gemini API project/key is a human account action. Once available, resume
-the existing request identities through `GeminiMediaClient` and
-`execute_media_request`; successful local selections skip, while a persisted
-Veo operation resumes polling without resubmission. Never copy API keys, job
-download URLs, or browser/session material into the review package.
+Provider-selection research is `CLOSED_BY_OWNER_DECISION`. Do not run unfinished
+Gemini API or Gemini Web cases. Preserve the API 429 attempts, partial Web
+outputs, completed Flow baseline, ledger, mapping, and review artifacts as
+provenance. Rebuild only the closure record with
+`python tools/goal08_benchmark.py --close-by-owner-decision`.
 
 ## Disk preflight
 

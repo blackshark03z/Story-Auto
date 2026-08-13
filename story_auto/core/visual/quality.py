@@ -21,7 +21,7 @@ class MediaQualityError(ValueError):
         super().__init__(failure_class + (f": {detail}" if detail else ""))
 
 
-def validate_production_qc(report: Any) -> dict[str, Any]:
+def validate_production_qc(report: Any, *, provider: str | None = None) -> dict[str, Any]:
     if not isinstance(report, dict):
         raise MediaQualityError("MEDIA_QC_INVALID")
     results = report.get("results")
@@ -29,7 +29,11 @@ def validate_production_qc(report: Any) -> dict[str, Any]:
         raise MediaQualityError("MEDIA_QC_INVALID", "all naturalness fields are required")
     if any(value not in _RESULTS for value in results.values()):
         raise MediaQualityError("MEDIA_QC_INVALID")
-    if report.get("visible_provider_watermark") is not False:
+    raw_watermark = report.get("visible_provider_watermark")
+    visible_watermark = raw_watermark is True
+    if not isinstance(raw_watermark, bool):
+        raise MediaQualityError("MEDIA_QC_INVALID", "visible_provider_watermark must be boolean")
+    if visible_watermark and provider != "google_flow":
         raise MediaQualityError("VISIBLE_PROVIDER_WATERMARK")
     failures = [field for field, value in results.items() if value == "FAIL"]
     if failures:
@@ -39,7 +43,11 @@ def validate_production_qc(report: Any) -> dict[str, Any]:
         raise MediaQualityError("MEDIA_QC_INVALID", "reviewer is required")
     return {
         "results": dict(results),
-        "visible_provider_watermark": False,
+        "visible_provider_watermark": visible_watermark,
+        "watermark_disposition": (
+            "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION" if visible_watermark
+            else "NO_VISIBLE_PROVIDER_WATERMARK"
+        ),
         "reviewer": reviewer.strip(),
         "notes": str(report.get("notes", "")).strip(),
     }

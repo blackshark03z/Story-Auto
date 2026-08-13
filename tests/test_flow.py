@@ -181,9 +181,11 @@ class FlowTests(unittest.TestCase):
             entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((entry["status"],len(entry["attempts"]),entry["selected_asset"]["production_qc"]),("SUCCEEDED",1,"APPROVED"))
             report["visible_provider_watermark"]=True
-            with self.assertRaises(FlowError) as caught: review_production_asset(runtime.root,cfg.project_id,"ref",report)
-            self.assertEqual(caught.exception.failure_class,"VISIBLE_PROVIDER_WATERMARK")
-            self.assertEqual(len(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["attempts"]),1)
+            review_production_asset(runtime.root,cfg.project_id,"ref",report)
+            reviewed=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(reviewed["quality_reviews"][-1]["report"]["watermark_disposition"],
+                             "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION")
+            self.assertEqual(len(reviewed["attempts"]),1)
     def test_pre_dispatch_failure_can_only_be_reopened_with_evidence(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)

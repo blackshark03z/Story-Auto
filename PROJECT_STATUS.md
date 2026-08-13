@@ -99,7 +99,8 @@ not yet accepted.
 - Structured `NATURAL_SOFT_REALISM` policy now compiles image intent separately
   from motion-only reference-video prompts; generic AI-polish defaults are not injected.
 - Production media uses `IMAGE output_count=1`, pauses at naturalness QC, and
-  rejects visible provider watermarks without deleting rejected attempts.
+  accepts the visible Flow mark as a documented V1 limitation without deleting
+  or altering provider output.
 - `full_video_ai` now partitions long shots into deterministic video request
   parts, supports explicit repeated-kind production batches, and renders only
   complete all-video coverage through the common compositor.
@@ -122,17 +123,16 @@ not yet accepted.
 
 Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and `contracts/schemas/`. Secrets are never stored in project artifacts.
 
-## Explicitly not accepted yet
+## Goal 08 owner decision and remaining dependency
 
-- A production-clean Flow output path. A current direct x1 image acquisition
-  was technically valid and resumable but production QC rejected the embedded
-  bottom-right Flow sparkle watermark. The existing reference-video sample has
-  the same visible mark; removal, covering, and provenance-disguising crops are
-  prohibited.
-- Live multi-shot full-video representative production and visual acceptance.
-  The two-shot Mara plan is approved, but required reference QC correctly blocks
-  video dispatch after the watermark rejection; it is also only six seconds and
-  has no meaningful scene transition.
+- Production media routing is final: `GOOGLE_FLOW_WEB` for images and videos.
+  Provider-selection research is `CLOSED_BY_OWNER_DECISION`; completed Flow,
+  Gemini API, and Gemini Web evidence remains append-only provenance.
+- The Flow sparkle mark is `ACCEPTED_KNOWN_LIMITATION`. It is never removed,
+  covered, masked, inpainted, or cropped away. Bottom-right prompt composition
+  and right-cleared lower-third subtitles mitigate collision without distorting
+  shots. Representative review found zero focal-subject, subtitle, or critical
+  prop/text overlaps across 8 provider shots and 5 final-render frames.
 - A representative approved long-form creative production. Exhaustive runtime
   inventory found only short fixtures and the repetitive 71.067-second technical
   fixture, so the durable terminal dependency is `LONG_FORM_CONTENT_REQUIRED`.
@@ -140,9 +140,8 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
 ## Goal 08 production evidence
 
 - The 71.067-second hybrid fixture rerendered under release code and passed
-  technical H.264/AAC validation. Five visual samples (hook, early, middle,
-  continuity-sensitive, ending) all showed the same scene/repeated line and a
-  visible provider watermark, so it remains rejected as production evidence.
+  technical H.264/AAC validation. It remains an engineering fixture because its
+  scene and narration repeat, not because of the accepted Flow mark.
 - Unchanged render resume skipped render plan, all ten normalized clips,
   subtitles, audio plan, and final composition without rewriting `final.mp4`.
 - Removing only normalized `sh_0005` rebuilt exactly that clip and the final
@@ -151,25 +150,22 @@ Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and
   `runtime/evidence/goal08/goal08-production-summary.json` and never submits a
   provider or approves creative work.
 
-## Goal 08 provider-quality corrective
+## Goal 08 provider-quality provenance
 
 - Live capability discovery found the current official model identities:
   `gemini-3.1-flash-image` (Nano Banana 2), `gemini-3-pro-image` (Nano Banana
   Pro), `gemini-omni-flash-preview`, and `veo-3.1-generate-preview`.
-- The Gemini media adapter now supports x1 image generation, reference image
-  input, Omni image/reference-to-video, Veo reference submission, durable job
-  polling, atomic acquisition, validation, append-only attempts, and idempotent
-  resume. No production default changed.
+- The Gemini media and Gemini Web adapters and their partial evidence remain as
+  historical benchmark provenance. Neither is a production route in V1.
 - Actual execution is account-blocked: all 18 valid credentials in the isolated
   pool report zero Nano Banana 2 quota; three legacy pool entries are invalid or
   unauthenticated. Bounded Nano Banana Pro, Omni, and corrected Veo reference
   probes also reach the API but return zero-quota rate limits. No API media job
   or result was accepted.
-- The partial anonymous review workspace is at
+- The closed anonymous review workspace is at
   `runtime/evidence/goal08/provider_benchmark/`. It contains the exact semantic
   fixtures, randomized reveal mapping, rubric, contact sheets, Flow baseline,
   and unavailable API attempt identities. It is not a completed benchmark and
   cannot support a provider recommendation.
-- Current terminal dependency is `GEMINI_API_PAID_QUOTA_REQUIRED`. After paid
-  quota is enabled, resume the same benchmark identities; do not create a new
-  Goal and do not select production routing before owner review.
+- The only terminal dependency is `LONG_FORM_CONTENT_REQUIRED`. No approved
+  canonical content at least 300 seconds long exists; Story Auto will not invent it.

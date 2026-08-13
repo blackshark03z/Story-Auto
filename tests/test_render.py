@@ -94,6 +94,8 @@ class RenderMediaTests(unittest.TestCase):
         ]}
         srt, ass = self.root / "subtitles.srt", self.root / "subtitles.ass"
         build_subtitles(alignment, srt, ass, width=20, font_size=24)
+        style_line=next(line for line in ass.read_text(encoding="utf-8").splitlines() if line.startswith("Style: Default"))
+        self.assertIn(",90,260,54,1",style_line)
         narration = self.audio("narration.wav", final_duration, 700)
         bgm = self.audio("bgm.wav", .3, 220)
         output = self.root / "final.mp4"
