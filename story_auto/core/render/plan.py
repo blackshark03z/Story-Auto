@@ -91,6 +91,10 @@ def resolve_render_plan(
 
     for shot in shot_plan.get("shots", []):
         shot_id = shot["shot_id"]
+        if settings.get("visual_narration_alignment", {}).get("fail_on_unplanned_reuse"):
+            max_beat = float(settings.get("visual_narration_alignment", {}).get("max_visual_beat_seconds", 120.0))
+            if float(shot.get("end", 0)) - float(shot.get("start", 0)) > max_beat:
+                raise RenderPlanError("VISUAL_BEAT_UNDERSEGMENTED", shot_id)
         media = media_by_shot.get(shot_id)
         if not media:
             raise RenderPlanError("REQUIRED_MEDIA_UNRESOLVED", shot_id)
