@@ -108,6 +108,12 @@ class FlowTests(unittest.TestCase):
             second=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(second["new_submissions"],0); self.assertEqual(len(calls),2)
             manifest=read_json(paths.artifact_path("output/generation_manifest.json")); selected=paths.artifact_path(manifest["requests"][0]["selected_asset"]["path"]); selected.unlink()
             third=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(third["new_submissions"],1)
+
+    def test_dependent_generation_receives_absolute_reference_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,calls=self._executor()
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True)
+            self.assertEqual(Path(calls[1][1][0]), paths.artifact_path("assets/image/ref/attempt_001.png"))
     def test_ambiguous_timeout_never_resubmits(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]

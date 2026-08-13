@@ -109,7 +109,10 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if attempt_number > maximum: entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"; continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
-            refs = [entries[d].get("selected_asset", {}).get("path") for d in request.get("depends_on", [])]
+            # Provider adapters receive concrete local files, never manifest-
+            # relative paths.  In particular CDP's file-input API silently
+            # cannot attach a path relative to the process working directory.
+            refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
             try:
                 result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
