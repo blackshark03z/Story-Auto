@@ -12,6 +12,7 @@ from .paths import ProjectPaths, RuntimeLayout
 
 PROJECT_SCHEMA_VERSION = "story-auto-project/1.0.0"
 RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai"})
+TTS_PROVIDERS = frozenset({"elevenlabs", "typecast", "kokoro_local"})
 
 
 class ProjectValidationError(ValueError):
@@ -37,8 +38,8 @@ class ProjectConfig:
             raise ProjectValidationError("settings must be a JSON object")
         tts = self.settings.get("tts")
         if tts is not None:
-            if not isinstance(tts, dict) or tts.get("provider") not in {"elevenlabs", "typecast"}:
-                raise ProjectValidationError("settings.tts.provider must be elevenlabs or typecast")
+            if not isinstance(tts, dict) or tts.get("provider") not in TTS_PROVIDERS:
+                raise ProjectValidationError("settings.tts.provider must be elevenlabs, typecast, or kokoro_local")
             if tts.get("allow_cross_provider_fallback", False) is not False:
                 raise ProjectValidationError("settings.tts.allow_cross_provider_fallback must be false")
             provider = tts["provider"]

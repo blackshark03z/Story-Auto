@@ -13,7 +13,7 @@ from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
-from story_auto.core.render import resolve_render_plan, run_render_stages
+from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.pipeline import run_audio_stages, run_content_stage
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, preflight,
@@ -182,7 +182,7 @@ class OperatorService:
 
     def build_render_plan(self, project_id: str) -> dict[str, Any]:
         paths,config=self._project(project_id); load=lambda name:read_json(paths.artifact_path(f"output/{name}.json"))
-        settings=config.settings.get("render",{})
+        settings,_=resolve_render_settings(config)
         plan=resolve_render_plan(project_id=project_id,project_root=paths.root,render_mode=config.render_mode,alignment=load("alignment"),shot_plan=load("shot_plan"),media_plan=load("media_plan"),generation_requests=load("generation_requests"),generation_manifest=load("generation_manifest"),settings=settings)
         atomic_write_json(paths.artifact_path("output/render_plan.json"),plan); return plan
 

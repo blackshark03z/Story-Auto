@@ -27,7 +27,7 @@ FINAL_MANIFEST_VERSION = "story-auto-final-manifest/1.0.0"
 AUDIO_PLAN_VERSION = "story-auto-audio-plan/1.0.0"
 
 
-def _render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
+def resolve_render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
     value = config.settings.get("render", {})
     if not isinstance(value, dict):
         raise ValueError("settings.render must be an object")
@@ -86,7 +86,7 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
     storage=config.settings.get("storage",{})
     if not isinstance(storage,dict): raise ValueError("settings.storage must be an object")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
-    settings, target = _render_settings(config)
+    settings, target = resolve_render_settings(config)
     final_video_crf = int(config.settings.get("render", {}).get("video_crf", 18))
     alignment = _load_required(paths, "alignment")
     shot_plan = _load_required(paths, "shot_plan")

@@ -20,7 +20,9 @@ Owns user configuration, not mutable pipeline state.
 Key domains:
 
 - render mode;
-- TTS provider and provider-specific settings;
+- explicit TTS provider (`elevenlabs`, `typecast`, or `kokoro_local`) and
+  provider-specific settings; Kokoro settings include its runtime, voice,
+  language, speed, device, and chunking policy without cloud credentials;
 - Gemini model configuration;
 - Flow provider selection/config references;
 - render dimensions/fps;

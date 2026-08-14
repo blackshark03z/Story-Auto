@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from story_auto.providers.llm.gemini import GeminiProviderError, LLMResponse
-from story_auto.providers.llm.router import GeminiReasoningRouter, RouterError
+from story_auto.providers.llm.gemini import GeminiProviderError, LLMRequest, LLMResponse
+from story_auto.providers.llm.router import GeminiReasoningRouter, RoutedGeminiProvider, RouterError
 
 
 SCHEMA = {"type": "object", "required": ["ok", "confidence"], "properties": {
@@ -61,6 +61,17 @@ def test_unknown_project_credentials_get_bounded_key_fallback():
         value, calls = router(tmp, behavior, credentials)
         result = invoke(value)
         assert (result.credential_alias, len(calls)) == ("key-02", 2)
+
+
+def test_unknown_project_pool_is_bounded_at_six_distinct_keys_per_model():
+    with tempfile.TemporaryDirectory() as tmp:
+        credentials=[(f"key-{i}",f"alias-{i}",f"project-unknown-key-{i:02d}") for i in range(1,8)]
+        def behavior(key, _model):
+            return {"ok":True,"confidence":"HIGH"} if key == "key-6" else GeminiProviderError("GEMINI_RATE_LIMIT")
+        value,calls=router(tmp,behavior,credentials)
+        result=invoke(value)
+        assert result.credential_alias == "alias-6"
+        assert len(calls) == 6
 
 
 def test_invalid_unknown_key_does_not_consume_project_probe_limit():
@@ -128,3 +139,15 @@ def test_credential_health_is_scoped_by_project_and_model():
         value, _ = router(tmp, lambda *_: {"ok": True, "confidence": "HIGH"})
         value.health[("project-a", "gemini-3.6-flash")] = 1300
         assert invoke(value).model == "gemini-3.5-flash"
+
+
+def test_routed_provider_preserves_planning_contract_and_records_actual_model():
+    with tempfile.TemporaryDirectory() as tmp:
+        value, calls = router(tmp, lambda _key, model: {"ok": True, "confidence": "HIGH"})
+        provider = RoutedGeminiProvider(value)
+        response = provider.generate_structured(LLMRequest("gemini-3.5-flash", "structured", SCHEMA,
+            {"max_attempts": 1}, "request-1", "story_timeline"))
+        assert response.request_id == "request-1"
+        assert response.model == "gemini-3.6-flash"
+        assert response.usage["credential_alias"] == "key-01"
+        assert calls[0][1] == "gemini-3.6-flash"

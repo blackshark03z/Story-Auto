@@ -114,7 +114,7 @@ core/application request
   ↓
 provider interface
   ↓
-providers/tts/{elevenlabs,typecast}
+providers/tts/{elevenlabs,typecast,kokoro_local}
 providers/llm/gemini
 providers/flow/*
 ```
@@ -139,12 +139,17 @@ It does **not** decide story beats, media policy, continuity, or final editorial
 ## TTS and alignment abstraction
 
 ```text
-ElevenLabs → audio → forced alignment ─┐
-                                      ├→ canonical alignment.json
-Typecast → audio + timestamps → normalize ┘
+ElevenLabs → audio → forced alignment ───────┐
+Typecast → audio + timestamps → normalize ──┼→ canonical alignment.json
+Kokoro Local → WAV + model token timing ────┘
 ```
 
 No silent cross-provider fallback. Downstream planning does not depend on which TTS provider produced the canonical alignment.
+
+The Kokoro adapter owns discovery of its configured local installation, cached
+model/voice identity, CPU worker invocation, resumable chunk artifacts, audio
+validation, and sanitized failure classification. Core audio stages see only
+the existing `TTSRequest`/`TTSResult` and canonical alignment boundaries.
 
 ## LLM abstraction
 

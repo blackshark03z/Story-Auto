@@ -29,7 +29,8 @@
   "providers": {
     "tts": [
       "elevenlabs",
-      "typecast"
+      "typecast",
+      "kokoro_local"
     ],
     "tts_cross_provider_fallback_default": false,
     "llm": {

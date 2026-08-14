@@ -10,6 +10,7 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import narration_hash, parse_content_markdown
+from story_auto.core.gemini_qc import MOTION_PLAN_VERSION, compile_flow_motion_prompt
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import (
@@ -18,16 +19,18 @@ from story_auto.core.visual import (
     compile_video_prompt,
     validate_visual_policy,
 )
-from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMRequest
+from story_auto.providers.llm import (GeminiProvider, GeminiProviderError,
+                                      GeminiReasoningRouter, LLMRequest,
+                                      RoutedGeminiProvider)
 
 TIMELINE_SCHEMA_VERSION = "story-auto-story-timeline/1.0.0"
 CONTINUITY_SCHEMA_VERSION = "story-auto-continuity-bible/1.0.0"
 REVIEW_SCHEMA_VERSION = "story-auto-review-state/1.0.0"
-TIMELINE_PROMPT_VERSION = "story-auto-timeline-prompt/1.0.0"
+TIMELINE_PROMPT_VERSION = "story-auto-timeline-prompt/1.1.0"
 CONTINUITY_PROMPT_VERSION = "story-auto-continuity-prompt/1.0.0"
-SHOT_PROMPT_VERSION = "story-auto-shot-prompt/1.0.0"
+SHOT_PROMPT_VERSION = "story-auto-shot-prompt/1.1.0"
 MEDIA_POLICY_VERSION = "story-auto-media-policy/1.0.0"
-GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.0.0"
+GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.7.0"
 SHOT_SCHEMA_VERSION = "story-auto-shot-plan/1.0.0"
 MEDIA_SCHEMA_VERSION = "story-auto-media-plan/1.0.0"
 REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
@@ -133,6 +136,25 @@ def _entity_maps(continuity: dict[str, Any]) -> tuple[dict[str, str], set[str]]:
             if isinstance(entity, dict): kinds[entity.get("entity_id")] = kind[:-1]; ids.add(entity.get("entity_id"))
     return kinds, ids
 
+def _visual_beat_intervals(start: float, end: float, *, hook_seconds: float,
+                           hook_beat_seconds: float = 8.0,
+                           body_beat_seconds: float = 30.0) -> list[tuple[float, float]]:
+    """Return deterministic visual-beat bounds, preserving the hook boundary."""
+    if end <= start: raise PlanningError("SHOT_TIMING_INVALID")
+    intervals: list[tuple[float, float]] = []
+    cursor = start
+    for boundary, maximum in ((min(end, hook_seconds), hook_beat_seconds),
+                              (end, body_beat_seconds)):
+        if boundary <= cursor: continue
+        count = max(1, math.ceil((boundary - cursor) / maximum))
+        step = (boundary - cursor) / count
+        for offset in range(count):
+            beat_start = cursor + offset * step
+            beat_end = boundary if offset == count - 1 else cursor + (offset + 1) * step
+            intervals.append((beat_start, beat_end))
+        cursor = boundary
+    return intervals
+
 def _resolve_shots(project_id: str, proposed: dict[str, Any], timeline: dict[str, Any], continuity: dict[str, Any], provenance: dict[str, Any]) -> dict[str, Any]:
     candidates = proposed.get("shots") if isinstance(proposed, dict) else None
     if not isinstance(candidates, list) or not candidates: raise PlanningError("SHOT_PLAN_INVALID", "shots required")
@@ -152,9 +174,14 @@ def _resolve_shots(project_id: str, proposed: dict[str, Any], timeline: dict[str
         scene_candidates = grouped[scene["scene_id"]]
         if not scene_candidates: continue
         start, end = float(scene["start"]), float(scene["end"])
-        step = (end - start) / len(scene_candidates)
-        for offset, raw in enumerate(scene_candidates):
-            normalized.append({**raw, "start": start + offset * step, "end": start + (offset + 1) * step})
+        canonical = [(raw.get("_canonical_start"), raw.get("_canonical_end")) for raw in scene_candidates]
+        if all(a is not None and b is not None for a, b in canonical):
+            for raw, (beat_start, beat_end) in zip(scene_candidates, canonical):
+                normalized.append({**raw, "start": float(beat_start), "end": float(beat_end)})
+        else:
+            step = (end - start) / len(scene_candidates)
+            for offset, raw in enumerate(scene_candidates):
+                normalized.append({**raw, "start": start + offset * step, "end": start + (offset + 1) * step})
     if not normalized: raise PlanningError("SHOT_PLAN_INVALID", "shots required")
     for index, raw in enumerate(normalized, 1):
         if not isinstance(raw, dict) or raw.get("scene_id") not in scene_map: raise PlanningError("SHOT_SCENE_REFERENCE_INVALID")
@@ -236,7 +263,12 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
     for entity_id in sorted(used):
         purpose = f"{kinds[entity_id].upper()}_REFERENCE"; seed = {"purpose":purpose,"entity_id":entity_id,"continuity_entity":entity_by_id[entity_id],"prompt_version":GENERATION_PROMPT_VERSION}; request_id = _request_id(seed); reference_ids[entity_id] = request_id
         entity = entity_by_id[entity_id]
-        intent = f"Canonical continuity reference for {entity['name']}. {entity.get('visual_design', {})}"
+        details = []
+        if entity.get("facts"): details.append(f"Supported facts: {entity['facts']}")
+        if entity.get("constraints"): details.append(f"Must keep: {entity['constraints']}")
+        if entity.get("visual_design"): details.append(f"Visual design choices: {entity['visual_design']}")
+        intent = f"Canonical fictional {kinds[entity_id]} {entity['name']} reference"
+        if details: intent += ". " + ". ".join(details)
         requests.append({"request_id":request_id,"purpose":"REFERENCE","reference_type":purpose,"entity_id":entity_id,"media_type":"IMAGE","provider":"google_flow","prompt":compile_image_prompt(intent, visual_policy),"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":[],"depends_on":[],"target_duration":None,"aspect_ratio":settings["aspect_ratio"],"priority":0,"fingerprint":_hash_text(repr(seed))})
     media_by_shot = {m["shot_id"]:m for m in media_plan["shots"]}
     for shot in shot_plan["shots"]:
@@ -258,10 +290,60 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
                 prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
             requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed))})
             part_start = part_end
-    requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r["request_id"]))
+    requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
     return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":GENERATION_PROMPT_VERSION,"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED"}
+
+def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str, Any],
+                       motion_plan: dict[str, Any]) -> dict[str, Any]:
+    """Compile Gemini motion analyses into atomic, deterministic VIDEO parts."""
+    records = {item.get("request_id"): item for item in motion_plan.get("records", []) if isinstance(item, dict)}
+    shots = {item["shot_id"]: item for item in shot_plan.get("shots", [])}
+    rewritten: list[dict[str, Any]] = []
+    for request in generation_requests.get("requests", []):
+        if request.get("media_type") != "VIDEO":
+            rewritten.append(dict(request)); continue
+        record = records.get(request.get("request_id")); analysis = record.get("analysis", {}) if record else {}
+        clips = analysis.get("atomic_clips", [])
+        if not clips: raise PlanningError("MOTION_PLAN_MISSING", str(request.get("request_id")))
+        shot = shots.get(request.get("shot_id"))
+        if not shot: raise PlanningError("MOTION_SHOT_REFERENCE_INVALID")
+        start, end = float(request["target_start"]), float(request["target_end"])
+        step = (end - start) / len(clips)
+        for index, clip in enumerate(clips):
+            part = {key:value for key,value in request.items() if key not in {"request_id","fingerprint","part_index","part_count","target_start","target_end","target_duration","prompt"}}
+            part_start = start + index * step; part_end = end if index == len(clips)-1 else start + (index+1) * step
+            part.update({"target_start":part_start,"target_end":part_end,"target_duration":part_end-part_start,
+                "prompt":compile_flow_motion_prompt(subject=shot["subject"], location=shot.get("location_id") or "story location",
+                    clip=clip, duration=part_end-part_start),
+                "motion_risk_analysis":{"schema_version":MOTION_PLAN_VERSION,"source_request_id":request["request_id"],
+                    "physical_complexity":analysis.get("physical_complexity"),"anatomy_risk":analysis.get("anatomy_risk"),
+                    "looping_risk":analysis.get("looping_risk"),"interaction_objects":analysis.get("interaction_objects",[]),
+                    "hand_object_contact":analysis.get("hand_object_contact"),"atomic_clip":clip}})
+            rewritten.append(part)
+    by_shot: dict[str, list[dict[str, Any]]] = {}
+    for request in rewritten:
+        if request.get("purpose") == "SHOT": by_shot.setdefault(request["shot_id"], []).append(request)
+    for parts in by_shot.values():
+        parts.sort(key=lambda item: float(item["target_start"]))
+        for index, request in enumerate(parts, 1):
+            request["part_index"], request["part_count"] = index, len(parts)
+            seed = {key:value for key,value in request.items() if key not in {"request_id","fingerprint"}}
+            request["request_id"] = _request_id(seed); request["fingerprint"] = _hash_text(repr(sorted(seed.items())))
+    rewritten.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
+    result = dict(generation_requests); result["requests"] = rewritten
+    estimate = dict(result.get("guardrail_estimate", {}))
+    estimate.update({"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in rewritten),
+        "shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in rewritten),
+        "required_video_requests":sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in rewritten),
+        "preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in rewritten),
+        "total_generation_requests":len(rewritten)})
+    estimate["worst_case_attempt_count"] = len(rewritten) * int(estimate.get("max_attempts_per_request", 1))
+    estimate["requires_later_execution_confirmation"] = True
+    result["guardrail_estimate"] = estimate
+    result["motion_plan_version"] = MOTION_PLAN_VERSION
+    return result
 
 def validate_generation_requests(value: Any, media_plan: dict[str, Any], continuity: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != REQUEST_SCHEMA_VERSION or not isinstance(value.get("requests"), list): raise PlanningError("GENERATION_REQUESTS_INVALID")
@@ -288,8 +370,8 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
 
 def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> tuple[str, str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id); model, llm_settings = _settings(config); media_settings = _media_settings(config)
-    timeline_path, continuity_path = paths.artifact_path("output/story_timeline.json"), paths.artifact_path("output/continuity_bible.json"); timeline, continuity = read_json(timeline_path), read_json(continuity_path); validate_timeline(timeline, read_json(paths.artifact_path("output/alignment.json"))); validate_continuity(continuity, timeline)
-    timeline_sha, continuity_sha = sha256_file(timeline_path), sha256_file(continuity_path); active = provider or GeminiProvider()
+    timeline_path, continuity_path = paths.artifact_path("output/story_timeline.json"), paths.artifact_path("output/continuity_bible.json"); timeline, continuity = read_json(timeline_path), read_json(continuity_path); alignment = read_json(paths.artifact_path("output/alignment.json")); validate_timeline(timeline, alignment); validate_continuity(continuity, timeline)
+    timeline_sha, continuity_sha = sha256_file(timeline_path), sha256_file(continuity_path); active = provider or _default_provider(paths)
     with ProjectLock(paths.runtime, project_id):
         checkpoints = CheckpointStore(paths); shot_path = paths.artifact_path("output/shot_plan.json"); shot_fp = fingerprint(stage_name="shot_plan", producer_version=SHOT_PROMPT_VERSION, artifact_schema_version=SHOT_SCHEMA_VERSION, direct_inputs={"timeline_sha256":timeline_sha,"continuity_sha256":continuity_sha,"model":model}, settings={k:v for k,v in llm_settings.items() if k != "api_key"}); decision = checkpoints.decide("shot_plan", shot_fp)
         if decision.action == "SKIP":
@@ -304,12 +386,23 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             proposed = []
             last_response = None
             if isinstance(active, GeminiProvider):
+                segments = {item["segment_id"]: item for item in alignment["segments"]}
                 for scene in timeline["scenes"]:
-                    prompt = f"{SHOT_PROMPT_VERSION}\\nReturn exactly one shot in the required JSON schema for this scene. Use only continuity IDs. Keep strings concise. Timing fields may be placeholders; Story Auto normalizes them to the authoritative scene bounds.\\nScene:{scene}\\nContinuity:{continuity}"
+                    intervals = _visual_beat_intervals(float(scene["start"]), float(scene["end"]),
+                        hook_seconds=media_settings["hook_seconds"])
+                    narration = [segments[item]["text"] for item in scene["narration_segment_ids"]]
+                    prompt = (f"{SHOT_PROMPT_VERSION}\\nReturn exactly {len(intervals)} ordered shots in the required JSON schema, "
+                        "one for each authoritative visual-beat interval. Every adjacent beat must reveal distinct story information; "
+                        "a camera-angle change alone is not new information. Use one meaningful visible physical action per shot. "
+                        "Do not chain pickup, doors, bags, hand-object contact, or multi-person actions; express anticipation or reaction "
+                        "as separate beats. Natural stillness is valid. Use only continuity IDs. Keep strings concise. Timing fields are "
+                        f"placeholders.\\nAuthoritative intervals:{intervals}\\nScene:{scene}\\nNarration:{narration}\\nContinuity:{continuity}")
                     last_response = active.generate_structured(LLMRequest(model, prompt, _shot_schema(), llm_settings, _hash_text(shot_fp + scene["scene_id"])[:24], "shot_plan"))
                     values = last_response.value.get("shots") if isinstance(last_response.value, dict) else None
-                    if not isinstance(values, list) or len(values) != 1:
+                    if not isinstance(values, list) or len(values) != len(intervals):
                         raise GeminiProviderError("GEMINI_STRUCTURED_OUTPUT_INVALID")
+                    for value, (beat_start, beat_end) in zip(values, intervals):
+                        value["_canonical_start"], value["_canonical_end"] = beat_start, beat_end
                     proposed.extend(values)
             else:
                 prompt = f"{SHOT_PROMPT_VERSION}\\nProduce coherent visual shots wholly within scene time bounds. Cover every scene exactly with ordered shots. Use only continuity IDs.\\nTimeline:{timeline['scenes']}\\nContinuity:{continuity}"
@@ -344,14 +437,19 @@ def approve_shot_plan(runtime_root: Path | str, project_id: str) -> None:
 
 def _provenance(model: str, stage: str, prompt_version: str, inputs: dict[str, str], response) -> dict[str, Any]:
     schemas = {"story_timeline": TIMELINE_SCHEMA_VERSION, "continuity": CONTINUITY_SCHEMA_VERSION, "shot_plan": SHOT_SCHEMA_VERSION}
-    return {"provider":"gemini", "model":model, "planning_stage":stage, "prompt_version":prompt_version, "schema_version":schemas[stage], "direct_input_hashes":inputs, "request_id":response.request_id, "attempts":response.attempts, "latency_ms":response.latency_ms, "usage":response.usage}
+    return {"provider":"gemini", "model":response.model, "configured_model":model, "planning_stage":stage, "prompt_version":prompt_version, "schema_version":schemas[stage], "direct_input_hashes":inputs, "request_id":response.request_id, "attempts":response.attempts, "latency_ms":response.latency_ms, "usage":response.usage}
+
+def _default_provider(paths) -> RoutedGeminiProvider:
+    return RoutedGeminiProvider(GeminiReasoningRouter(
+        cache_dir=paths.runtime.cache / "gemini_reasoning",
+        ledger_path=paths.runtime.evidence / "gemini_reasoning_ledger.json"))
 
 def run_planning_stages(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> tuple[str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id); model, settings = _settings(config)
     narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration; narration_sha = narration_hash(narration)
     alignment_path = paths.artifact_path("output/alignment.json"); alignment = read_json(alignment_path); alignment_sha = sha256_file(alignment_path)
     timeline_fp = fingerprint(stage_name="story_timeline", producer_version=TIMELINE_PROMPT_VERSION, artifact_schema_version=TIMELINE_SCHEMA_VERSION, direct_inputs={"alignment_sha256":alignment_sha,"narration_sha256":narration_sha,"model":model}, settings={k:v for k,v in settings.items() if k != "api_key"})
-    active = provider or GeminiProvider()
+    active = provider or _default_provider(paths)
     with ProjectLock(paths.runtime, project_id):
         checkpoints = CheckpointStore(paths); timeline_path = paths.artifact_path("output/story_timeline.json")
         decision = checkpoints.decide("story_timeline", timeline_fp)
@@ -359,7 +457,14 @@ def run_planning_stages(runtime_root: Path | str, project_id: str, *, provider: 
             try: timeline = read_json(timeline_path); validate_timeline(timeline, alignment); timeline_action = "SKIP"
             except Exception: decision = type(decision)("RUN", "artifact invalid")
         if decision.action == "RUN":
-            response = active.generate_structured(LLMRequest(model, f"{TIMELINE_PROMPT_VERSION}\nGroup these alignment segments exactly once by segment_id. Do not create timestamps.\nNarration:\n{narration}\nSegments:\n{alignment['segments']}", _timeline_schema(), settings, _hash_text(timeline_fp)[:24], "story_timeline"))
+            timeline_settings = dict(settings)
+            timeline_settings["maxOutputTokens"] = max(int(settings.get("maxOutputTokens", 4096)),
+                min(16384, 2048 + len(alignment["segments"]) * 24))
+            response = active.generate_structured(LLMRequest(model,
+                f"{TIMELINE_PROMPT_VERSION}\nGroup every alignment segment exactly once by segment_id. "
+                f"Groups must be ordered, contiguous, and concise. Do not create timestamps. "
+                f"Keep each summary under 20 words.\nSegments:\n{alignment['segments']}",
+                _timeline_schema(), timeline_settings, _hash_text(timeline_fp)[:24], "story_timeline"))
             timeline = _resolve_timeline(project_id, alignment, response.value, _provenance(model, "story_timeline", TIMELINE_PROMPT_VERSION, {"alignment_sha256":alignment_sha,"narration_sha256":narration_sha}, response)); validate_timeline(timeline, alignment); atomic_write_json(timeline_path, timeline); checkpoints.record("story_timeline", fingerprint=timeline_fp, status="SUCCESS", outputs=["output/story_timeline.json"], producer_version=TIMELINE_PROMPT_VERSION); timeline_action = "RUN"
         timeline_sha = sha256_file(timeline_path)
         continuity_fp = fingerprint(stage_name="continuity", producer_version=CONTINUITY_PROMPT_VERSION, artifact_schema_version=CONTINUITY_SCHEMA_VERSION, direct_inputs={"timeline_sha256":timeline_sha,"narration_sha256":narration_sha,"model":model}, settings={k:v for k,v in settings.items() if k != "api_key"})

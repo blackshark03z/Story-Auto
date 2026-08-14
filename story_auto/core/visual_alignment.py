@@ -121,6 +121,7 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
     classes = {name: sum(r["alignment_classification"] == name for r in rows)
                for name in ("DIRECT", "SUPPORTIVE", "ATMOSPHERIC", "MISMATCH", "UNREVIEWED")}
     cross_shot_reuse = any(len({r["shot_id"] for r in values}) > 1 for values in by_sha.values())
+    acceptance = "PASS" if not cross_shot_reuse and not classes["MISMATCH"] and not classes["UNREVIEWED"] else "REVIEW_REQUIRED"
     return {"schema_version": ALIGNMENT_SCHEMA_VERSION, "rows": rows,
             "metrics": {"total_final_shots": len(rows), "unique_selected_asset_hashes": len(by_sha),
                         "unique_asset_ratio": (len(by_sha) / len(rows)) if rows else 0.0,
@@ -135,7 +136,7 @@ def build_shot_mapping_audit(*, alignment: dict[str, Any], shot_plan: dict[str, 
                         "mismatch_count": classes["MISMATCH"],
                         "unreviewed_count": classes["UNREVIEWED"]},
             "root_cause": "UNPLANNED_CROSS_SHOT_REUSE" if cross_shot_reuse else "NONE_CORRECTED",
-            "acceptance": "REVIEW_REQUIRED"}
+            "acceptance": acceptance}
 
 
 def validate_visual_alignment_audit(value: dict[str, Any]) -> None:

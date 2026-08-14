@@ -1,12 +1,12 @@
 {
   "schema": "story-auto.frozen-design-manifest/1.0.0",
   "files": {
-    "DESIGN_FREEZE.md": "6665e7b8b72cfb4d32c64c22a2d3634eb448fe47647c2790ef600a0f12ebe086",
-    "docs/specs/FROZEN_PRODUCT_DESIGN_V1.md": "9e3062a4971c88aa0a5ea2074ac2f124a11f121c028086ea31a2483d6d574716",
+    "DESIGN_FREEZE.md": "5397b90a3e021e2bdfcfde795b7986729195af520093015f7cdc93c30d8516c7",
+    "docs/specs/FROZEN_PRODUCT_DESIGN_V1.md": "aeb72b21bc1e56da261e7bcfeb495a62d1db681876b2f5993ee5aedd41db59ca",
     "docs/specs/DOMAIN_MODEL_V1.md": "0848fcf0bc973c7a5f1dae275c66700e59c84e0c03b037d121779a11ac089c61",
-    "docs/specs/ARTIFACT_CONTRACTS_V1.md": "677b6ba4bd1e3ad9511c0d992fbc38128dadfccf78d6032db87113a8168253a7",
+    "docs/specs/ARTIFACT_CONTRACTS_V1.md": "d72b39ee294cc8503451f663a60a889e3f25da7844a420b813ce948fa75e64a3",
     "docs/specs/FAILURE_RECOVERY_V1.md": "56ff63172285cb37525de08accd91a1470bcd03fead11a135d312457a69bfedb",
-    "docs/specs/QUALITY_ACCEPTANCE_V1.md": "68cdb10ccb7bce607a377f29d4a128dee0405ce4068ac1c9d58283663feee101",
-    "contracts/frozen_design_v1.json": "12892273d6e8d752c4019fe1863b038561c1359d5ff279bfe496be0214d10296"
+    "docs/specs/QUALITY_ACCEPTANCE_V1.md": "b4c6e4498f3c1c6e511d4f8c3b03b79e5f6601026bcbb75d6dd31210f7606b59",
+    "contracts/frozen_design_v1.json": "4911773d937d2b59cfb9f7103a3ed88a471e92e8919c366a97d92ec0ff2295a5"
   }
 }

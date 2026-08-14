@@ -2,14 +2,18 @@
 from __future__ import annotations
 
 import base64
+import io
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
-from story_auto.core.artifacts import atomic_write_bytes
+from story_auto.core.artifacts import atomic_write_bytes, sha256_file
 from .cdp import CdpPage
 from .page import FlowComposer
 from .service import FlowError
 from .settings import ResolvedFlowGenerationSettings, resolve_settings
+from .validation import validate_image
 
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
@@ -23,6 +27,15 @@ _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=
 def records_for_media(records, media_type: str):
     allowed = {"IMG"} if media_type == "IMAGE" else {"VIDEO", "SOURCE"}
     return [item for item in records if item.get("kind") in allowed and (media_type != "IMAGE" or int(item.get("width", 0)) >= 512)]
+
+def _dhash_bytes(data: bytes) -> str:
+    from PIL import Image
+    with Image.open(io.BytesIO(data)) as image:
+        sample=image.convert("L").resize((17,16),Image.Resampling.LANCZOS); values=list(sample.getdata())
+    bits=0
+    for row in range(16):
+        for column in range(16): bits=(bits<<1)|(values[row*17+column]>values[row*17+column+1])
+    return f"{bits:064x}"
 
 
 class _Editor:
@@ -52,13 +65,31 @@ class _Control:
         except Exception:
             pass
         self.dom.page.command("Page.bringToFront")
-        self.dom.page.click(float(self.evidence["x"]), float(self.evidence["y"]))
+        x, y = float(self.evidence["x"]), float(self.evidence["y"])
+        self.dom.page.click(x, y)
+        time.sleep(.6)
+        # If the exact Generate control is still present, the trusted pointer
+        # sequence was ignored by Flow's floating wrapper. Focus that same
+        # unique control and try one keyboard activation. If dispatch already
+        # changed the composer, do not send another event.
+        controls = self.dom.page.evaluate(_CONTROL_JS) or []
+        if not controls:
+            return
+        if len(controls) != 1:
+            raise FlowError("FLOW_UI_CHANGED", "Generate control changed during activation")
+        if not controls[0].get("enabled"):
+            # Flow disables Generate while accepting an in-flight submission.
+            # Let the outer acknowledgement loop verify the prompt transition.
+            return
+        focused = self.dom.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return false;let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){xs[0].focus();return document.activeElement===xs[0]}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        if not focused: raise FlowError("FLOW_UI_CHANGED", "unable to focus the unique Flow Generate control")
+        self.dom.page.key("Enter", code="Enter")
 
 
 class FlowBrowserDom:
     def __init__(self, page: CdpPage): self.page = page
     def active_prompt_editors(self): return [_Editor(self, x["i"]) for x in self.page.evaluate(_EDITOR_JS) or []]
-    def reset_composer(self, *, timeout_seconds: int = 12) -> None:
+    def reset_composer(self, *, timeout_seconds: int = 30) -> None:
         """Reloads a no-dispatch draft to clear stale UI state before an attempt."""
         self.page.command("Page.reload", {"ignoreCache":False})
         deadline = time.monotonic() + timeout_seconds
@@ -109,17 +140,64 @@ class FlowBrowserDom:
             raise FlowError("FLOW_GENERATE_DISABLED", "Flow did not enable composer Generate after reference upload")
         return [_Control(self, x) for x in last]
     def activate_generate_dom(self) -> bool:
-        """Last-resort activation after a verified native non-acknowledgement."""
-        return bool(self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return false;let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){(%s)(xs[0]);return true}if(xs.length>1)return false;p=p.parentElement}return false})()""" % _ACTIVATE))
+        """Last-resort exact-window activation after verified non-acknowledgement."""
+        controls = self.page.evaluate(_CONTROL_JS) or []
+        if len(controls) != 1 or not controls[0].get("enabled"): return False
+        focused=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){xs[0].focus();return document.activeElement===xs[0]}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        if not focused: return False
+        return self.page.os_click(float(controls[0]["x"]), float(controls[0]["y"]))
     def add_references(self, files):
         # The only file input belongs to Flow's project media library.  Upload
         # there first, then explicitly select the library item in the active
         # composer's add-media dialog; uploading alone is not an ingredient.
+        if len(files) > 1:
+            for reference in files: self.add_references([reference])
+            return
         count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
         if count != 1: raise FlowError("FLOW_UI_CHANGED", f"expected one reference input, found {count}")
         local = [str(Path(f).resolve()) for f in files]
         self.page.set_input_files("input[type=file]", local)
-        name = Path(local[0]).name
+        names = [Path(item).name for item in local]
+        name = names[0]
+        opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        if not opened: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
+        target_hash=validate_image(Path(local[0]))["dhash256"]
+        deadline=time.monotonic()+25; matched_url=None; matched_alt=None
+        while time.monotonic()<deadline and matched_url is None:
+            records=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return [];const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(tab&&tab.getAttribute('aria-selected')!=='true')tab.click();return Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512).map(e=>({url:e.currentSrc||e.src,alt:e.alt||''})).filter(x=>x.url)})()""") or []
+            for record in records:
+                url=record.get("url")
+                payload=self.page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)return null;const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return btoa(s)})()""" % __import__('json').dumps(url))
+                if isinstance(payload,str):
+                    try: candidate_hash=_dhash_bytes(base64.b64decode(payload,validate=True))
+                    except Exception: continue
+                    if (int(candidate_hash,16)^int(target_hash,16)).bit_count()<=4: matched_url=url; matched_alt=record.get("alt",""); break
+            if matched_url is None: time.sleep(.5)
+        if matched_url is None: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "uploaded reference bytes were not identifiable in Flow")
+        selected=self.page.evaluate("""(()=>{const alt=%s,d=document.querySelector('[role=dialog]');if(!d)return false;const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512&&(e.alt||'')===alt),image=images[images.length-1];if(!image)return false;image.click();return true})()""" % __import__('json').dumps(matched_alt))
+        if not selected: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be selected")
+        deadline=time.monotonic()+5; attached=False
+        while time.monotonic()<deadline:
+            attached=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).reverse().find(e=>!e.querySelector('i')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
+            if attached is True: break
+            time.sleep(.25)
+        if not attached: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be attached")
+        deadline=time.monotonic()+6
+        while time.monotonic()<deadline:
+            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
+            time.sleep(.2)
+        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            selected=self.page.evaluate("""(()=>{const names=%s,d=document.querySelector('[role=dialog]');if(!d)return null;const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(!tab)return null;if(tab.getAttribute('aria-selected')!=='true')tab.click();const images=names.map(name=>Array.from(d.querySelectorAll('img')).find(e=>e.alt===name));if(images.some(x=>!x))return false;for(const image of images)image.click();const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).find(e=>/add to prompt|thêm vào câu lệnh/i.test((e.innerText||'').trim()));if(!add)return null;add.click();return true})()""" % __import__('json').dumps(names))
+            if selected is True: break
+            time.sleep(.5)
+        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded references {names} were not all selectable in Flow")
+        deadline=time.monotonic()+6
+        while time.monotonic()<deadline:
+            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
+            time.sleep(.2)
+        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
         open_dialog = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
         if not open_dialog: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
         deadline=time.monotonic()+15
@@ -127,10 +205,12 @@ class FlowBrowserDom:
             selected=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(!tab)return null;if(tab.getAttribute('aria-selected')!=='true')tab.click();const image=Array.from(d.querySelectorAll('img')).find(e=>e.alt===%s);if(!image)return false;image.click();const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).find(e=>{const text=(e.innerText||'').trim().toLowerCase();const aria=(e.getAttribute('aria-label')||'').toLowerCase();return /add|thêm|ajouter|hinzufügen|añadir/.test(text+' '+aria) && !/upload|tải|cancel|hủy|close|đóng/.test(text+' '+aria)});if(!add)return null;add.click();return true})()""" % __import__('json').dumps(name))
             if selected is True: break
             time.sleep(.5)
-        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded reference {name} was not selectable in Flow")
+        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded references {names} were not all selectable in Flow")
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:
-            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
+            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"):
+                if len(files) > 1: self.add_references(files[1:])
+                return
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
@@ -146,10 +226,20 @@ class FlowInspector:
     def inspect(self, _url):
         page = CdpPage.open(self.runtime)
         try:
+            if page.evaluate("document.querySelector('[role=dialog]')!==null"):
+                page.command("Page.reload", {"ignoreCache":False}); time.sleep(3)
             state = page.evaluate("""(()=>({url:location.href,text:(document.body?.innerText||'').slice(0,12000),title:document.title}))()""") or {}
             text = (state.get("text", "") + " " + state.get("title", "")).lower()
-            login = "accounts.google" in state.get("url", "") or "sign in" in text
-            modes = page.evaluate("""(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return [];if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}return Array.from(document.querySelectorAll('button[aria-controls]')).filter(visible).map(e=>e.getAttribute('aria-controls')||'')})()""" % _ACTIVATE) or []
+            marketing_landing = "your ai creative studio built with google" in text and "create with google flow" in text
+            login = "accounts.google" in state.get("url", "") or "sign in" in text or marketing_landing
+            mode_script = """(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return [];if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}return Array.from(document.querySelectorAll('button[aria-controls]')).filter(visible).map(e=>e.getAttribute('aria-controls')||'')})()""" % _ACTIVATE
+            modes = page.evaluate(mode_script) or []
+            if not modes and page.evaluate("document.querySelector('[role=dialog]')!==null"):
+                # A failed reference-picker attempt can leave a modal overlay
+                # hiding otherwise available mode controls. Reload is a safe,
+                # no-dispatch composer reset during preflight.
+                page.command("Page.reload", {"ignoreCache":False}); time.sleep(3)
+                modes = page.evaluate(mode_script) or []
             image = any("content-IMAGE" in value for value in modes)
             video = any("content-VIDEO" in value for value in modes)
             reference = bool(page.evaluate("document.querySelectorAll('input[type=file]').length"))
@@ -203,13 +293,35 @@ class LiveFlowGenerator:
                     time.sleep(.5)
                 self.last_settings["baseline_candidate_count"] = len(before)
                 self.last_settings["baseline_media_candidate_count"] = len(before_output)
-            FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline, mode_already_configured=True)
+            source_references = [Path(x) for x in references if x]
+            if len(source_references) > 1:
+                omitted=source_references[1:]
+                self.last_settings["reference_capacity_limit"]=1
+                self.last_settings["omitted_reference_hashes"]=[sha256_file(item) for item in omitted]
+                source_references=source_references[:1]
+            self.last_settings["attached_reference_hashes"]=[sha256_file(item) for item in source_references]
+            with tempfile.TemporaryDirectory(prefix="story-auto-flow-refs-") as staging_directory:
+                staged_references = []
+                for source in source_references:
+                    source_hash=sha256_file(source)
+                    staged = Path(staging_directory) / f"ref_{source_hash[:16]}.png"
+                    from PIL import Image, PngImagePlugin
+                    metadata=PngImagePlugin.PngInfo(); metadata.add_text("StoryAutoReferenceSha256",source_hash)
+                    with Image.open(source) as image: image.convert("RGB").save(staged,"PNG",pnginfo=metadata)
+                    staged_references.append(str(staged))
+                    self.last_settings.setdefault("staged_reference_uploads",[]).append({"source_sha256":source_hash,"upload_sha256":sha256_file(staged)})
+                FlowComposer(dom).submit(request["prompt"], references=staged_references,
+                                         media_type=request["media_type"], before_dispatch=baseline,
+                                         mode_already_configured=True)
             def acknowledged():
                 states = page.evaluate(_EDITOR_JS) or []
                 prompt_cleared = len(states) == 0 or all(item.get("text", "") != request["prompt"] for item in states)
-                output_changed = {item["key"] for item in dom.media_candidate_records()} != before
-                return prompt_cleared or output_changed
-            # A cleared composer or a new media node is dispatch evidence.
+                # Uploaded references and virtualized history can surface as
+                # apparently new media nodes. Flow clears the composer on a
+                # real submission, so prompt transition is the only safe
+                # dispatch acknowledgement.
+                return prompt_cleared
+            # A cleared composer is dispatch evidence.
             # Arbitrary body-text changes are not attributable to Generate.
             for _ in range(8):
                 if acknowledged():
@@ -223,6 +335,11 @@ class LiveFlowGenerator:
                         self.dispatch_confirmed=True; self.last_settings["dispatch_ack_method"]="verified_dom_fallback_transition"; break
                     time.sleep(.25)
             if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "generate activation produced no Flow acknowledgement")
+            reference_hashes = []
+            if request["media_type"] == "IMAGE":
+                for reference in references:
+                    try: reference_hashes.append(validate_image(Path(reference))["dhash256"])
+                    except Exception: pass
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
                 pool = dom.media_candidate_records()
@@ -240,7 +357,15 @@ class LiveFlowGenerator:
                     self.last_settings["selected_candidate_index"] = 0
                     payload=page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(added[0]["url"]))
                     if not isinstance(payload,dict) or not isinstance(payload.get("data"),str): raise FlowError("ASSET_ACQUISITION_FAILED")
-                    atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True)); return destination
+                    atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True))
+                    if request["media_type"] == "IMAGE" and reference_hashes:
+                        candidate_hash = validate_image(destination)["dhash256"]
+                        if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
+                               for reference_hash in reference_hashes):
+                            before_output.add(added[0]["key"])
+                            self.last_settings["filtered_reference_echo_count"] = self.last_settings.get("filtered_reference_echo_count", 0) + 1
+                            time.sleep(2); continue
+                    return destination
                 if len(added)>resolved.output_count:
                     # Lazy-loaded historical media can appear after the
                     # dispatch baseline. Wait for the newest exact-count group

@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from PIL import Image
 
+from story_auto.application.operator import OperatorService
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.render import (MediaTarget, RenderPlanError, compile_hold, compile_image, compile_video,
@@ -309,6 +310,7 @@ class RenderServiceRecoveryTests(unittest.TestCase):
             first = run_render_stages(runtime.root, config.project_id)
             frozen_identity_chain = read_json(paths.artifact_path("output/render_plan.json"))
             self.assertEqual(first["actions"]["final_render"], "RUN")
+            self.assertEqual(OperatorService(runtime.root).build_render_plan(config.project_id), frozen_identity_chain)
             second = run_render_stages(runtime.root, config.project_id)
             self.assertEqual(second["actions"]["final_render"], "SKIP")
             self.assertEqual(read_json(paths.artifact_path("output/render_plan.json")), frozen_identity_chain)

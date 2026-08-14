@@ -16,14 +16,16 @@ parser = argparse.ArgumentParser(); parser.add_argument("runtime_root", type=Pat
 root = args.runtime_root.resolve() / "projects" / args.project_id; output = root / "output"
 requests = {x["request_id"]: x for x in read_json(output / "generation_requests.json")["requests"]}
 manifest = {x["request_id"]: x for x in read_json(output / "generation_manifest.json")["requests"]}
-router = GeminiReasoningRouter(cache_dir=output / "gemini_reasoning/cache", ledger_path=output / "gemini_reasoning/ledger.json")
+router = GeminiReasoningRouter(cache_dir=output / ".gemini_cache", ledger_path=output / "gemini_reasoning_ledger.json")
 results = []
-for request in sorted((x for x in requests.values() if x.get("purpose") == "SHOT" and x.get("media_type") == "VIDEO" and manifest.get(x["request_id"], {}).get("status") == "QC_PENDING"), key=lambda x: int(x.get("part_index", 1))):
+for request in sorted((x for x in requests.values() if x.get("purpose") == "SHOT" and x.get("media_type") == "VIDEO" and manifest.get(x["request_id"], {}).get("status") == "QC_PENDING"), key=lambda x: (float(x.get("target_start", 0)), int(x.get("part_index", 1)))):
     request_id = request["request_id"]; entry = manifest[request_id]; selected = entry["selected_asset"]
     video = root / selected["path"]; duration = float(selected["metadata"]["duration_seconds"])
-    motion = request.get("motion_contract", {}); risk = "HIGH" if any(word in json.dumps(motion).lower() for word in ("hand", "door", "piano", "finger", "walk")) else "MEDIUM"
+    motion = request.get("motion_risk_analysis") or request.get("motion_contract", {})
+    motion_text = json.dumps(motion).lower()
+    risk = "HIGH" if any(word in motion_text for word in ("hand", "door", "piano", "finger", "walk", "grip", "reach", "carry")) else "MEDIUM"
     frames = sample_dense_frames(video, output / "temporal_qc/frames" / request_id, risk=risk, duration=duration)
-    intent = {"request_id": request_id, "hook_beat": request.get("hook_beat"), "motion_contract": motion,
+    intent = {"request_id": request_id, "hook_beat": request.get("hook_beat"), "motion_risk_analysis": motion,
               "prompt": request["prompt"]}
     item = {"request_id": request_id, "part_index": request.get("part_index"), "asset_sha256": selected["sha256"],
             "risk": risk, "dense_frame_count": len(frames)}
@@ -60,4 +62,8 @@ for request in sorted((x for x in requests.values() if x.get("purpose") == "SHOT
     try: review_production_asset(args.runtime_root, args.project_id, request_id, report)
     except FlowError as error: item["selection_error"] = error.failure_class
     results.append(item); print(json.dumps({"request_id":request_id,"semantic":semantic["classification"],"temporal":temporal["state"]},ensure_ascii=False))
-atomic_write_json(output / "temporal_qc/new_hook_qc_results.json", {"schema_version":"story-auto-new-hook-qc/1.0.0","results":results})
+result_path = output / "temporal_qc/new_hook_qc_results.json"
+prior = read_json(result_path).get("results", []) if result_path.is_file() else []
+merged = {item.get("request_id"): item for item in prior if isinstance(item, dict) and item.get("request_id")}
+merged.update({item["request_id"]: item for item in results})
+atomic_write_json(result_path, {"schema_version":"story-auto-new-hook-qc/1.0.0","results":list(merged.values())})

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+import hashlib
 import shutil
 
 from story_auto.core.artifacts import atomic_write_json, read_json
@@ -86,6 +87,28 @@ def reject_selected_asset(runtime_root: Path | str, project_id: str, request_id:
         entry.setdefault("creative_rejections", []).append({"rejected_at": _now(), "asset_path": selected.get("path"),
                                                               "asset_sha256": selected.get("sha256"), "reason": reason.strip()})
         entry.update({"status": "FAILED_RETRYABLE", "failure_class": "CREATIVE_REJECTED", "updated_at": _now()})
+        atomic_write_json(path, manifest)
+
+
+def recover_interrupted_pre_dispatch_attempt(runtime_root: Path | str, project_id: str, request_id: str) -> None:
+    """Reopen a process-interrupted attempt only when no dispatch setup began."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        attempt = entry.get("attempts", [])[-1] if isinstance(entry, dict) and entry.get("attempts") else None
+        valid = (
+            isinstance(entry, dict) and entry.get("status") == "GENERATING"
+            and isinstance(attempt, dict) and attempt.get("status") == "SUBMITTED"
+            and attempt.get("dispatch_confirmed") is False
+            and attempt.get("provider_settings") is None
+        )
+        if not valid:
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        attempt.update({"status":"NOT_DISPATCHED", "failure_class":"FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
+                        "diagnostic":"process interrupted before provider setup or dispatch", "completed_at":_now()})
+        entry.update({"status":"NOT_DISPATCHED", "failure_class":"FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
+                      "updated_at":_now()})
         atomic_write_json(path, manifest)
 
 
@@ -211,6 +234,35 @@ def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: s
         if not isinstance(attempt, dict) or attempt.get("failure_class") not in safe_pre_dispatch or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
         entry["status"] = "FAILED_RETRYABLE"; entry["reconciled_at"] = _now(); entry["reconciliation"] = "verified_no_dispatch"; atomic_write_json(path, manifest)
 
+def reopen_verified_false_dispatch(runtime_root: Path | str, project_id: str, request_id: str,
+                                   *, evidence: dict) -> None:
+    """Reopen a legacy timeout only when exact post-attempt UI evidence proves no dispatch."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        attempt = entry.get("attempts", [])[-1] if isinstance(entry, dict) and entry.get("attempts") else None
+        settings = attempt.get("provider_settings", {}) if isinstance(attempt, dict) else {}
+        try:
+            request = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                           if item.get("request_id") == request_id)
+        except Exception as error:
+            raise FlowError("GENERATION_RECONCILIATION_INVALID") from error
+        prompt_hash = hashlib.sha256(request["prompt"].encode("utf-8")).hexdigest()
+        screenshot_hash = evidence.get("screenshot_sha256") if isinstance(evidence, dict) else None
+        valid = (entry.get("status") == "AMBIGUOUS" and attempt.get("failure_class") == "FLOW_TIMEOUT"
+                 and settings.get("dispatch_ack_method") == "composer_clear_or_output_transition"
+                 and settings.get("last_added_candidate_count") == 0
+                 and evidence.get("prompt_retained") is True and evidence.get("visible_media_count") == 0
+                 and evidence.get("prompt_sha256") == prompt_hash and isinstance(screenshot_hash, str)
+                 and len(screenshot_hash) == 64 and all(c in "0123456789abcdef" for c in screenshot_hash))
+        if not valid: raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        attempt.update({"status":"NOT_DISPATCHED", "dispatch_confirmed":False,
+                        "failure_class":"FLOW_FALSE_DISPATCH_ACK", "reconciliation_evidence":dict(evidence)})
+        entry.update({"status":"FAILED_RETRYABLE", "failure_class":"FLOW_FALSE_DISPATCH_ACK",
+                      "reconciled_at":_now(), "reconciliation":"verified_prompt_retained_and_no_media"})
+        atomic_write_json(path, manifest)
+
 def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id: str, source: Path, *, settings: dict, attribution: str) -> dict:
     """Adopt one attributable human-recovered Flow output without a new submit."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -293,6 +345,8 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if review.get("plan_approval", {}).get("status") != "APPROVED": raise FlowError("PLAN_APPROVAL_REQUIRED")
     requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
     selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
+    if any(r.get("media_type") == "VIDEO" and not isinstance(r.get("motion_risk_analysis"), dict) for r in selected):
+        raise FlowError("MOTION_PLAN_REQUIRED", "every VIDEO request requires motion-risk analysis")
     if max_requests is not None:
         if max_requests < 1: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "max_requests must be positive")
         selected = selected[:max_requests]
@@ -327,7 +381,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             # The default permits an evidence-led correction after an initial
             # bounded retry cycle; it is a stop-loss, never a cost ceiling.
             maximum = int(config.settings.get("flow", {}).get("max_attempts", 12))
-            if attempt_number > maximum: entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"; continue
+            if attempt_number > maximum:
+                entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"
+                entry["updated_at"]=_now(); atomic_write_json(path,manifest); continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             # Provider adapters receive concrete local files, never manifest-
@@ -340,23 +396,34 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
                 metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
-                # A newly dispatched production video must not resolve to bytes
-                # already selected for another request. Flow's lazy media grid
-                # can surface a historical URL as if it were newly added; the
-                # request identity alone cannot make those stale bytes fresh.
-                if request.get("execution_tier") == "STANDARD_PRODUCTION" and request["media_type"] == "VIDEO":
-                    duplicate = next((other for other in manifest["requests"]
-                                      if other.get("request_id") != request["request_id"]
-                                      and isinstance(other.get("selected_asset"), dict)
-                                      and other["selected_asset"].get("sha256") == metadata["sha256"]), None)
+                # A newly dispatched production asset must not resolve to a
+                # result already selected for another request. Images can have
+                # different container hashes while decoding to identical
+                # pixels, so compare decoded pixel identity for stills.
+                if request.get("execution_tier") == "STANDARD_PRODUCTION":
+                    identity_field = "dhash256" if request["media_type"] == "IMAGE" else "sha256"
+                    duplicate = None
+                    for other in manifest["requests"]:
+                        other_selected = other.get("selected_asset")
+                        if not isinstance(other_selected, dict) or other.get("media_type") != request["media_type"]: continue
+                        other_identity = other_selected.get("metadata", {}).get(identity_field)
+                        if not other_identity and request["media_type"] == "IMAGE":
+                            try: other_identity = validate_image(paths.artifact_path(other_selected["path"]))[identity_field]
+                            except Exception: other_identity = None
+                        same = other_identity == metadata.get(identity_field)
+                        if request["media_type"] == "IMAGE" and other_identity and metadata.get(identity_field):
+                            try: same = (int(other_identity, 16) ^ int(metadata[identity_field], 16)).bit_count() <= 4
+                            except ValueError: same = False
+                        if same: duplicate = other; break
                     if duplicate is not None:
-                        raise FlowError("FLOW_STALE_RESULT", f"candidate bytes already selected for {duplicate['request_id']}")
+                        raise FlowError("FLOW_STALE_RESULT", f"candidate content already selected for {duplicate['request_id']}")
                 final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"
                 final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
                 production = request.get("execution_tier") == "STANDARD_PRODUCTION"
                 resulting_status = "QC_PENDING" if production else "SUCCEEDED"
                 attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
-                entry.update({"status":resulting_status, "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}, "updated_at":_now()}); submissions += 1
+                entry.update({"status":resulting_status, "failure_class":None,
+                              "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}, "updated_at":_now()}); submissions += 1
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)

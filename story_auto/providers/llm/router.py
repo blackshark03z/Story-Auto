@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.providers.credentials import provider_keys
-from .gemini import GeminiProvider, GeminiProviderError, LLMMedia, LLMRequest
+from .gemini import GeminiProvider, GeminiProviderError, LLMMedia, LLMRequest, LLMResponse
 
 ROUTER_VERSION = "story-auto-gemini-router/1.0.0"
 HARD_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash")
@@ -123,7 +123,10 @@ class GeminiReasoningRouter:
                 if credential.project_alias in tried_projects: continue
                 if credential_calls >= 6: continue
                 if credential.project_alias.startswith("project-unknown-key-"):
-                    if unknown_project_attempts >= 2: continue
+                    # Unknown aliases cannot prove that two keys share a
+                    # project. Keep the same six-call/model bound as known
+                    # projects while allowing the configured pool to work.
+                    if unknown_project_attempts >= 6: continue
                     unknown_project_attempts += 1
                 tried_projects.add(credential.project_alias)
                 if self.health.get((credential.project_alias, model), 0) > self.now(): continue
@@ -183,3 +186,25 @@ class GeminiReasoningRouter:
                 results.append({"model": model, "available": False, "project_alias": credential.project_alias,
                                 "credential_alias": credential.alias, "failure_class": error.failure_class})
         return results
+
+
+class RoutedGeminiProvider(GeminiProvider):
+    """Route the established structured-provider contract through the pool."""
+
+    def __init__(self, router: GeminiReasoningRouter) -> None:
+        super().__init__(keys=[])
+        self.router = router
+
+    def generate_structured(self, request: LLMRequest) -> LLMResponse:
+        started = time.monotonic()
+        result = self.router.reason(task=request.stage, prompt=request.prompt,
+            schema=request.response_schema, tier="HARD", media=request.media,
+            prompt_version=f"{request.stage}-routed/1.0.0",
+            schema_version="story-auto-routed-structured-output/1.0.0",
+            qc_policy_version="DETERMINISTIC_PLANNING_CONTRACT",
+            settings={**request.settings, "max_attempts":1})
+        return LLMResponse(result.value, result.model, request.request_id,
+            max(1, result.request_count), round((time.monotonic() - started) * 1000),
+            {"router_input_hash":result.input_hash, "credential_alias":result.credential_alias,
+             "project_alias":result.project_alias, "fallback_count":result.fallback_count,
+             "cache_hit":result.cache_hit})

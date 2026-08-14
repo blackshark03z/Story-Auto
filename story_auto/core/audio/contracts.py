@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+TTS_PROVIDERS = frozenset({"elevenlabs", "typecast", "kokoro_local"})
+
 
 @dataclass(frozen=True)
 class TTSRequest:
@@ -14,7 +16,7 @@ class TTSRequest:
     settings: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if self.provider not in {"elevenlabs", "typecast"}:
+        if self.provider not in TTS_PROVIDERS:
             raise ValueError("unsupported TTS provider")
         if not self.narration.strip() or not self.voice_id.strip():
             raise ValueError("narration and voice_id are required")

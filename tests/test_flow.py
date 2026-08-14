@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,8 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
-                                                reject_selected_asset, reopen_uncertain_temporal_qc, reuse_exact_flow_asset,
+                                                recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
+                                                reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
@@ -31,10 +33,13 @@ class DOM:
     def media_candidates(self): return []
 
 class NativePage:
-    def __init__(self): self.clicked = None; self.commands=[]
-    def evaluate(self, _): return {"x":10,"y":20}
+    def __init__(self): self.clicked = None; self.commands=[]; self.keys=[]; self.evaluations=0
+    def evaluate(self, _):
+        self.evaluations += 1
+        return [{"enabled":True,"x":10,"y":20}] if self.evaluations == 1 else True
     def command(self, method, params=None): self.commands.append(method); return {"windowId":1} if method=="Browser.getWindowForTarget" else {}
     def click(self, x, y): self.clicked=(x,y)
+    def key(self, key, *, code=None): self.keys.append((key,code))
 
 class Inspector:
     def __init__(self, value): self.value=value
@@ -84,9 +89,9 @@ class FlowTests(unittest.TestCase):
             def choose_mode(self, _): raise AssertionError("mode menu must remain closed")
         dom=ModeDom(); FlowComposer(dom).submit("p", references=[], media_type="IMAGE", mode_already_configured=True)
         self.assertTrue(dom.controls[0].clicked)
-    def test_live_generate_control_uses_native_mouse_click(self):
+    def test_live_generate_control_uses_trusted_pointer_then_focused_key_fallback(self):
         from story_auto.providers.flow.live import _Control
-        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10.0,20.0)); self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
+        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10,20)); self.assertEqual(page.keys,[("Enter","Enter")]); self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
 
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:
@@ -96,6 +101,20 @@ class FlowTests(unittest.TestCase):
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             self.assertEqual(len(calls),2)
+
+    def test_interrupted_pre_dispatch_attempt_can_be_safely_reopened(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            manifest={"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{
+                "request_id":"ref","request_identity_sha256":"refhash","related_identity":None,"media_type":"IMAGE",
+                "provider":"google_flow","prompt_sha256":"refhash","reference_asset_hashes":[],"created_at":"now",
+                "status":"GENERATING","attempts":[{"attempt":1,"status":"SUBMITTED","dispatch_confirmed":False,
+                "provider_settings":None,"started_at":"now"}]}]}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            recover_interrupted_pre_dispatch_attempt(runtime.root,cfg.project_id,"ref")
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(entry["status"],"NOT_DISPATCHED")
+            self.assertEqual(entry["attempts"][-1]["failure_class"],"FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH")
     def test_preflight_auth_and_project(self):
         runtime=FlowRuntime(Path("profile"),"http://test","url","story-auto")
         opener=lambda *_args,**_kw: Response(b'{"Browser":"Chrome"}')
@@ -179,7 +198,7 @@ class FlowTests(unittest.TestCase):
     def test_production_video_rejects_stale_bytes_selected_for_another_request(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root); calls=[]
-            requests={"requests":[{"request_id":f"video_{i}","fingerprint":f"hash_{i}","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":f"clip {i}","depends_on":[],"provider":"google_flow","output_count":1,"execution_tier":"STANDARD_PRODUCTION"} for i in range(1,3)]}
+            requests={"requests":[{"request_id":f"video_{i}","fingerprint":f"hash_{i}","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":f"clip {i}","depends_on":[],"provider":"google_flow","output_count":1,"execution_tier":"STANDARD_PRODUCTION","motion_risk_analysis":{"physical_complexity":"LOW"}} for i in range(1,3)]}
             atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
             def stale_video(request, refs, path):
                 calls.append(request["request_id"]); path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(b"same-provider-result"); return path
@@ -225,6 +244,14 @@ class FlowTests(unittest.TestCase):
             from story_auto.providers.flow.service import reopen_verified_pre_dispatch_failure
             reopen_verified_pre_dispatch_failure(runtime.root,cfg.project_id,"ref")
             self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"FAILED_RETRYABLE")
+    def test_legacy_false_dispatch_timeout_requires_exact_ui_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","status":"AMBIGUOUS","attempts":[{"failure_class":"FLOW_TIMEOUT","dispatch_confirmed":True,"provider_settings":{"dispatch_ack_method":"composer_clear_or_output_transition","last_added_candidate_count":0}}]}]})
+            evidence={"prompt_retained":True,"visible_media_count":0,"prompt_sha256":hashlib.sha256(b"p").hexdigest(),"screenshot_sha256":"a"*64}
+            reopen_verified_false_dispatch(runtime.root,cfg.project_id,"ref",evidence=evidence)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((entry["status"],entry["attempts"][0]["dispatch_confirmed"]),("FAILED_RETRYABLE",False))
     def test_uncertain_temporal_qc_retry_reuses_selected_bytes_without_generation(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)

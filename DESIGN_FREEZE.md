@@ -2,6 +2,9 @@
 
 Frozen: **2026-08-12**
 
+Owner-authorized amendment: **2026-08-14** — add explicit `kokoro_local` TTS
+without silent fallback or default migration; all other frozen invariants remain.
+
 ## Gate status
 
 - **DESIGN-01 — User workflow + business requirements:** CLOSED.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-08-14 — Kokoro Local TTS amendment
+
+- Add the owner-authorized `kokoro_local` provider through the common TTS and
+  canonical-alignment contracts, with explicit per-project selection, offline
+  runtime/model/voice discovery, resumable deterministic WAV chunks, direct
+  model token timing, sanitized local failures, and no paid credential gate.
+
 ## Unreleased
 
 - Lock Story Auto V1 production images and videos to Google Flow Web by owner

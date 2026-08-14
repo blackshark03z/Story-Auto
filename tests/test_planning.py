@@ -11,8 +11,10 @@ from story_auto.core.content import narration_hash
 from story_auto.core.planning import (approve_plan, approve_shot_plan, run_planning_stages,
                                       run_visual_planning_stages, validate_continuity,
                                       validate_generation_requests, validate_timeline)
-from story_auto.core.planning.service import PlanningError, compile_generation_requests, compile_media_plan
+from story_auto.core.planning.service import (PlanningError, apply_motion_plans,
+    compile_generation_requests, compile_media_plan)
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
+from story_auto.core.visual import compile_video_prompt
 from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMResponse
 
 
@@ -39,6 +41,11 @@ class FakeVisualGemini(FakeGemini):
 
 
 class PlanningTests(unittest.TestCase):
+    def test_video_prompt_compiler_has_no_story_specific_name_rewrite(self):
+        prompt = compile_video_prompt(subject_motion="Amina Torres lifts the parcel", environmental_motion="rain falls",
+                                      camera_motion="STATIC", timing="three seconds")
+        self.assertIn("Amina Torres lifts the parcel", prompt)
+
     def _project(self, directory: str):
         runtime = RuntimeLayout.from_root(directory)
         config = ProjectConfig(project_id="prj_plan001", settings={"llm": {"provider": "gemini", "model": "gemini-3.5-flash", "max_attempts": 2}})
@@ -123,6 +130,11 @@ class PlanningTests(unittest.TestCase):
             self.assertTrue(all("bottom-right provider-mark safe area" in request["prompt"] for request in requests["requests"]))
             self.assertTrue(all(request["provider"] == "google_flow" and request["output_count"] == 1 for request in requests["requests"]))
             self.assertTrue(all("masterpiece" not in request["prompt"].lower() and "8k" not in request["prompt"].lower() for request in requests["requests"]))
+            daniel_reference=next(request for request in requests["requests"] if request.get("entity_id")=="char_daniel")
+            self.assertIn("Supported facts: {'age': 62}",daniel_reference["prompt"])
+            self.assertIn("fictional character Daniel",daniel_reference["prompt"])
+            self.assertLessEqual(max(len(request["prompt"]) for request in requests["requests"] if request["media_type"]=="IMAGE"),1200)
+            self.assertLessEqual(max(len(request["prompt"]) for request in requests["requests"] if request["purpose"]=="REFERENCE"),900)
             validate_generation_requests(requests, read_json(paths.artifact_path("output/media_plan.json")), read_json(paths.artifact_path("output/continuity_bible.json")))
             self.assertEqual(run_visual_planning_stages(runtime.root, config.project_id, provider=fake), ("SKIP", "SKIP", "SKIP"))
             approve_shot_plan(runtime.root, config.project_id)
@@ -149,6 +161,22 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(([item["part_index"] for item in parts],[round(item["target_duration"],2) for item in parts]),([1,2,3],[.75,.75,.5]))
         self.assertTrue(all(item["media_type"]=="VIDEO" and item["requirement"]=="REQUIRED" for item in parts))
         validate_generation_requests(requests,media,continuity)
+
+    def test_motion_plan_decomposes_video_request_into_atomic_parts(self):
+        shot_plan={"shots":[{"shot_id":"sh_0001","start":0.0,"end":8.0,"character_ids":["char_daniel"],"prop_ids":[],"location_id":"loc_school","subject":"Daniel","action":"reaches for and opens the door","camera_intent":"locked","composition_intent":"medium","visual_emotional_purpose":"arrival"}]}
+        continuity={"characters":[{"entity_id":"char_daniel","name":"Daniel","visual_design":{}}],"locations":[{"entity_id":"loc_school","name":"School","visual_design":{}}],"props":[]}
+        settings={"hook_seconds":55.0,"motion_spike_threshold":8,"overrides":{},"max_attempts":2,"aspect_ratio":"16:9","large_batch_request_threshold":20,"provider_video_clip_seconds":8.0}
+        media=compile_media_plan("prj_motion",shot_plan,"full_video_ai",settings)
+        requests=compile_generation_requests("prj_motion",shot_plan,media,continuity,settings)
+        source=next(item for item in requests["requests"] if item.get("purpose")=="SHOT")
+        clip=lambda action:{"start_state":"still","action":action,"end_state":"changed","natural_stillness":"brief pause"}
+        motion={"records":[{"request_id":source["request_id"],"analysis":{"physical_complexity":"HIGH","anatomy_risk":"MEDIUM","looping_risk":"LOW","interaction_objects":["door"],"hand_object_contact":"bounded","atomic_clips":[clip("hand reaches handle"),clip("door opens once")]}}]}
+        resolved=apply_motion_plans(requests,shot_plan,motion)
+        parts=sorted((item for item in resolved["requests"] if item.get("purpose")=="SHOT"),key=lambda item:item["part_index"])
+        self.assertEqual([item["part_index"] for item in parts],[1,2])
+        self.assertEqual(sum(item["target_duration"] for item in parts),8.0)
+        self.assertTrue(all("One visible action only" in item["prompt"] and item.get("motion_risk_analysis") for item in parts))
+        validate_generation_requests(resolved,media,continuity)
 
 
 if __name__ == "__main__": unittest.main()

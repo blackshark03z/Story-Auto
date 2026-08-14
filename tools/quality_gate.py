@@ -39,7 +39,7 @@ expected = {
     "baseline_model": "gemini-3.5-flash",
     "visual_provider": "google_flow",
     "modes": {"hybrid_hook", "full_video_ai"},
-    "tts": {"elevenlabs", "typecast"},
+    "tts": {"elevenlabs", "typecast", "kokoro_local"},
 }
 if frozen.get("providers", {}).get("llm", {}).get("baseline_model") != expected["baseline_model"]:
     fail("Gemini baseline model drift")

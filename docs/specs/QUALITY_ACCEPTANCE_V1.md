@@ -32,6 +32,11 @@ For each TTS provider:
 - provider-specific error classification tested;
 - no silent cross-provider fallback.
 
+Kokoro Local additionally requires a local-runtime/model/voice health check,
+24 kHz mono WAV validation, model-derived timing validation, deterministic
+chunk identities and reuse, and proof that no paid credential or credit gate is
+consulted.
+
 ## Planning gates
 
 - Gemini structured output validates;

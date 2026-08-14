@@ -4,9 +4,9 @@
 
 1. Create/import project from `content.md`.
 2. Select `hybrid_hook` or `full_video_ai`.
-3. Select ElevenLabs/Typecast voice and settings.
+3. Explicitly select ElevenLabs, Typecast, or Kokoro Local voice and settings.
 4. Optional: select local/licensed BGM.
-5. Validate provider credentials/session capability without spending large credits.
+5. Validate cloud credentials or Kokoro local-runtime capability without spending large credits.
 
 ## Plan
 

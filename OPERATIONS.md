@@ -30,6 +30,14 @@ Never reuse YouTube Auto project/runtime/browser roots.
 - No automation of credentials/password entry.
 - One active production Flow-generation project at a time per profile.
 
+## Kokoro Local TTS
+
+Select `kokoro_local` explicitly in the project TTS settings and configure its
+installed runtime path, voice, language, speed, device, and chunk size. The
+adapter uses the installation's direct Python environment in offline model-cache
+mode. Readiness is `LOCAL_RUNTIME_AVAILABLE`; no ElevenLabs/Typecast balance or
+credential is consulted. Existing projects retain their configured provider.
+
 ## Local operator UI
 
 Start with `python -m story_auto --runtime-root <root> ui`. The server is

@@ -5,7 +5,7 @@ from copy import deepcopy
 import re
 from typing import Any
 
-VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.1.0"
+VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.4.0"
 
 DEFAULT_VISUAL_POLICY: dict[str, Any] = {
     "schema_version": VISUAL_POLICY_VERSION,
@@ -38,14 +38,10 @@ _IMAGE_RENDERING = {
     "grain_policy": "subtle fine organic grain",
 }
 _ANTI_POLISH = (
-    "Avoid waxy or porcelain skin, glossy beauty retouching, plastic sheen, "
-    "over-sharpened HDR, excessive bokeh, studio-perfect illumination, gratuitous rim light, "
-    "volumetric god rays, default teal-orange grading, pristine showroom surfaces, perfect symmetry, and CGI material response."
+    "Avoid retouching, wax, CGI, HDR, heavy bokeh, stylization, pristine surfaces, and symmetry."
 )
 _FLOW_MARK_SAFE_AREA = (
-    "Where practical, keep faces, eyes, critical hand actions, important props, story text, subtitles, captions, "
-    "and focal details away from the bottom-right provider-mark safe area; preserve natural composition and do not "
-    "distort the shot solely to satisfy this soft constraint"
+    "Keep key details out of the bottom-right provider-mark safe area"
 )
 _MOTION = {
     "STATIC": "locked observational camera",
@@ -75,10 +71,14 @@ def compile_image_prompt(intent: str, policy: dict[str, Any], *, continuity: str
     parts = [intent.strip()]
     if continuity.strip():
         parts.append("Continuity identity and environment: " + continuity.strip())
-    parts.extend(_IMAGE_RENDERING[key] for key in _IMAGE_RENDERING)
+    parts.append("Natural soft photo realism; practical light, soft rolloff, restrained color, natural skin and materials")
+    parts.append("35-50 mm lens, contextual depth, asymmetry, grain")
     parts.append(_FLOW_MARK_SAFE_AREA)
     parts.append(_ANTI_POLISH)
-    return ". ".join(part.rstrip(". ") for part in parts if part) + "."
+    prompt = ". ".join(part.rstrip(". ") for part in parts if part) + "."
+    if len(prompt) > 1_200:
+        raise ValueError("FLOW_IMAGE_PROMPT_TOO_LONG")
+    return prompt
 
 
 def compile_video_prompt(
@@ -88,7 +88,6 @@ def compile_video_prompt(
     camera = camera_motion.strip().upper().replace(" ", "_")
     camera_text = _MOTION.get(camera, _MOTION["STATIC"])
     motion = subject_motion.strip()
-    motion = re.sub(r"\b(?:Julian Cross|Daniel Mercer|Maya|Julian|Daniel)\b", "the subject", motion, flags=re.I)
     motion = re.sub(r"\b(?:famous|renowned|celebrated|respected|prestigious|nationally respected)\b", "", motion, flags=re.I)
     motion = re.sub(r"\s{2,}", " ", motion).strip(" ,;:.\n")
     parts = [

@@ -9,7 +9,7 @@ Story Auto is a local, artifact-first production tool that turns a valid `conten
 
 ## V1 provider choices
 
-- TTS: **ElevenLabs** or **Typecast**.
+- TTS: **ElevenLabs**, **Typecast**, or explicit local **Kokoro Local**.
 - Planning LLM: **Gemini API**, baseline `gemini-3.5-flash`; `gemini-3.6-flash` is the first benchmark candidate.
 - Image/video generation: **Google Flow** through an isolated browser-automation provider adapter.
 - Final composition: local FFmpeg/FFprobe pipeline.
@@ -79,6 +79,11 @@ CLI; it does not write a parallel pipeline or require direct provider-page use.
 `render_plan.json`, compiles every IMAGE/VIDEO/HOLD source to a silent normalized
 scene MP4, generates SRT/ASS, mixes narration with optional local BGM, and
 atomically publishes a validated `final.mp4` plus `final_manifest.json`.
+
+`kokoro_local` is an explicit per-project provider choice. It invokes the
+installed direct-Python Kokoro runtime through the common TTS contract, requires
+no cloud credential, publishes 24 kHz mono WAV plus model-derived token timing,
+and never silently replaces an existing ElevenLabs or Typecast selection.
 Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
 scene and the downstream final render without submitting to a provider.
 

@@ -31,12 +31,13 @@ Both modes share one timeline, planning system, generation manager, render resol
 
 ## 4. TTS
 
-Exactly two TTS providers in V1:
+The owner-authorized Goal 09 amendment expands V1 to three TTS providers:
 
 - ElevenLabs;
-- Typecast.
+- Typecast;
+- Kokoro Local (`kokoro_local`), using the configured installed direct-Python runtime.
 
-Reuse/adapt proven provider configuration and mechanics from YouTube Auto. No silent cross-provider fallback. Both normalize into one canonical alignment contract.
+Reuse/adapt proven provider configuration and mechanics from YouTube Auto where applicable. No silent cross-provider fallback. All providers normalize into one canonical alignment contract. Kokoro Local requires no API credential and does not change existing projects or the default provider policy.
 
 ## 5. Planning LLM
 

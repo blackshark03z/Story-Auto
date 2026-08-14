@@ -15,7 +15,7 @@ from story_auto.core.planning import run_planning_stages
 
 CONTENT_PRODUCER_VERSION = "story-auto-content-stage/1.0.0"
 CONTENT_MANIFEST_SCHEMA_VERSION = "story-auto-content-manifest/1.0.0"
-TTS_PRODUCER_VERSION = "story-auto-tts-stage/1.0.0"
+TTS_PRODUCER_VERSION = "story-auto-tts-stage/1.1.0"
 ALIGNMENT_PRODUCER_VERSION = "story-auto-alignment-stage/1.0.0"
 
 
@@ -23,7 +23,7 @@ def _tts_settings(config) -> tuple[str, str, dict]:
     tts = config.settings.get("tts")
     if not isinstance(tts, dict): raise ValueError("project settings.tts is required to run audio")
     provider = tts.get("provider")
-    if provider not in {"elevenlabs", "typecast"}: raise ValueError("tts.provider must be elevenlabs or typecast")
+    if provider not in {"elevenlabs", "typecast", "kokoro_local"}: raise ValueError("tts.provider must be elevenlabs, typecast, or kokoro_local")
     if tts.get("allow_cross_provider_fallback", False) is not False: raise ValueError("cross-provider fallback is not supported")
     specific = tts.get(provider)
     if not isinstance(specific, dict) or not isinstance(specific.get("voice_id"), str) or not specific["voice_id"].strip():
@@ -41,9 +41,11 @@ def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None)
     narration = parse_content_markdown(source).narration
     narration_sha256 = narration_hash(narration)
     provider_name, voice_id, settings = _tts_settings(config)
-    extension = "wav" if provider_name == "typecast" else "mp3"
+    extension = "wav" if provider_name in {"typecast", "kokoro_local"} else "mp3"
     audio_relative, manifest_relative, alignment_relative = f"output/voice.{extension}", "output/audio_manifest.json", "output/alignment.json"
-    tts_fingerprint = fingerprint(stage_name="tts", producer_version=TTS_PRODUCER_VERSION, artifact_schema_version="story-auto-audio/1.0.0", direct_inputs={"narration_sha256": narration_sha256, "provider": provider_name, "voice_id": voice_id}, settings=settings)
+    active_adapter = adapter or provider_for(provider_name)
+    provider_identity = active_adapter.fingerprint_settings(settings) if hasattr(active_adapter, "fingerprint_settings") else {}
+    tts_fingerprint = fingerprint(stage_name="tts", producer_version=TTS_PRODUCER_VERSION, artifact_schema_version="story-auto-audio/1.0.0", direct_inputs={"narration_sha256": narration_sha256, "provider": provider_name, "voice_id": voice_id}, settings={"provider_settings":settings,"provider_identity":provider_identity})
     with ProjectLock(paths.runtime, project_id):
         checkpoints = CheckpointStore(paths)
         audio_path, manifest_path = paths.artifact_path(audio_relative), paths.artifact_path(manifest_relative)
@@ -53,7 +55,6 @@ def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None)
             try:
                 manifest = read_json(manifest_path); valid_audio = audio_path.stat().st_size > 0 and manifest["audio_sha256"] == sha256_file(audio_path) and manifest["narration_sha256"] == narration_sha256
             except Exception: valid_audio = False
-        active_adapter = adapter or provider_for(provider_name)
         request = TTSRequest(narration, narration_sha256, provider_name, voice_id, settings)
         if decision.action == "SKIP" and valid_audio:
             tts_action, result = "SKIP", None

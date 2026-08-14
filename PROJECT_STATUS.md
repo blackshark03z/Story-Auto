@@ -15,7 +15,7 @@ not yet accepted.
 
 - Primary input: `content.md` with strict `## Narration`.
 - Modes: `hybrid_hook`, `full_video_ai`.
-- TTS: ElevenLabs + Typecast.
+- TTS: ElevenLabs + Typecast + explicitly selected Kokoro Local.
 - Planning LLM: Gemini 3.5 Flash baseline; 3.6 Flash benchmark candidate.
 - Visual provider: Google Flow for images/video.
 - Canonical alignment timing.

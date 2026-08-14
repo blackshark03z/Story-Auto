@@ -81,4 +81,5 @@ def launch_dedicated_session(runtime: FlowRuntime, *, launcher=subprocess.Popen)
     port = urlparse(runtime.cdp_url).port
     if not port: raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "configured CDP URL needs an explicit port")
     runtime.profile.mkdir(parents=True, exist_ok=True)
-    launcher([str(chrome), f"--remote-debugging-port={port}", f"--remote-allow-origins={runtime.cdp_url}", f"--user-data-dir={runtime.profile}", runtime.project_url])
+    launcher([str(chrome), "--no-first-run", f"--remote-debugging-port={port}",
+              f"--remote-allow-origins={runtime.cdp_url}", f"--user-data-dir={runtime.profile}", runtime.project_url])
