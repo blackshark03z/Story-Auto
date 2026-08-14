@@ -132,7 +132,59 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
             # exact selected bytes so the final render audit is self-contained.
             entry["selected_asset"]["alignment_classification"] = classification
             entry["selected_asset"]["alignment_observation"] = str(report.get("notes", "")).strip()
-        entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": _now()})
+        temporal_ready = request.get("media_type") != "VIDEO" or entry["selected_asset"].get("temporal_qc") == "APPROVED"
+        entry.update({"status": "SUCCEEDED" if temporal_ready else "QC_PENDING",
+                      "failure_class": None if temporal_ready else "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
+        atomic_write_json(path, manifest)
+
+
+def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id: str, report: dict) -> None:
+    """Apply deterministic temporal hard gates to exact selected video bytes."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if not entry or entry.get("media_type") != "VIDEO" or entry.get("status") not in {"QC_PENDING", "SUCCEEDED"} or not isinstance(selected, dict):
+            raise FlowError("TEMPORAL_VIDEO_QC_INVALID")
+        state = report.get("state")
+        if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW", "REJECT_ACTION_LOGIC", "REJECT_ANATOMY", "REJECT_LOOP", "REJECT_IDENTITY", "REJECT_BACKGROUND", "UNCERTAIN"}:
+            raise FlowError("TEMPORAL_VIDEO_QC_INVALID")
+        selected.setdefault("temporal_reviews", []).append({"reviewed_at": _now(), "report": report})
+        if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW"} or not report.get("eligible"):
+            failure = "TEMPORAL_VIDEO_QC_UNCERTAIN" if state == "UNCERTAIN" else state
+            selected["temporal_qc"] = "REJECTED"
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": failure, "updated_at": _now()})
+            atomic_write_json(path, manifest)
+            raise FlowError(failure)
+        metadata = selected.get("metadata", {})
+        duration = float(metadata.get("duration_seconds", 0))
+        start, end = float(report.get("usable_start", 0)), float(report.get("usable_end", duration))
+        if start < 0 or end <= start or end > duration + .05:
+            raise FlowError("USABLE_TEMPORAL_WINDOW_INVALID")
+        selected.update({"temporal_qc": "APPROVED", "usable_start": start, "usable_end": end,
+                         "temporal_state": state})
+        semantic_ready = selected.get("production_qc") == "APPROVED" and selected.get("alignment_classification") in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"}
+        entry.update({"status": "SUCCEEDED" if semantic_ready else "QC_PENDING",
+                      "failure_class": None if semantic_ready else "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED", "updated_at": _now()})
+        atomic_write_json(path, manifest)
+
+
+def reopen_uncertain_temporal_qc(runtime_root: Path | str, project_id: str, request_id: str) -> None:
+    """Retry reasoning on the same bytes; never queue a provider generation."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if (not entry or entry.get("status") != "FAILED_RETRYABLE"
+                or entry.get("failure_class") != "TEMPORAL_VIDEO_QC_UNCERTAIN"
+                or not isinstance(selected, dict)):
+            raise FlowError("TEMPORAL_QC_RETRY_INVALID")
+        entry.setdefault("qc_retry_events", []).append({"at": _now(), "asset_sha256": selected.get("sha256"),
+                                                         "reason": "retry uncertain Gemini routing/QC on identical bytes"})
+        selected["temporal_qc"] = "PENDING"
+        entry.update({"status": "QC_PENDING", "failure_class": "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
 
 
@@ -172,6 +224,54 @@ def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id:
         production=request.get("execution_tier")=="STANDARD_PRODUCTION"
         attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"metadata":metadata,"completed_at":_now()}
         entry["attempts"].append(attempt);entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":{"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"},"failure_class":None,"updated_at":_now()});atomic_write_json(path,manifest);return entry["selected_asset"]
+
+
+def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_request_id: str,
+                           target_request_id: str, *, attribution: str) -> dict:
+    """Bind an exact prior Flow asset to a materially revised request.
+
+    The source must be a successfully acquired, non-ambiguous attempt. The new
+    request still returns to semantic and temporal QC; no prior approval is
+    inherited.
+    """
+    if not isinstance(attribution, str) or not attribution.strip():
+        raise FlowError("EXACT_ASSET_REUSE_ATTRIBUTION_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        requests = {item["request_id"]: item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]}
+        target_request = requests.get(target_request_id)
+        source_entry = next((item for item in manifest["requests"] if item.get("request_id") == source_request_id), None)
+        source_selected = source_entry.get("selected_asset") if isinstance(source_entry, dict) else None
+        if not target_request or not isinstance(source_selected, dict):
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        source_attempt = next((item for item in source_entry.get("attempts", [])
+                               if item.get("attempt") == source_selected.get("attempt")), None)
+        if not isinstance(source_attempt, dict) or source_attempt.get("status") != "SUCCEEDED" or source_attempt.get("asset_sha256") != source_selected.get("sha256"):
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        source = paths.artifact_path(source_selected["path"])
+        if not source.is_file():
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == target_request_id), None)
+        if entry is None:
+            entry = _entry(manifest, target_request)
+        if entry is None or entry.get("status") not in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"}:
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        metadata = validate_video(source) if target_request["media_type"] == "VIDEO" else validate_image(source)
+        number = len(entry["attempts"]) + 1
+        rel = f"assets/{target_request['media_type'].lower()}/{target_request_id}/exact_reuse_{number:03d}{source.suffix}"
+        target = paths.artifact_path(rel); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
+        attempt = {"attempt": number, "status": "SUCCEEDED", "dispatch_origin": "prior_exact_flow_asset_repair",
+                   "source_request_id": source_request_id, "source_asset_sha256": metadata["sha256"],
+                   "attribution_evidence": attribution.strip(), "asset_path": rel, "asset_sha256": metadata["sha256"],
+                   "metadata": metadata, "completed_at": _now()}
+        entry["attempts"].append(attempt)
+        entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now(),
+                      "selected_asset": {"path": rel, "sha256": metadata["sha256"], "attempt": number,
+                                         "metadata": metadata, "production_qc": "PENDING",
+                                         "reuse_source_request_id": source_request_id}})
+        atomic_write_json(path, manifest)
+        return entry["selected_asset"]
 
 @dataclass
 class FlowExecutor:
@@ -240,6 +340,17 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
                 metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
+                # A newly dispatched production video must not resolve to bytes
+                # already selected for another request. Flow's lazy media grid
+                # can surface a historical URL as if it were newly added; the
+                # request identity alone cannot make those stale bytes fresh.
+                if request.get("execution_tier") == "STANDARD_PRODUCTION" and request["media_type"] == "VIDEO":
+                    duplicate = next((other for other in manifest["requests"]
+                                      if other.get("request_id") != request["request_id"]
+                                      and isinstance(other.get("selected_asset"), dict)
+                                      and other["selected_asset"].get("sha256") == metadata["sha256"]), None)
+                    if duplicate is not None:
+                        raise FlowError("FLOW_STALE_RESULT", f"candidate bytes already selected for {duplicate['request_id']}")
                 final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"
                 final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
                 production = request.get("execution_tier") == "STANDARD_PRODUCTION"

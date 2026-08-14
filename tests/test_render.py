@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -74,6 +75,15 @@ class RenderMediaTests(unittest.TestCase):
         metadata = compile_video(source, output, duration=.4, short_policy="BLOCK", target=MediaTarget())
         self.assertEqual((metadata["video"]["width"], metadata["video"]["height"]), (1920, 1080))
         self.assertEqual(metadata["audio"], [])
+
+    def test_video_compiler_applies_validated_usable_window_start(self) -> None:
+        commands = []
+        with patch("story_auto.core.render.compiler.probe_media", return_value={"duration_seconds": 2.0}), \
+             patch("story_auto.core.render.compiler.run_command", side_effect=lambda command: commands.append(command)), \
+             patch("story_auto.core.render.compiler.validate_video", return_value={"ok": True}):
+            compile_video(Path("source.mp4"), self.root / "windowed.mp4", duration=.5,
+                          short_policy="BLOCK", target=MediaTarget(320, 180, 10), source_start=.75)
+        self.assertEqual(commands[0][2:4], ["-ss", "0.75"])
 
     def test_hold_and_hybrid_compositor_with_subtitles_and_bgm(self) -> None:
         target = MediaTarget(320, 180, 10)

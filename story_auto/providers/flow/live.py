@@ -161,34 +161,65 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 180): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed=runtime,timeout_seconds,None,False
+    def __init__(self, runtime, *, timeout_seconds: int = 480): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed=runtime,timeout_seconds,None,False
     def __call__(self, request, references, destination: Path):
+        # The generator is reused across a batch. Dispatch evidence is local
+        # to one request and must never leak from a prior attempt.
+        self.dispatch_confirmed = False
+        self.last_settings = None
         page=CdpPage.open(self.runtime)
         try:
-            dom=FlowBrowserDom(page); dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
+            dom=FlowBrowserDom(page)
+            # Anything visible before the attempt's reload is necessarily
+            # historical. Preserve those keys in the attribution baseline;
+            # the virtualized grid often hides them during composer reload and
+            # reveals them again only after generation starts.
+            historical_by_key = {}
+            historical_deadline = time.monotonic() + 8.0
+            while time.monotonic() < historical_deadline:
+                for item in dom.media_candidate_records():
+                    historical_by_key[item["key"]] = item
+                time.sleep(.5)
+            historical_records = list(historical_by_key.values())
+            dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
             if request["media_type"] == "IMAGE" and not (self.last_settings.get("requested_output_count") == self.last_settings.get("actual_output_count") == 1):
                 raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
-            before, before_output, before_text = set(), set(), ""
+            before = {item["key"] for item in historical_records}
+            before_output = {item["key"] for item in records_for_media(historical_records, request["media_type"])}
+            before_text = ""
             def baseline():
                 nonlocal before, before_output, before_text
-                records = dom.media_candidate_records()
-                before = {item["key"] for item in records}
-                before_output = {item["key"] for item in records_for_media(records, request["media_type"])}
-                before_text = page.evaluate("document.body.innerText")
+                # Reference attachment and Flow's virtualized grid can lazily
+                # reveal or hide historical media. Accumulate the union for a
+                # full observation window so a resurfacing old URL cannot
+                # masquerade as post-dispatch output.
+                deadline = time.monotonic() + 6.0
+                while time.monotonic() < deadline:
+                    records = dom.media_candidate_records()
+                    keys = {item["key"] for item in records}
+                    before.update(keys)
+                    before_output.update(item["key"] for item in records_for_media(records, request["media_type"]))
+                    before_text = page.evaluate("document.body.innerText")
+                    time.sleep(.5)
+                self.last_settings["baseline_candidate_count"] = len(before)
+                self.last_settings["baseline_media_candidate_count"] = len(before_output)
             FlowComposer(dom).submit(request["prompt"], references=[x for x in references if x], media_type=request["media_type"], before_dispatch=baseline, mode_already_configured=True)
-            # An immediate composer/UI transition is a dispatch acknowledgement;
-            # final media remains separately attributable by pre/post comparison.
+            def acknowledged():
+                states = page.evaluate(_EDITOR_JS) or []
+                prompt_cleared = len(states) == 0 or all(item.get("text", "") != request["prompt"] for item in states)
+                output_changed = {item["key"] for item in dom.media_candidate_records()} != before
+                return prompt_cleared or output_changed
+            # A cleared composer or a new media node is dispatch evidence.
+            # Arbitrary body-text changes are not attributable to Generate.
             for _ in range(8):
-                now_text=page.evaluate("document.body.innerText")
-                if now_text != before_text or {item["key"] for item in dom.media_candidate_records()} != before:
-                    self.dispatch_confirmed = True; self.last_settings["dispatch_ack_method"]="composer_or_output_transition"; break
+                if acknowledged():
+                    self.dispatch_confirmed = True; self.last_settings["dispatch_ack_method"]="composer_clear_or_output_transition"; break
                 time.sleep(.25)
             if not self.dispatch_confirmed:
                 if not dom.activate_generate_dom():
                     raise FlowError("FLOW_NOT_DISPATCHED", "native click produced no Flow acknowledgement")
                 for _ in range(12):
-                    now_text=page.evaluate("document.body.innerText")
-                    if now_text != before_text or {item["key"] for item in dom.media_candidate_records()} != before:
+                    if acknowledged():
                         self.dispatch_confirmed=True; self.last_settings["dispatch_ack_method"]="verified_dom_fallback_transition"; break
                     time.sleep(.25)
             if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "generate activation produced no Flow acknowledgement")
@@ -197,6 +228,8 @@ class LiveFlowGenerator:
                 pool = dom.media_candidate_records()
                 pool = records_for_media(pool, request["media_type"])
                 added=[item for item in pool if item["key"] not in before_output]
+                self.last_settings["last_observed_media_candidate_count"] = len(pool)
+                self.last_settings["last_added_candidate_count"] = len(added)
                 if len(added)>resolved.output_count and request["media_type"] == "IMAGE":
                     group=dom.newest_exact_image_group(resolved.output_count)
                     if group and all(url not in before_output for url in group):

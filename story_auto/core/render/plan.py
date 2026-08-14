@@ -150,6 +150,7 @@ def resolve_render_plan(
             cursor = end
             source_path = None if source_kind == "HOLD" else selected_asset.get("path")
             source_hash = _canonical_hash({"kind": "HOLD", "shot_id": shot_id}) if source_kind == "HOLD" else selected_asset.get("sha256")
+            source_start = 0.0 if source_kind != "VIDEO" else float(selected_asset.get("usable_start", 0.0))
             provenance: dict[str, Any] = {"request_id": None, "attempt": None, "provider": None}
             if source_path:
                 absolute = project_root / source_path
@@ -170,7 +171,8 @@ def resolve_render_plan(
             segments.append({
                 "segment_id": segment_id, "shot_id": shot_id, "part_index": index, "part_count": len(render_parts),
                 "source_asset": source_path, "source_media_type": source_kind, "desired_media_type": desired,
-                "source_hash": source_hash, "target_start": start, "target_end": end, "target_duration": end - start,
+                "source_hash": source_hash, "source_start": source_start,
+                "target_start": start, "target_end": end, "target_duration": end - start,
                 "trim_policy": settings.get("trim_policy", "TRIM_HEAD"),
                 "short_video_policy": "BLOCK" if render_mode == "full_video_ai" else settings.get("short_video_policy", "BLOCK"),
                 "fit_policy": settings.get("fit_policy", "COVER_CENTER_CROP"),

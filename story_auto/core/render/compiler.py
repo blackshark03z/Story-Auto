@@ -51,9 +51,12 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
 
 
 def compile_video(source: Path, output: Path, *, duration: float, short_policy: str,
-                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE") -> dict:
+                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE",
+                  source_start: float = 0.0) -> dict:
     source_meta = probe_media(source)
-    shortage = duration - float(source_meta["duration_seconds"])
+    if source_start < 0 or source_start >= float(source_meta["duration_seconds"]):
+        raise MediaError("USABLE_TEMPORAL_WINDOW_INVALID")
+    shortage = duration - (float(source_meta["duration_seconds"]) - source_start)
     if shortage > .04 and short_policy != "FREEZE_TAIL":
         raise MediaError("RENDER_SOURCE_VIDEO_TOO_SHORT")
     filters = [_cover_filter(target)]
@@ -62,7 +65,8 @@ def compile_video(source: Path, output: Path, *, duration: float, short_policy: 
     finish = _finishing_filter(finishing_profile)
     if finish: filters.append(finish)
     output.parent.mkdir(parents=True, exist_ok=True)
-    run_command(["ffmpeg", "-y", "-i", str(source), "-vf", ",".join(filters),
+    seek = ["-ss", format_duration(source_start)] if source_start > 0 else []
+    run_command(["ffmpeg", "-y", *seek, "-i", str(source), "-vf", ",".join(filters),
                  "-t", format_duration(duration), "-an", "-c:v", "libx264", "-preset", "medium",
                  "-crf", "18", "-pix_fmt", target.pixel_format, "-r", str(target.fps),
                  "-movflags", "+faststart", str(output)])

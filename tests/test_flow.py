@@ -9,7 +9,8 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
-                                                reject_selected_asset, review_production_asset)
+                                                reject_selected_asset, reopen_uncertain_temporal_qc, reuse_exact_flow_asset,
+                                                review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import records_for_media
@@ -175,6 +176,21 @@ class FlowTests(unittest.TestCase):
             first=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
             second=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
             self.assertEqual((first["new_submissions"],second["new_submissions"],len(calls)),(3,0,3))
+    def test_production_video_rejects_stale_bytes_selected_for_another_request(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            requests={"requests":[{"request_id":f"video_{i}","fingerprint":f"hash_{i}","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":f"clip {i}","depends_on":[],"provider":"google_flow","output_count":1,"execution_tier":"STANDARD_PRODUCTION"} for i in range(1,3)]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            def stale_video(request, refs, path):
+                calls.append(request["request_id"]); path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(b"same-provider-result"); return path
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),stale_video)
+            metadata={"duration_seconds":8.0,"width":1280,"height":720,"codec":"h264","container":"mp4","audio_present":False,"sha256":"same-hash"}
+            with patch("story_auto.providers.flow.service.validate_video", return_value=metadata):
+                result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            self.assertEqual((result["new_submissions"],calls),(1,["video_1","video_2"]))
+            entries={x["request_id"]:x for x in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            self.assertEqual(entries["video_1"]["status"],"QC_PENDING")
+            self.assertEqual((entries["video_2"]["status"],entries["video_2"]["failure_class"]),("FAILED_RETRYABLE","FLOW_STALE_RESULT"))
     def test_production_qc_approves_or_rejects_without_erasing_attempt(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root); executor,_=self._executor()
@@ -209,5 +225,24 @@ class FlowTests(unittest.TestCase):
             from story_auto.providers.flow.service import reopen_verified_pre_dispatch_failure
             reopen_verified_pre_dispatch_failure(runtime.root,cfg.project_id,"ref")
             self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"FAILED_RETRYABLE")
+    def test_uncertain_temporal_qc_retry_reuses_selected_bytes_without_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"shot","media_type":"VIDEO","status":"FAILED_RETRYABLE","failure_class":"TEMPORAL_VIDEO_QC_UNCERTAIN","attempts":[{"attempt":1}],"selected_asset":{"sha256":"exact-bytes","temporal_qc":"REJECTED"}}]})
+            reopen_uncertain_temporal_qc(runtime.root,cfg.project_id,"shot")
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((entry["status"],entry["failure_class"],entry["selected_asset"]["sha256"],len(entry["attempts"])),
+                             ("QC_PENDING","TEMPORAL_VIDEO_QC_REQUIRED","exact-bytes",1))
+    def test_exact_prior_flow_asset_reuse_requires_fresh_qc_and_keeps_provenance(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,_=self._executor()
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            requests=read_json(paths.artifact_path("output/generation_requests.json"))
+            requests["requests"].append({"request_id":"revised","fingerprint":"revised-hash","purpose":"SHOT","shot_id":"sh_0001","media_type":"IMAGE","prompt":"materially revised supportive intent","depends_on":[],"provider":"google_flow","execution_tier":"STANDARD_PRODUCTION"})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            selected=reuse_exact_flow_asset(runtime.root,cfg.project_id,"ref","revised",attribution="exact prior Flow image; revised intent requires fresh QC")
+            manifest={x["request_id"]:x for x in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            self.assertEqual((manifest["revised"]["status"],selected["production_qc"],manifest["revised"]["attempts"][0]["source_request_id"]),
+                             ("QC_PENDING","PENDING","ref"))
 
 if __name__ == "__main__": unittest.main()

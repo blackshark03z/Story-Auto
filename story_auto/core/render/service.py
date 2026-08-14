@@ -163,7 +163,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                     if segment["source_media_type"] == "VIDEO":
                         return compile_video(paths.artifact_path(segment["source_asset"]), candidate,
                                   duration=compile_duration, short_policy=segment["short_video_policy"], target=target,
-                                  finishing_profile=settings["finishing_profile"])
+                                  finishing_profile=settings["finishing_profile"],
+                                  source_start=float(segment.get("source_start", 0.0)))
                     return compile_hold(candidate,duration=compile_duration,color=settings["hold_color"],target=target)
                 _atomic_media_publish(clip_path,produce)
                 checkpoints.record(stage, fingerprint=clip_fp, status="SUCCESS", outputs=[relative],
