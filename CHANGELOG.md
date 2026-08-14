@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0 - 2026-08-14
+
+- Freeze the accepted V1 feature set as Story Auto v1.0.0 Stable.
+- Record Video 001 and Video 002 as canonical long-form production regressions
+  with exact accepted-master hashes and durable evidence pointers.
+- Document accepted provider/runtime behavior and the stable known limitations,
+  including Flow watermark/UI/authentication constraints, Kokoro Local runtime
+  dependency, Gemini quota dependency, and stochastic media QC.
+- No accepted production behavior changed.
+
 ## 2026-08-14 — Kokoro Local TTS amendment
 
 - Add the owner-authorized `kokoro_local` provider through the common TTS and

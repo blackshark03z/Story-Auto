@@ -1,0 +1,99 @@
+{
+  "schema": "story-auto.stable-release/1.0.0",
+  "product": "Story Auto",
+  "version": "1.0.0",
+  "channel": "Stable",
+  "release_date": "2026-08-14",
+  "starting_commit": "cffc3bb0b325b1c5acc35b9c503de2724d478cd7",
+  "source_commit": "v1.0.0^{commit}",
+  "release_tag": "v1.0.0",
+  "product_behavior_changed": false,
+  "build_os": {
+    "kernel": "1.22",
+    "lifecycle_kit": "1.1.2",
+    "continuity": "1.1.0",
+    "context_epoch": "1.0.1",
+    "authority": "D:\\Youtube\\_packages\\build-os-v1.22-lifecycle-v1.1.2"
+  },
+  "providers": {
+    "production_visual": "google_flow_web",
+    "tts": [
+      "elevenlabs",
+      "typecast",
+      "kokoro_local"
+    ],
+    "gemini_reasoning_qc_router": "production"
+  },
+  "accepted_test_baseline": {
+    "offline_tests": "PASS: 156 tests and 7 subtests",
+    "quality_gate": "PASS",
+    "evidence": ".buildos/evidence/STORY-AUTO-GOAL-09-VIDEO-002-PRODUCTION-REGRESSION/r003/validation-d35f333b5e2ac096b31c7717.json"
+  },
+  "storage_reclamation": {
+    "measurement": "Logical bytes across explicitly owned roots with junction aliases excluded; D:\\kokoro is reported separately as a retained dependency.",
+    "story_auto_bytes_before": 3707361285,
+    "story_auto_bytes_deleted": 2847854558,
+    "story_auto_bytes_after": 859506727,
+    "drive_c_free_before": 6046138368,
+    "drive_c_free_after": 7651979264,
+    "drive_d_free_before": 1683394560,
+    "drive_d_free_after": 2527633408,
+    "inventory": {
+      "KEEP_CANONICAL": [
+        "Git source, release metadata, immutable Build OS evidence, and implementation/recovery kit",
+        "Video 001 and Video 002 content, accepted masters, selected assets, manifests, mappings, audits, QC summaries, and pruning ledgers"
+      ],
+      "DELETE_SAFE": [
+        "obsolete Goal 03-08 engineering runtimes and superseded Video 001 projects",
+        "relocated runtime/cache copies, rejected or non-selected media, render scenes, narration/chunk intermediates, QC frames, diagnostics, and Python/test caches"
+      ],
+      "KEEP_REQUIRED_RUNTIME": [
+        "C:\\StoryAutoGoal09\\browser\\flow-profile",
+        "D:\\kokoro",
+        "provider configuration and protected credentials"
+      ],
+      "UNKNOWN_REVIEW": [
+        "D:\\Story Auto\\SA-001-accepted-baseline-docs.patch",
+        "D:\\Story Auto\\SA-001R-foundation-recovery.patch"
+      ]
+    }
+  },
+  "canonical_regressions": [
+    {
+      "identity": "Video 001",
+      "project_id": "prj_goal08_video001_temporal_v3",
+      "project_root": "C:\\Users\\ADMIN\\.codex\\story-auto-runtime\\prj_goal08_video001_temporal_v3",
+      "content_sha256": "bfa1d102b89a51dfb16fce6ba0b06dff154f0df87a373223419f0a618136eb1b",
+      "master": "C:\\Users\\ADMIN\\.codex\\story-auto-runtime\\prj_goal08_video001_temporal_v3\\output\\final_temporal_v3.mp4",
+      "master_sha256": "9b5d794fdf16575616a57a0eb91a437da232a9c59313eaa88b7a39daa6c71e81",
+      "duration_seconds": 982.766667,
+      "status": "PASS",
+      "accepted_commit": "2e179e52c47205a75c689b9a90827d8514b5df88",
+      "final_manifest": "output/final_manifest.json",
+      "audit": "output/final_hook_temporal_audit.json",
+      "acceptance": "output/PASS_GEMINI_ASSISTED_HOOK_AND_TEMPORAL_QC.json"
+    },
+    {
+      "identity": "Video 002",
+      "project_id": "prj_goal09_video002_lost_suitcase",
+      "project_root": "C:\\StoryAutoGoal09\\projects\\prj_goal09_video002_lost_suitcase",
+      "content_sha256": "4296e2baeda603c7b00b97de029b80b732e5340143f4b8482d59eb12b96f9fb5",
+      "master": "C:\\StoryAutoGoal09\\projects\\prj_goal09_video002_lost_suitcase\\output\\final.mp4",
+      "master_sha256": "69c4d2abf7232e4e5ff9cfb9e6b2e6302539cd56ecc8cecc50072f8c10bf495b",
+      "duration_seconds": 923.0,
+      "status": "PASS",
+      "accepted_commit": "cffc3bb0b325b1c5acc35b9c503de2724d478cd7",
+      "final_manifest": "output/final_manifest.json",
+      "audit": "output/visual_narration_alignment.json",
+      "acceptance": ".buildos/evidence/STORY-AUTO-GOAL-09-VIDEO-002-PRODUCTION-REGRESSION/r003/validation-d35f333b5e2ac096b31c7717.json"
+    }
+  ],
+  "known_limitations": [
+    "Flow visible watermark is accepted and is not removed, masked, covered, or specifically cropped away.",
+    "Flow browser automation can require bounded adapter maintenance after Google UI changes.",
+    "Flow authentication can require interactive human sign-in.",
+    "Kokoro Local depends on the installed D:\\kokoro runtime and models.",
+    "Gemini reasoning/QC depends on configured key, project, and quota availability.",
+    "AI media is stochastic and can require QC rejection, diagnosis, repair, or regeneration."
+  ]
+}

@@ -1,5 +1,9 @@
 # Story Auto
 
+Current stable release: **Story Auto v1.0.0 Stable**. See
+[`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) and the machine-readable
+[`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
+
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
 ## Product modes
