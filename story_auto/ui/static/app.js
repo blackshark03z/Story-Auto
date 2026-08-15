@@ -214,23 +214,38 @@ async function handleProjectAction(action) {
 }
 
 async function runAction(action, label) {
-  if (!state.project || state.busy) return;
+  if (!state.project) return;
+  if (state.busy || state.runToken) { toast('Another project action is still running.'); return; }
+  const projectId = state.project;
   const token = Symbol(action); state.runToken = token; state.lastAction = {action,label};
   setBusy(true,label); state.error = null; renderProject();
   let polling = false;
   const poll = setInterval(async () => {
     if (state.runToken !== token || polling) return;
     polling = true;
-    try { state.snapshot = await api(`/api/projects/${encodeURIComponent(state.project)}/snapshot`); if (state.runToken === token) renderProject(); }
+    try {
+      const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/snapshot`);
+      if (state.runToken === token && state.view === 'project' && state.project === projectId) { state.snapshot = snapshot; renderProject(); }
+    }
     catch (_) { /* the primary request owns failure reporting */ }
     finally { polling = false; }
   },2500);
   try {
-    await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action})});
-    state.snapshot = await api(`/api/projects/${encodeURIComponent(state.project)}/snapshot`);
+    await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action})});
+    const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/snapshot`);
+    if (state.runToken === token && state.view === 'project' && state.project === projectId) state.snapshot = snapshot;
     toast(action === 'pause' ? 'Production will pause at the next safe point.' : action === 'open_flow_sign_in' ? 'Flow sign-in opened.' : 'Project updated.');
-  } catch (error) { state.error = friendlyError(error); toast(state.error.title,true); }
-  finally { clearInterval(poll); if (state.runToken === token) state.runToken = null; setBusy(false); renderProject(); }
+  } catch (error) {
+    const friendly = friendlyError(error);
+    if (state.runToken === token && state.view === 'project' && state.project === projectId) state.error = friendly;
+    toast(friendly.title,true);
+  } finally {
+    clearInterval(poll);
+    const ownsRun = state.runToken === token;
+    const stillViewingProject = ownsRun && state.view === 'project' && state.project === projectId;
+    if (ownsRun) { state.runToken = null; setBusy(false); }
+    if (stillViewingProject) renderProject();
+  }
 }
 
 async function requestPause() {
@@ -334,8 +349,9 @@ async function showReview() {
     const issues = review.issues.map(issue => {
       const item = byId.get(issue.request_id) || {}; const selected = item.selected_asset;
       const preview = selected ? (issue.media_type === 'VIDEO' ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(state.project,selected.path)}"></video>` : `<img class="video-frame" src="${assetUrl(state.project,selected.path)}" alt="Generated ${esc(issue.label).toLowerCase()}">`) : '';
-      const recovery = issue.status === 'AUTH_REQUIRED' ? '<button data-review-flow type="button">Open Flow sign-in</button>' : ['CREDIT_BLOCKED','FAILED_PERMANENT','CANCELLED'].includes(issue.status) ? '<button data-review-settings type="button">Open Settings</button>' : '';
-      return `<article class="issue">${preview}<h3>${esc(issue.label)}</h3><p>${esc(issue.message)}</p><div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button">Approve ${esc(issue.label).toLowerCase()}</button>` : ''}${issue.retryable ? `<button data-regenerate="${esc(issue.request_id)}" type="button">Regenerate</button>` : ''}${recovery}</div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.request_id)}</div></details></article>`;
+      const terminalRecovery = ['CREDIT_BLOCKED','FAILED_PERMANENT','CANCELLED'].includes(issue.status);
+      const recovery = issue.status === 'AUTH_REQUIRED' ? '<button data-review-flow type="button">Open Flow sign-in</button>' : '';
+      return `<article class="issue">${preview}<h3>${esc(issue.label)}</h3><p>${esc(issue.message)}</p><div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button">Approve ${esc(issue.label).toLowerCase()}</button>` : ''}${issue.retryable ? `<button data-regenerate="${esc(issue.request_id)}" type="button">${terminalRecovery ? 'Create again' : 'Regenerate'}</button>` : ''}${recovery}</div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.request_id)}</div></details></article>`;
     }).join('');
     const publishing = review.publishing || {};
     $('#view').innerHTML = `<section class="surface"><div class="surface-head"><div><h2>Quality review</h2><p>${review.final_path ? `Final duration ${esc(formatDuration(review.duration_seconds))}.` : 'Review flagged scenes before production continues.'}</p></div>${review.final_path ? `<a class="button button-primary" href="${assetUrl(state.project,review.final_path)}" target="_blank" rel="noopener">Open final video</a>` : ''}</div>${qualityCards(review.quality)}</section>
@@ -346,7 +362,6 @@ async function showReview() {
     document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport()})}); toast('Scene approved.'); await showReview(); }));
     document.querySelectorAll('[data-regenerate]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'regenerate',request_id:button.dataset.regenerate})}); toast('Scene queued for regeneration.'); await openProject(state.project); }));
     document.querySelectorAll('[data-review-flow]').forEach(button => button.addEventListener('click', () => runAction('open_flow_sign_in','Opening the Story Auto Flow sign-in window…')));
-    document.querySelectorAll('[data-review-settings]').forEach(button => button.addEventListener('click', showSettings));
   } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
   finally { setBusy(false); }
   focusMain();

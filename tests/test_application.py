@@ -143,6 +143,8 @@ class OperatorApplicationTests(unittest.TestCase):
             review=app.review_overview("prj_purposes")
             self.assertEqual((snapshot["completed_visuals"],snapshot["total_visuals"]),(1,1))
             self.assertEqual([issue["label"] for issue in review["issues"]],["Reference 1","Thumbnail"])
+            self.assertTrue(all(issue["retryable"] for issue in review["issues"]))
+            self.assertIn("Create again",review["issues"][1]["message"])
             self.assertEqual(len(app.media_items("prj_purposes")["thumbnails"]),1)
             self.assertEqual(snapshot["primary_action"]["action"],"Review recovery steps")
             self.assertNotEqual(snapshot["primary_action"]["action"],"Resume")

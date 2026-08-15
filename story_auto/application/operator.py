@@ -306,12 +306,12 @@ class OperatorService:
                 request=item.get("request",{}); label=kind if kind=="Thumbnail" else f"{kind} {index}"
                 if status=="QC_PENDING": message=f"{label} is ready for your quality review."
                 elif status=="AUTH_REQUIRED": message=f"{label} is waiting for Google sign-in."
-                elif status=="CREDIT_BLOCKED": message=f"{label} is waiting for provider credits. Add credits before trying again."
-                elif status=="FAILED_PERMANENT": message=f"{label} needs a provider setup or capability correction before it can continue."
-                elif status=="CANCELLED": message=f"{label} was cancelled. Review its details before creating it again."
+                elif status=="CREDIT_BLOCKED": message=f"{label} is waiting for provider credits. Add credits, then choose Create again."
+                elif status=="FAILED_PERMANENT": message=f"{label} needs a provider setup or capability correction. Fix it, then choose Create again."
+                elif status=="CANCELLED": message=f"{label} was cancelled. Choose Create again when you are ready."
                 elif status=="AMBIGUOUS": message=f"{label} needs Story Auto to confirm the generated result."
                 else: message=f"{label} could not be completed and can be retried."
-                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","AMBIGUOUS","REJECTED"}})
+                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","AMBIGUOUS","REJECTED"}})
         pending=sum(1 for item in items if item.get("status") in problems)
         video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
         publishing=planning.get("publishing_package") or {}
