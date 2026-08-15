@@ -3,11 +3,12 @@
 Stable release baseline: **Story Auto v1.0.0 Stable** at
 `6dc3188a16bd1ae4f84906f891083ec6c0651154` (`v1.0.0`). The accepted
 post-release development state includes Goal 10 UX/UI simplification and Goal
-11 Flow image mark postprocessing; neither is a new release version.
+11 Flow image mark postprocessing plus Goal 12 state synchronization; none is a
+new release version. Goal 13 is a local candidate pending real production trials.
 
-There is no active engineering feature goal. Next mode is normal product use:
-run a real production trial through the normal Story Auto UI, observe any real
-defect, then open a narrow corrective goal with regression coverage.
+After Goal 13 offline closeout, next mode is normal product use: run Trial A
+(`ambient_story + quiet_verdict`) and Trial B (`ambient_story + hidden_mastery`)
+through the normal UI, observe real defects, then open narrow corrective work.
 
 ## Phase 0 — Design + Build OS baseline — ACCEPTED
 
@@ -92,6 +93,15 @@ UI must use existing application services.
 The V1 implementation, continuity/resume hardening, and explicit cost
 confirmation are complete. Do not schedule speculative follow-on work here;
 use defect-driven corrective goals after normal production trials.
+
+## Phase 10 — Ambient Story foundation — LOCAL CANDIDATE
+
+- [x] Durable `ambient_story` format and two initial style profiles.
+- [x] Semantic visual chapters with low image budgets and no AI video.
+- [x] Deterministic bounded image presentation through the common compositor.
+- [x] Offline Quiet Verdict and Hidden Mastery engineering demos.
+- [ ] Trial A: real Quiet Verdict production.
+- [ ] Trial B: real Hidden Mastery production.
 
 ## Deferred
 

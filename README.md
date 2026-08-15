@@ -16,6 +16,7 @@ Story Auto is a local, artifact-first production tool that turns a valid `conten
 
 - **`hybrid_hook`** — AI video for the opening hook (default ~55 seconds), generated still imagery with restrained motion for the body, and optional AI-video motion spikes.
 - **`full_video_ai`** — every final visual segment is video; still images may be used as references/keyframes but may not silently replace required final video.
+- **`ambient_story`** — narration-led long-form production using a small set of semantic visual chapters, Flow images only, and deterministic local presentation. Initial styles are **Quiet Verdict** and **Hidden Mastery**.
 
 ## V1 provider choices
 
@@ -29,7 +30,7 @@ Story Auto is a local, artifact-first production tool that turns a valid `conten
 The V1 workflow is:
 
 1. Import/create a project from `content.md`.
-2. Select render mode, TTS provider/voice, and optional licensed/local BGM.
+2. Select Format, Ambient Style when applicable, TTS provider/voice, and optional licensed/local BGM.
 3. Generate narration and canonical alignment.
 4. Generate story timeline, continuity bible, shot plan, and media plan.
 5. **Human approval gate:** approve continuity + shot plan before any large Flow batch.
@@ -49,7 +50,7 @@ internals:
 
 1. **Home** lists projects by story title, human status, progress, and one next
    action. Work needing attention is separated from recent work.
-2. **New video** guides Content, Style & Voice, and Review & Create in a
+2. **New video** guides Content, Format & Voice, and Review & Create in a
    recoverable dialog. The default free narrator is Kokoro Local's **George**.
 3. **Project** shows the current production stage, useful progress, saved-work
    reassurance, and one primary Start or Resume action.
@@ -89,6 +90,7 @@ execution remains explicit; local render and resume do not call Flow.
 
 ```text
 python -m story_auto --runtime-root runtime new --project-id prj_example
+python -m story_auto --runtime-root runtime new --project-id prj_ambient_example --render-mode ambient_story --ambient-style quiet_verdict
 python -m story_auto --runtime-root runtime run prj_example
 python -m story_auto --runtime-root runtime resume prj_example
 python -m story_auto --runtime-root runtime approve-plan prj_example
@@ -119,6 +121,14 @@ no cloud credential, publishes 24 kHz mono WAV plus model-derived token timing,
 and never silently replaces an existing ElevenLabs or Typecast selection.
 Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
 scene and the downstream final render without submitting to a provider.
+
+`ambient_story` requires `settings.ambient_style` to be `quiet_verdict` or
+`hidden_mastery`. Its visual planner groups ordered story-timeline scenes at
+semantic state changes, targets 2–5 or 4–7 chapter images respectively, rejects
+all video media overrides, and records deterministic motion/overlay parameters
+in the normal media/render plans. It still resolves the exact Goal 11 clean
+Flow derivative, compiles each image to a normalized silent MP4, and uses the
+same compositor, subtitles, narration, and optional BGM as existing formats.
 
 Production image and video assets pause in `QC_PENDING` until the complete
 naturalness rubric passes. For Flow IMAGE, the raw provider bytes are retained

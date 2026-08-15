@@ -45,6 +45,31 @@ loopback-only by design. Generation can be paused between provider requests;
 resume reuses successful and QC-pending attempts. Asset replacement accepts an
 explicit local file path and retains prior attempts in the manifest.
 
+## Ambient Story
+
+Create an Ambient project through the normal New video **Format** control or:
+
+```text
+python -m story_auto --runtime-root runtime new --project-id prj_ambient_example --render-mode ambient_story --ambient-style quiet_verdict
+```
+
+Valid styles are `quiet_verdict` and `hidden_mastery`. Ambient planning must
+produce only required image requests; a video request or video media override
+is a policy failure. Temporal video QC is not run. Semantic/naturalness/visible-
+mark QC, exact selected-asset mapping, Flow image cleanup, subtitles, narration,
+BGM, rendering, resume, and publishing continue through their existing paths.
+
+Rebuild the two provider-free engineering demos with:
+
+```text
+python tools/ambient_demo.py
+```
+
+The command writes ignored runtime evidence under
+`runtime/goal13_ambient_demos/`, including both MP4s, contact sheets, resolved
+render/presentation plans, black-frame results, and an explicit provider-call
+counter. It must remain zero. Real long-form trials are separate operator work.
+
 ## Provider calls
 
 Large batches are operator-confirmed. Full-video batch generation is always confirmation-gated. A bounded live smoke test is not permission for a large batch.

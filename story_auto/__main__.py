@@ -17,7 +17,8 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     new = commands.add_parser("new", help="Create an isolated project")
     new.add_argument("--project-id")
-    new.add_argument("--render-mode", default="hybrid_hook")
+    new.add_argument("--render-mode", default="hybrid_hook", choices=("hybrid_hook","full_video_ai","ambient_story"))
+    new.add_argument("--ambient-style", choices=("quiet_verdict","hidden_mastery"), help="Required when --render-mode ambient_story")
     for name in ("run", "resume"):
         command = commands.add_parser(name, help="Run the foundation pipeline" if name == "run" else "Resume the foundation pipeline")
         command.add_argument("project_id")
@@ -58,7 +59,7 @@ def main() -> int:
             serve(Path(args.runtime_root),args.host,args.port); return 0
         if args.command == "new":
             project_id = args.project_id or f"prj_{uuid.uuid4().hex}"
-            app.create_project(project_id=project_id,render_mode=args.render_mode)
+            app.create_project(project_id=project_id,render_mode=args.render_mode,ambient_style=args.ambient_style)
             print(f"CREATED {project_id}")
             return 0
         if args.command == "approve-plan":

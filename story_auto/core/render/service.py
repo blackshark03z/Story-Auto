@@ -15,6 +15,7 @@ from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
 from story_auto.core.subtitles import SUBTITLE_VERSION, build_subtitles
 from story_auto.core.visual_alignment import build_shot_mapping_audit, validate_visual_alignment_audit
+from story_auto.core.visual import ambient_render_defaults
 
 from .compiler import compile_hold, compile_image, compile_video
 from .compositor import COMPOSER_VERSION, compose
@@ -33,24 +34,31 @@ def resolve_render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
         raise ValueError("settings.render must be an object")
     target = MediaTarget(int(value.get("width", 1920)), int(value.get("height", 1080)),
                          int(value.get("fps", 30)), str(value.get("pixel_format", "yuv420p")))
+    ambient_defaults = ambient_render_defaults(config.settings["ambient_style"]) if config.render_mode == "ambient_story" else {}
     settings = {
         "width": target.width, "height": target.height, "fps": target.fps,
         "pixel_format": target.pixel_format,
         "fit_policy": value.get("fit_policy", "COVER_CENTER_CROP"),
         "trim_policy": value.get("trim_policy", "TRIM_HEAD"),
         "short_video_policy": value.get("short_video_policy", "BLOCK"),
-        "transition": value.get("transition", {"type": "CUT", "duration": 0.0}),
+        "transition": value.get("transition", ambient_defaults.get("transition", {"type": "CUT", "duration": 0.0})),
         "hold_color": value.get("hold_color", "black"),
         "finishing_profile": str(value.get("finishing_profile", "NONE")).upper(),
-        "subtitle_style": value.get("subtitle_style", {
+        "subtitle_style": value.get("subtitle_style", ambient_defaults.get("subtitle_style", {
             "width": 44, "font_name": "Arial", "font_size": 48,
             "margin_left": 90, "margin_right": 260,
             "provider_mark_safe_area": "BOTTOM_RIGHT",
-        }),
+        })),
         "visual_narration_alignment": value.get("visual_narration_alignment", {"fail_on_unplanned_reuse": True}),
     }
     if settings["finishing_profile"] not in {"NONE", "NATURAL_SOFT"}:
         raise ValueError("settings.render.finishing_profile must be NONE or NATURAL_SOFT")
+    if config.render_mode == "ambient_story":
+        local = value.get("ambient_presentation", {})
+        if not isinstance(local, dict) or not set(local).issubset({"motion_enabled", "overlay_enabled"}) or any(not isinstance(item, bool) for item in local.values()):
+            raise ValueError("settings.render.ambient_presentation supports only boolean motion_enabled and overlay_enabled")
+        settings["ambient_presentation"] = {"style_id":config.settings["ambient_style"],
+            "motion_enabled":local.get("motion_enabled", True),"overlay_enabled":local.get("overlay_enabled", True)}
     return settings, target
 
 
@@ -159,7 +167,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                     if segment["source_media_type"] == "IMAGE":
                         return compile_image(paths.artifact_path(segment["source_asset"]), candidate,
                                   duration=compile_duration, motion=segment["image_motion_policy"], target=target,
-                                  finishing_profile=settings["finishing_profile"])
+                                  finishing_profile=settings["finishing_profile"],
+                                  presentation=segment.get("ambient_presentation"))
                     if segment["source_media_type"] == "VIDEO":
                         return compile_video(paths.artifact_path(segment["source_asset"]), candidate,
                                   duration=compile_duration, short_policy=segment["short_video_policy"], target=target,

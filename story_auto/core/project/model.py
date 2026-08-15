@@ -7,11 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.visual.ambient import AMBIENT_STYLES
 from .paths import ProjectPaths, RuntimeLayout
 
 
 PROJECT_SCHEMA_VERSION = "story-auto-project/1.0.0"
-RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai"})
+RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai", "ambient_story"})
 TTS_PROVIDERS = frozenset({"elevenlabs", "typecast", "kokoro_local"})
 
 
@@ -36,6 +37,11 @@ class ProjectConfig:
             raise ProjectValidationError("content_path must be the project-relative content.md")
         if not isinstance(self.settings, dict):
             raise ProjectValidationError("settings must be a JSON object")
+        ambient_style = self.settings.get("ambient_style")
+        if self.render_mode == "ambient_story" and ambient_style not in AMBIENT_STYLES:
+            raise ProjectValidationError("ambient_story requires settings.ambient_style to be quiet_verdict or hidden_mastery")
+        if ambient_style is not None and ambient_style not in AMBIENT_STYLES:
+            raise ProjectValidationError("settings.ambient_style must be quiet_verdict or hidden_mastery")
         tts = self.settings.get("tts")
         if tts is not None:
             if not isinstance(tts, dict) or tts.get("provider") not in TTS_PROVIDERS:

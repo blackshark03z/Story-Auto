@@ -96,6 +96,22 @@ stable request parts. The render plan tiles those video parts over the original
 shot interval with internal cuts; missing parts block rendering. Full-video
 normalization never uses freeze-tail continuation.
 
+### ambient_story
+
+Ambient Story reuses the durable story timeline, shot plan, media plan,
+generation requests, manifest, and render plan. Its shot-plan policy treats a
+shot as a long-lived **visual chapter** spanning one or more contiguous timeline
+scenes and chooses boundaries from narrative-state, location, relationship, or
+entity changes rather than elapsed-time slicing.
+
+The initial style profiles are data-driven `quiet_verdict` (preferred 2–5
+chapter images) and `hidden_mastery` (preferred 4–7). Every Ambient media item
+is `IMAGE / REQUIRED`; overrides cannot request video and temporal video QC is
+`NOT_APPLICABLE`. Style prompt directives participate in visual-generation
+identity. Deterministic motion, fine-grain presentation, subtitle preset, and
+transition settings remain local render inputs, so local-only presentation
+changes do not invalidate Flow requests.
+
 ## Provider boundaries
 
 `story_auto.providers.gemini_media` is the official Gemini API media boundary.
@@ -196,6 +212,11 @@ Review decisions live in a durable `review_state.json`, separate from plan artif
 ## Composition boundary
 
 Every selected visual source compiles to a normalized silent MP4 clip before the common final compositor. The final compositor therefore remains media-provider agnostic.
+
+Ambient Story keeps this exact boundary: a selected, lineage-validated clean
+Flow image derivative is compiled with a bounded deterministic primitive
+(`STATIC`, subtle push/pull/pan, or micro drift) and optional seeded fine grain,
+then enters the common compositor like every other silent normalized clip.
 
 The implemented boundary lives under `core/render`, with separate render-plan,
 FFmpeg/FFprobe, compiler, compositor, and checkpoint-aware service modules.

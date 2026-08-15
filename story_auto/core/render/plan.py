@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import sha256_file
+from story_auto.core.visual import validate_ambient_presentation
 from story_auto.providers.flow.validation import validate_image, validate_video
 
 
@@ -40,7 +41,7 @@ def validate_render_plan(value: Any, *, project_root: Path | None = None) -> Non
     if not isinstance(value, dict) or value.get("schema_version") != RENDER_PLAN_VERSION:
         raise RenderPlanError("RENDER_PLAN_INVALID")
     segments = value.get("segments")
-    if value.get("render_mode") not in {"hybrid_hook", "full_video_ai"} or not isinstance(segments, list) or not segments:
+    if value.get("render_mode") not in {"hybrid_hook", "full_video_ai", "ambient_story"} or not isinstance(segments, list) or not segments:
         raise RenderPlanError("RENDER_PLAN_INVALID")
     previous = 0.0
     segment_ids: set[str] = set()
@@ -60,6 +61,10 @@ def validate_render_plan(value: Any, *, project_root: Path | None = None) -> Non
             raise RenderPlanError("RENDER_PLAN_INVALID")
         if value["render_mode"] == "full_video_ai" and segment["source_media_type"] != "VIDEO":
             raise RenderPlanError("RENDER_BLOCKED_REQUIRED_VIDEO_MISSING")
+        if value["render_mode"] == "ambient_story":
+            if segment["source_media_type"] != "IMAGE": raise RenderPlanError("AMBIENT_IMAGE_ONLY_POLICY_INVALID")
+            try: validate_ambient_presentation(segment.get("ambient_presentation"))
+            except ValueError as error: raise RenderPlanError("AMBIENT_PRESENTATION_INVALID") from error
         if project_root is not None and segment["source_media_type"] != "HOLD":
             path = project_root / segment["source_asset"]
             if not path.is_file() or sha256_file(path) != segment.get("source_hash"):
@@ -89,14 +94,15 @@ def resolve_render_plan(
         selected = entry.get("selected_asset")
         valid = entry.get("status") == "SUCCEEDED" and isinstance(selected, dict)
         if valid and settings.get("visual_narration_alignment", {}).get("require_semantic_qc"):
-            valid = selected.get("alignment_classification") in {
-                "PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"
-            }
+            classification = selected.get("alignment_classification")
+            valid = classification in {"PASS_DIRECT", "PASS_SUPPORTIVE"} or (
+                classification == "PASS_ATMOSPHERIC" and bool(request.get("atmospheric_justification"))
+            )
         return (request, selected) if valid else None
 
     for shot in shot_plan.get("shots", []):
         shot_id = shot["shot_id"]
-        if settings.get("visual_narration_alignment", {}).get("fail_on_unplanned_reuse"):
+        if render_mode != "ambient_story" and settings.get("visual_narration_alignment", {}).get("fail_on_unplanned_reuse"):
             max_beat = float(settings.get("visual_narration_alignment", {}).get("max_visual_beat_seconds", 120.0))
             if float(shot.get("end", 0)) - float(shot.get("start", 0)) > max_beat:
                 raise RenderPlanError("VISUAL_BEAT_UNDERSEGMENTED", shot_id)
@@ -168,6 +174,15 @@ def resolve_render_plan(
             transition = dict(default_transition if is_last else {"type": "CUT", "duration": 0.0})
             if transition.get("type", "CUT") == "CUT": transition["duration"] = 0.0
             segment_id = shot_id if len(render_parts) == 1 else f"{shot_id}_part_{index:03d}"
+            presentation = media.get("ambient_presentation") if source_kind == "IMAGE" and render_mode == "ambient_story" else None
+            if presentation:
+                presentation = dict(presentation)
+                local = settings.get("ambient_presentation", {})
+                if not local.get("motion_enabled", True):
+                    presentation.update({"motion":"STATIC","total_scale_change":0.0,"translation_fraction":0.0})
+                if not local.get("overlay_enabled", True):
+                    presentation.update({"overlay":"NONE","overlay_strength":0.0})
+                validate_ambient_presentation(presentation)
             segments.append({
                 "segment_id": segment_id, "shot_id": shot_id, "part_index": index, "part_count": len(render_parts),
                 "source_asset": source_path, "source_media_type": source_kind, "desired_media_type": desired,
@@ -176,7 +191,8 @@ def resolve_render_plan(
                 "trim_policy": settings.get("trim_policy", "TRIM_HEAD"),
                 "short_video_policy": "BLOCK" if render_mode == "full_video_ai" else settings.get("short_video_policy", "BLOCK"),
                 "fit_policy": settings.get("fit_policy", "COVER_CENTER_CROP"),
-                "image_motion_policy": media.get("image_motion_policy", "STATIC") if source_kind == "IMAGE" else "NONE",
+                "image_motion_policy": presentation["motion"] if presentation else (media.get("image_motion_policy", "STATIC") if source_kind == "IMAGE" else "NONE"),
+                **({"ambient_presentation": presentation} if presentation else {}),
                 "transition": transition, "source_audio_policy": "MUTE", "fallback_resolution": fallback,
                 "provenance": provenance,
             })

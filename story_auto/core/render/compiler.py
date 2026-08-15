@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from typing import Any
+
+from story_auto.core.visual import validate_ambient_presentation
 
 from .media import MediaError, MediaTarget, format_duration, probe_media, run_command, validate_video
 
@@ -23,12 +26,54 @@ def _finishing_filter(profile: str) -> str:
     return "eq=saturation=0.94:contrast=0.97:gamma=0.99,noise=alls=1.2:allf=t+u"
 
 
+def _ambient_filter(target: MediaTarget, duration: float, frames: int, presentation: dict[str, Any]) -> str:
+    validate_ambient_presentation(presentation)
+    motion = presentation["motion"]
+    scale_change = float(presentation["total_scale_change"])
+    translation = float(presentation["translation_fraction"])
+    if motion == "STATIC":
+        visual = _cover_filter(target)
+    elif motion in {"SUBTLE_PUSH", "SUBTLE_PULL"}:
+        denominator = max(1, frames - 1)
+        if motion == "SUBTLE_PUSH":
+            zoom = f"1+{scale_change:.5f}*on/{denominator}"
+        else:
+            zoom = f"1+{scale_change:.5f}*(1-on/{denominator})"
+        visual = (_cover_filter(target).rsplit(",fps=", 1)[0] + ","
+                  f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                  f"d={frames}:s={target.width}x{target.height}:fps={target.fps},format={target.pixel_format}")
+    else:
+        pad = max(translation, 0.012 if motion == "MICRO_DRIFT" else translation)
+        width, height = math.ceil(target.width * (1 + pad)), math.ceil(target.height * (1 + pad))
+        prefix = (f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height},")
+        if motion == "SUBTLE_PAN_LEFT":
+            x = f"(in_w-out_w)*(1-min(t/{format_duration(duration)},1))"
+            y = "(in_h-out_h)/2"
+        elif motion == "SUBTLE_PAN_RIGHT":
+            x = f"(in_w-out_w)*min(t/{format_duration(duration)},1)"
+            y = "(in_h-out_h)/2"
+        else:
+            x = f"(in_w-out_w)*(0.5+0.5*sin(2*PI*t/{format_duration(duration)}))"
+            y = f"(in_h-out_h)*(0.5+0.5*sin(2*PI*t/{format_duration(duration)}+PI/2))"
+        visual = prefix + f"crop={target.width}:{target.height}:x='{x}':y='{y}',setsar=1,fps={target.fps},format={target.pixel_format}"
+    if presentation.get("overlay") == "FINE_GRAIN":
+        visual += f",noise=alls={float(presentation['overlay_strength']):.2f}:allf=t+u:all_seed={int(presentation['seed']) % 100000}"
+    return visual
+
+
 def compile_image(source: Path, output: Path, *, duration: float, motion: str,
-                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE") -> dict:
-    if motion not in {"STATIC", "SLOW_PUSH", "SLOW_PAN"}:
+                  target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE",
+                  presentation: dict[str, Any] | None = None) -> dict:
+    if motion not in {"STATIC", "SLOW_PUSH", "SLOW_PAN", "SUBTLE_PUSH", "SUBTLE_PULL",
+                      "SUBTLE_PAN_LEFT", "SUBTLE_PAN_RIGHT", "MICRO_DRIFT"}:
         raise MediaError("IMAGE_MOTION_INVALID", motion)
     frames = max(1, round(duration * target.fps))
-    if motion == "STATIC":
+    if presentation is not None:
+        validate_ambient_presentation(presentation)
+        if motion != presentation["motion"]:
+            raise MediaError("AMBIENT_PRESENTATION_MISMATCH")
+        visual = _ambient_filter(target, duration, frames, presentation)
+    elif motion == "STATIC":
         visual = _cover_filter(target)
     elif motion == "SLOW_PUSH":
         visual = (f"scale={target.width * 2}:{target.height * 2}:force_original_aspect_ratio=increase,"

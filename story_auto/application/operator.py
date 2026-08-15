@@ -17,6 +17,7 @@ from story_auto.core.planning import approve_plan, approve_shot_plan, run_planni
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
+from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
 from story_auto.pipeline import run_audio_stages, run_content_stage
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
@@ -153,9 +154,12 @@ class OperatorService:
         return sorted(result,key=lambda item:item.get("updated_at", ""),reverse=True)
 
     def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
-                       content: str | None=None, settings: dict[str, Any] | None=None) -> dict[str, Any]:
+                       ambient_style: str | None=None, content: str | None=None,
+                       settings: dict[str, Any] | None=None) -> dict[str, Any]:
         ident=project_id or "prj_"+uuid.uuid4().hex
-        paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=settings or {}),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
+        resolved_settings=dict(settings or {})
+        if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
+        paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         return self.snapshot(paths.project_id)
 
     def _project(self, project_id: str): return load_project(self.runtime,project_id)
@@ -240,7 +244,10 @@ class OperatorService:
         thumbnail=publishing.get("thumbnail",{}).get("path") if isinstance(publishing,dict) else None
         duration=alignment.get("duration_seconds") if isinstance(alignment,dict) else None
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
+        ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
         return {"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
+                "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story"}[config.render_mode],
+                "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),
                 "planning_status":"APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED"),
                 "continuity_status":"READY" if artifacts["continuity_bible.json"] else "NOT_STARTED",
@@ -321,6 +328,7 @@ class OperatorService:
                 recovery_action=("manual_asset" if status=="AMBIGUOUS" else "flow_sign_in_then_requeue" if status=="AUTH_REQUIRED" else "requeue" if status in {"FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","REJECTED"} else None)
                 issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","REJECTED"},"recovery_action":recovery_action})
         pending=sum(1 for item in items if item.get("status") in problems)
+        temporal_qc=temporal_video_qc_applicability(snapshot["render_mode"])
         has_video=any(item.get("request",{}).get("media_type")=="VIDEO" for item in items)
         video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
         publishing=planning.get("publishing_package") or {}
@@ -329,11 +337,11 @@ class OperatorService:
             "final_path":snapshot.get("final_path"),"publishing":publishing,
             "quality":[
                 {"label":"Visual match","status":"Passed" if not pending else "Needs review"},
-                {"label":"Motion quality","status":"Needs review" if video_problem else ("Passed" if has_video else "Waiting")},
+                {"label":"Motion quality","status":"Not applicable" if temporal_qc=="NOT_APPLICABLE" else ("Needs review" if video_problem else ("Passed" if has_video else "Waiting"))},
                 {"label":"Naturalness","status":"Needs review" if pending else ("Passed" if items else "Waiting")},
                 {"label":"Final render","status":"Passed" if snapshot.get("final_path") else "Waiting"},
             ],
-            "issues":issues,"work_saved":True,
+            "issues":issues,"work_saved":True,"temporal_video_qc":temporal_qc,
         }
 
     def settings_overview(self) -> dict[str, Any]:
@@ -353,7 +361,7 @@ class OperatorService:
         voices={"bm_george":"George","am_michael":"Michael","af_heart":"Heart"}
         creation_defaults=_creation_settings(latest_settings,voice_id)
         return {
-            "defaults":{"render_mode":"hybrid_hook","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
+            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
             "creation_defaults":creation_defaults,
             "providers":[
                 {"name":"Voice","detail":f"{voices.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos","status":"Ready" if provider else "Not configured"},
@@ -415,6 +423,7 @@ class OperatorService:
     def set_media_override(self, project_id: str, shot_id: str, media_type: str, requirement: str="REQUIRED", *, provider=None) -> dict[str, Any]:
         paths,config=self._project(project_id); media_type=media_type.upper(); requirement=requirement.upper()
         if config.render_mode=="full_video_ai" and (media_type,requirement)!=("VIDEO","REQUIRED"): raise OperatorServiceError("full_video_ai requires VIDEO / REQUIRED")
+        if config.render_mode=="ambient_story" and (media_type,requirement)!=("IMAGE","REQUIRED"): raise OperatorServiceError("ambient_story requires IMAGE / REQUIRED")
         project=read_json(paths.project_file); media=project["settings"].setdefault("media",{}); media.setdefault("overrides",{})[shot_id]={"media_type":media_type,"requirement":requirement}; atomic_write_json(paths.project_file,project)
         run_visual_planning_stages(self.runtime.root,project_id,provider=provider); return self.planning_review(project_id)
 

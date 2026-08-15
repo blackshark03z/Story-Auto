@@ -2,7 +2,7 @@
 
 ## Current accepted state
 
-**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_ACCEPTED**
+**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOAL_13_LOCAL_CANDIDATE**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
@@ -24,15 +24,23 @@ The current accepted post-release development state includes:
   visible-provider-mark limitation. Focused tests passed 34/34, the full
   offline suite passed 141/141, quality and security gates passed, and the
   24-item visual corpus passed.
+- **Goal 12** (`STORY-AUTO-GOAL-12-STATE-SYNC-AND-GIT-PUBLISH`), accepted at
+  `61659579c3f288b9b27b3581f2c981162eff6919`: repository and Build OS state
+  are synchronized with `origin/main` at that commit.
+- **Goal 13** (`STORY-AUTO-GOAL-13-AMBIENT-STORY-FOUNDATION`) is a local
+  post-release candidate. It adds the Ambient Story capability and offline
+  engineering demos without advancing the accepted remote baseline; real Quiet
+  Verdict and Hidden Mastery production trials remain the next product gate.
 
-No engineering feature goal is active after this documentation synchronization.
-Normal operating mode is: use the product, run a real production trial through
-the normal UI, and open a narrow corrective goal only for an observed defect.
+After Goal 13 offline closeout, normal operating mode is: run the two authorized
+Ambient production trials through the normal UI and open narrow corrective work
+only for observed defects.
 
 ## Accepted feature inventory
 
 - Primary input: `content.md` with strict `## Narration`.
-- Modes: `hybrid_hook`, `full_video_ai`.
+- Formats: `hybrid_hook`, `full_video_ai`, and local-candidate `ambient_story`.
+- Ambient styles: `quiet_verdict`, `hidden_mastery`.
 - TTS: ElevenLabs + Typecast + explicitly selected Kokoro Local.
 - Planning LLM: Gemini 3.5 Flash baseline; 3.6 Flash benchmark candidate.
 - Visual provider: Google Flow for images/video.
@@ -139,6 +147,17 @@ the normal UI, and open a narrow corrective goal only for an observed defect.
   `1376x768 v1`; unsupported image geometry fails closed locally. A missing,
   corrupt, or failed clean derivative is rebuilt from valid raw evidence and
   must not cause a new Flow submission solely for postprocessing recovery.
+- Goal 13 expresses Ambient visual chapters through the existing shot/media/
+  request/render artifacts, targets 2–5 Quiet Verdict or 4–7 Hidden Mastery
+  chapter images, enforces `IMAGE / REQUIRED`, and records temporal video QC as
+  `NOT_APPLICABLE`. Its six deterministic local motion primitives remain within
+  1–3% scale bounds and use only a seeded subtle fine-grain overlay.
+- Ambient style prompt changes invalidate visual-generation descendants while
+  local motion/overlay enablement invalidates render descendants only. Existing
+  `hybrid_hook` and `full_video_ai` policies remain separate.
+- The normal New video flow exposes Format and contextual Ambient Style; raw
+  motion, overlay, budget, FFmpeg, and QC controls remain absent from the normal
+  surface and available only through resolved diagnostics artifacts.
 - Release hardening adds pre-dispatch workspace-capacity checks, atomic
   normalized/final media publication, restart proofs for interrupted planning
   and acquisition, zero-byte/partial-media rejection, and a credential/signed-URL/

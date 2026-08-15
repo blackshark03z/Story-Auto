@@ -21,7 +21,8 @@
     "render_mode": {
       "enum": [
         "hybrid_hook",
-        "full_video_ai"
+        "full_video_ai",
+        "ambient_story"
       ]
     },
     "master_duration": {

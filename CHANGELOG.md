@@ -19,6 +19,13 @@
 
 ## Unreleased
 
+- Add the post-release `ambient_story` format with durable Quiet Verdict and
+  Hidden Mastery profiles, semantic low-count visual chapters, Flow IMAGE-only
+  generation policy, deterministic bounded still presentation, style-aware
+  subtitles/transitions, narrow resume invalidation, normal Format/Style UI,
+  and two provider-free common-compositor demo renders. Existing
+  `hybrid_hook` and `full_video_ai` behavior remains separate.
+
 - Record accepted post-v1.0.0 development without creating a new release:
   Goal 10 simplifies the local creator experience to
   `CONTENT → SETUP → CREATE → REVIEW → DONE` across Home, Project, and

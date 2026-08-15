@@ -1,7 +1,7 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
   busy: false, busyLabel: '', error: null, lastAction: null, runToken: null,
-  wizard: { step: 1, content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook' }
+  wizard: { step: 1, content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook', ambientStyle: 'quiet_verdict' }
 };
 
 const $ = selector => document.querySelector(selector);
@@ -77,7 +77,8 @@ function formatUpdated(value) {
   return `Updated ${date.toLocaleDateString(undefined,{month:'short',day:'numeric',year:date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric'})}`;
 }
 
-function humanMode(mode) { return mode === 'full_video_ai' ? 'Full video animation' : 'Cinematic opening'; }
+function humanMode(mode) { return mode === 'full_video_ai' ? 'Full video animation' : mode === 'ambient_story' ? 'Ambient Story' : 'Cinematic opening'; }
+function humanAmbientStyle(style) { return style === 'hidden_mastery' ? 'Hidden Mastery' : 'Quiet Verdict'; }
 function chipClass(project) { return project.attention?.length ? 'attention' : project.user_status === 'Complete' ? 'success' : ''; }
 
 async function loadProjects() {
@@ -93,7 +94,7 @@ function projectCard(project) {
     ? `<a class="button button-primary" href="${assetUrl(project.project_id,project.final_path)}" target="_blank" rel="noopener">Open final video</a>`
     : `<button class="button-primary" type="button" data-project-action="${esc(action.action_id)}" data-project="${esc(project.project_id)}">${esc(action.action)}</button>`;
   return `<article class="project-card ${project.attention?.length ? 'is-attention' : ''}">
-    <div class="card-top"><div><h3>${esc(project.title)}</h3><p class="meta">${esc(formatUpdated(project.updated_at))} · ${esc(humanMode(project.render_mode))}</p></div><span class="status-chip ${chipClass(project)}">${esc(project.user_status)}</span></div>
+    <div class="card-top"><div><h3>${esc(project.title)}</h3><p class="meta">${esc(formatUpdated(project.updated_at))} · ${esc(humanMode(project.render_mode))}${project.ambient_style_label ? ` · ${esc(project.ambient_style_label)}` : ''}</p></div><span class="status-chip ${chipClass(project)}">${esc(project.user_status)}</span></div>
     <div class="card-progress"><small>${esc(project.current_activity)}</small><strong>${Number(project.progress || 0)}%</strong><div class="progress-track" role="progressbar" aria-label="${esc(project.title)} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(project.progress || 0)}"><span style="width:${Number(project.progress || 0)}%"></span></div></div>
     <div class="card-actions"><button class="text-button" type="button" data-open-project="${esc(project.project_id)}">View project</button>${primary}</div>
   </article>`;
@@ -396,14 +397,15 @@ async function showSettings() {
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
   $('#view').innerHTML = `<div class="settings-layout">
-    <section class="settings-section"><h2>General</h2><p>Defaults are applied to new videos and saved only in this local browser.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default production style</label><select id="defaultMode"><option value="hybrid_hook" ${defaults.render_mode === 'hybrid_hook' ? 'selected' : ''}>Cinematic opening</option><option value="full_video_ai" ${defaults.render_mode === 'full_video_ai' ? 'selected' : ''}>Full video animation</option></select></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice"><option value="bm_george" ${defaults.voice_id === 'bm_george' ? 'selected' : ''}>George — Natural male narrator</option><option value="am_michael" ${defaults.voice_id === 'am_michael' ? 'selected' : ''}>Michael — Clear male narrator</option><option value="af_heart" ${defaults.voice_id === 'af_heart' ? 'selected' : ''}>Heart — Warm female narrator</option></select></div></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button">Save defaults</button></div></section>
+    <section class="settings-section"><h2>General</h2><p>Defaults are applied to new videos and saved only in this local browser.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default format</label><select id="defaultMode"><option value="hybrid_hook" ${defaults.render_mode === 'hybrid_hook' ? 'selected' : ''}>Cinematic opening</option><option value="full_video_ai" ${defaults.render_mode === 'full_video_ai' ? 'selected' : ''}>Full video animation</option><option value="ambient_story" ${defaults.render_mode === 'ambient_story' ? 'selected' : ''}>Ambient Story</option></select></div><div class="field" id="defaultAmbientStyleField" ${defaults.render_mode === 'ambient_story' ? '' : 'hidden'}><label for="defaultAmbientStyle">Default Ambient Story style</label><select id="defaultAmbientStyle"><option value="quiet_verdict" ${defaults.ambient_style !== 'hidden_mastery' ? 'selected' : ''}>Quiet Verdict</option><option value="hidden_mastery" ${defaults.ambient_style === 'hidden_mastery' ? 'selected' : ''}>Hidden Mastery</option></select></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice"><option value="bm_george" ${defaults.voice_id === 'bm_george' ? 'selected' : ''}>George — Natural male narrator</option><option value="am_michael" ${defaults.voice_id === 'am_michael' ? 'selected' : ''}>Michael — Clear male narrator</option><option value="af_heart" ${defaults.voice_id === 'af_heart' ? 'selected' : ''}>Heart — Warm female narrator</option></select></div></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button">Save defaults</button></div></section>
     <section class="settings-section"><h2>Provider health</h2><p>Concise readiness based on this workspace's current configuration and project state.</p><div class="provider-list">${providerRows}</div></section>
     <section class="settings-section"><h2>Storage</h2><p>Story Auto keeps projects and generated media in its isolated local workspace.</p><dl class="summary-list"><div class="summary-row"><dt>Project location</dt><dd>${esc(state.settings.storage.project_location)}</dd></div><div class="summary-row"><dt>Free space</dt><dd>${state.settings.storage.free_gb} GB</dd></div></dl></section>
     <section class="settings-section"><h2>Advanced</h2><p>Technical configuration and diagnostics for troubleshooting.</p><details class="disclosure"><summary>Provider details</summary><dl class="summary-list"><div class="summary-row"><dt>Voice provider</dt><dd>${esc(state.settings.advanced.tts_provider)}</dd></div><div class="summary-row"><dt>Gemini model</dt><dd>${esc(state.settings.advanced.gemini_model)}</dd></div><div class="summary-row"><dt>Flow project</dt><dd>${esc(state.settings.advanced.flow_project)}</dd></div><div class="summary-row"><dt>Runtime root</dt><dd>${esc(state.settings.advanced.runtime_root)}</dd></div></dl></details>
       <details class="disclosure"><summary>Diagnostics</summary><div class="field"><label for="diagnosticProject">Project</label><select id="diagnosticProject">${projectOptions || '<option value="">No projects available</option>'}</select><small>Diagnostics may include internal IDs, exact paths, manifests, provider attempts, and raw status codes.</small></div><button id="openDiagnostics" type="button" style="margin-top:14px" ${projectOptions ? '' : 'disabled'}>Open diagnostics</button></details>
     </section>
   </div>`;
-  $('#saveDefaults').addEventListener('click', () => { localStorage.setItem('storyAutoDefaults',JSON.stringify({render_mode:$('#defaultMode').value,voice_id:$('#defaultVoice').value})); toast('Defaults saved.'); });
+  $('#defaultMode').addEventListener('change', () => { $('#defaultAmbientStyleField').hidden = $('#defaultMode').value !== 'ambient_story'; });
+  $('#saveDefaults').addEventListener('click', () => { localStorage.setItem('storyAutoDefaults',JSON.stringify({render_mode:$('#defaultMode').value,ambient_style:$('#defaultAmbientStyle').value,voice_id:$('#defaultVoice').value})); toast('Defaults saved.'); });
   $('#openDiagnostics')?.addEventListener('click', () => showDiagnostics($('#diagnosticProject').value));
   focusMain();
 }
@@ -428,6 +430,7 @@ async function openWizard() {
   if (!state.wizard.content) {
     state.wizard.voice = saved.voice_id || state.settings.defaults.voice_id || 'bm_george';
     state.wizard.mode = saved.render_mode || state.settings.defaults.render_mode || 'hybrid_hook';
+    state.wizard.ambientStyle = saved.ambient_style || state.settings.defaults.ambient_style || 'quiet_verdict';
   }
   state.wizard.step = 1;
   renderWizard();
@@ -436,7 +439,7 @@ async function openWizard() {
 }
 
 function wizardSteps() {
-  const labels = ['Content','Style & Voice','Review & Create'];
+  const labels = ['Content','Format & Voice','Review & Create'];
   return labels.map((label,index) => `<li class="${index + 1 < state.wizard.step ? 'is-done' : index + 1 === state.wizard.step ? 'is-current' : ''}" ${index + 1 === state.wizard.step ? 'aria-current="step"' : ''}>${index + 1}. ${label}</li>`).join('');
 }
 
@@ -458,20 +461,24 @@ function focusWizardStep() {
 function renderWizard() {
   const wizard = state.wizard;
   $('#wizardSteps').innerHTML = wizardSteps(); showWizardError('');
-  const title = wizard.step === 1 ? 'Add your content' : wizard.step === 2 ? 'Choose style and voice' : 'Review and create';
+  const title = wizard.step === 1 ? 'Add your content' : wizard.step === 2 ? 'Choose format, style and voice' : 'Review and create';
   $('#wizardTitle').textContent = title;
   if (wizard.step === 1) {
     $('#wizardContent').innerHTML = `<div class="file-drop"><label class="field-label" for="contentFile">Choose an approved content package or content.md</label><input id="contentFile" type="file" accept=".md,.txt,text/markdown,text/plain"><p class="hint">The file stays on this computer and is read into the project when you create it.</p></div><div class="field" style="margin-top:18px"><label for="contentInput">Content</label><textarea id="contentInput" spellcheck="true" placeholder="# Story title\n\n## Narration\n\nPaste approved narration here.">${esc(wizard.content)}</textarea><small id="contentHelp">Story Auto checks for one non-empty Narration section.</small></div>`;
     $('#contentInput').addEventListener('input', event => wizard.content = event.target.value);
     $('#contentFile').addEventListener('change', async event => { const file = event.target.files?.[0]; if (file) { wizard.content = await file.text(); $('#contentInput').value = wizard.content; } });
   } else if (wizard.step === 2) {
-    $('#wizardContent').innerHTML = `<div class="field"><span class="field-label">Production style</span><div class="choice-grid"><label class="choice"><input type="radio" name="style" value="natural" ${wizard.style === 'natural' ? 'checked' : ''}><strong>Natural cinematic</strong><small>Restrained, story-first visuals with dependable defaults.</small></label><label class="choice"><input type="radio" name="style" value="documentary" ${wizard.style === 'documentary' ? 'checked' : ''}><strong>Quiet documentary</strong><small>Grounded pacing and observational visual language.</small></label></div></div><div class="field" style="margin-top:20px"><label for="voiceChoice">Narrator voice</label><select id="voiceChoice"><option value="bm_george" ${wizard.voice === 'bm_george' ? 'selected' : ''}>George — Natural male narrator</option><option value="am_michael" ${wizard.voice === 'am_michael' ? 'selected' : ''}>Michael — Clear male narrator</option><option value="af_heart" ${wizard.voice === 'af_heart' ? 'selected' : ''}>Heart — Warm female narrator</option></select><small>Kokoro Local is the default free Stable provider. Provider detail remains available in Settings.</small></div><details class="disclosure"><summary>Advanced options</summary><div class="field"><label for="renderModeChoice">Production mode</label><select id="renderModeChoice"><option value="hybrid_hook" ${wizard.mode === 'hybrid_hook' ? 'selected' : ''}>Cinematic opening — video opening with image-led story body</option><option value="full_video_ai" ${wizard.mode === 'full_video_ai' ? 'selected' : ''}>Full video animation — video for every final scene</option></select></div></details>`;
+    const contextualStyle = wizard.mode === 'ambient_story'
+      ? `<fieldset class="field contextual-field" id="ambientStyleField"><legend>Style</legend><div class="choice-grid"><label class="choice"><input type="radio" name="ambientStyle" value="quiet_verdict" ${wizard.ambientStyle === 'quiet_verdict' ? 'checked' : ''}><strong>Quiet Verdict</strong><small>Cool-neutral institutional tension with restrained, mostly static presentation.</small></label><label class="choice"><input type="radio" name="ambientStyle" value="hidden_mastery" ${wizard.ambientStyle === 'hidden_mastery' ? 'checked' : ''}><strong>Hidden Mastery</strong><small>Warm tactile realism for underestimated skill and meaningful recurring objects.</small></label></div></fieldset>`
+      : `<fieldset class="field contextual-field"><legend>Visual tone</legend><div class="choice-grid"><label class="choice"><input type="radio" name="style" value="natural" ${wizard.style === 'natural' ? 'checked' : ''}><strong>Natural cinematic</strong><small>Restrained, story-first visuals with dependable defaults.</small></label><label class="choice"><input type="radio" name="style" value="documentary" ${wizard.style === 'documentary' ? 'checked' : ''}><strong>Quiet documentary</strong><small>Grounded pacing and observational visual language.</small></label></div></fieldset>`;
+    $('#wizardContent').innerHTML = `<fieldset class="field"><legend>Format</legend><div class="choice-grid format-grid"><label class="choice"><input type="radio" name="format" value="hybrid_hook" ${wizard.mode === 'hybrid_hook' ? 'checked' : ''}><strong>Cinematic opening</strong><small>Video-led opening with an image-led story body.</small></label><label class="choice"><input type="radio" name="format" value="full_video_ai" ${wizard.mode === 'full_video_ai' ? 'checked' : ''}><strong>Full video animation</strong><small>Generated video coverage for every final scene.</small></label><label class="choice"><input type="radio" name="format" value="ambient_story" ${wizard.mode === 'ambient_story' ? 'checked' : ''}><strong>Ambient Story</strong><small>Narrative-led long-form video with a few chapter images and subtle local motion.</small></label></div></fieldset>${contextualStyle}<div class="field" style="margin-top:20px"><label for="voiceChoice">Narrator voice</label><select id="voiceChoice"><option value="bm_george" ${wizard.voice === 'bm_george' ? 'selected' : ''}>George — Natural male narrator</option><option value="am_michael" ${wizard.voice === 'am_michael' ? 'selected' : ''}>Michael — Clear male narrator</option><option value="af_heart" ${wizard.voice === 'af_heart' ? 'selected' : ''}>Heart — Warm female narrator</option></select><small>Kokoro Local is the default free Stable provider. Provider detail remains available in Settings.</small></div>`;
+    document.querySelectorAll('input[name="format"]').forEach(input => input.addEventListener('change', event => { wizard.mode = event.target.value; renderWizard(); document.querySelector(`input[name="format"][value="${wizard.mode}"]`)?.focus(); }));
     document.querySelectorAll('input[name="style"]').forEach(input => input.addEventListener('change', event => wizard.style = event.target.value));
+    document.querySelectorAll('input[name="ambientStyle"]').forEach(input => input.addEventListener('change', event => wizard.ambientStyle = event.target.value));
     $('#voiceChoice').addEventListener('change', event => wizard.voice = event.target.value);
-    $('#renderModeChoice').addEventListener('change', event => wizard.mode = event.target.value);
   } else {
     const voiceNames = {bm_george:'George — Natural male narrator',am_michael:'Michael — Clear male narrator',af_heart:'Heart — Warm female narrator'};
-    $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Story</dt><dd>${esc(wizard.info.title)}</dd><button class="change-step" data-change-step="1" type="button">Change<span class="sr-only"> content</span></button></div><div class="summary-row"><dt>Narration</dt><dd>${wizard.info.word_count.toLocaleString()} words · about ${esc(formatDuration(wizard.info.estimated_duration_seconds))}</dd><span></span></div><div class="summary-row"><dt>Narrator</dt><dd>${esc(voiceNames[wizard.voice])}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> narrator</span></button></div><div class="summary-row"><dt>Style</dt><dd>${wizard.style === 'documentary' ? 'Quiet documentary' : 'Natural cinematic'}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> style</span></button></div><div class="summary-row"><dt>Production</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> production mode</span></button></div></dl><div class="surface" style="margin-top:22px"><strong>What happens next</strong><p class="hint">The project opens ready to start. Production moves through voice, planning, visuals, quality checks, and the final render while saving completed work.</p></div>`;
+    $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Story</dt><dd>${esc(wizard.info.title)}</dd><button class="change-step" data-change-step="1" type="button">Change<span class="sr-only"> content</span></button></div><div class="summary-row"><dt>Narration</dt><dd>${wizard.info.word_count.toLocaleString()} words · about ${esc(formatDuration(wizard.info.estimated_duration_seconds))}</dd><span></span></div><div class="summary-row"><dt>Narrator</dt><dd>${esc(voiceNames[wizard.voice])}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> narrator</span></button></div><div class="summary-row"><dt>Format</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> format</span></button></div>${wizard.mode === 'ambient_story' ? `<div class="summary-row"><dt>Style</dt><dd>${esc(humanAmbientStyle(wizard.ambientStyle))}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> Ambient Story style</span></button></div>` : `<div class="summary-row"><dt>Visual tone</dt><dd>${wizard.style === 'documentary' ? 'Quiet documentary' : 'Natural cinematic'}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> visual tone</span></button></div>`}</dl><div class="surface" style="margin-top:22px"><strong>What happens next</strong><p class="hint">The project opens ready to start. Production moves through voice, planning, visuals, quality checks, and the final render while saving completed work.</p></div>`;
     document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); renderWizard(); focusWizardStep(); }));
   }
   $('#wizardActions').innerHTML = `<button class="button-quiet" id="cancelWizard" type="button">Cancel</button><div class="right">${wizard.step > 1 ? '<button id="wizardBack" type="button">Back</button>' : ''}<button class="button-primary" id="wizardNext" type="button">${wizard.step === 3 ? 'Create video' : 'Continue'}</button></div>`;
@@ -488,15 +495,20 @@ async function advanceWizard() {
     catch (_) { showWizardError('Add exactly one non-empty Narration section before continuing.','contentInput'); $('#contentInput').focus(); }
     return;
   }
-  if (wizard.step === 2) { wizard.step = 3; renderWizard(); focusWizardStep(); return; }
+  if (wizard.step === 2) {
+    if (!['hybrid_hook','full_video_ai','ambient_story'].includes(wizard.mode)) { showWizardError('Choose a production format.','formatChoice'); return; }
+    if (wizard.mode === 'ambient_story' && !['quiet_verdict','hidden_mastery'].includes(wizard.ambientStyle)) { showWizardError('Choose an Ambient Story style.','ambientStyleField'); return; }
+    wizard.step = 3; renderWizard(); focusWizardStep(); return;
+  }
   const button = $('#wizardNext'); button.disabled = true; button.textContent = 'Creating…';
   try {
     const settings = clone(state.settings.creation_defaults || {});
     const existingKokoro = settings.tts?.kokoro_local || {};
     settings.tts = {provider:'kokoro_local',allow_cross_provider_fallback:false,kokoro_local:{...existingKokoro,voice_id:wizard.voice}};
     settings.ui = {production_style:wizard.style};
-    const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,content:wizard.content,settings})});
-    closeWizard(); state.wizard = {step:1,content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode}; toast('Video project created.'); await loadProjects(); state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
+    if (wizard.mode === 'ambient_story') settings.ambient_style = wizard.ambientStyle; else delete settings.ambient_style;
+    const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,ambient_style:wizard.mode === 'ambient_story' ? wizard.ambientStyle : null,content:wizard.content,settings})});
+    closeWizard(); state.wizard = {step:1,content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode,ambientStyle:wizard.ambientStyle}; toast('Video project created.'); await loadProjects(); state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
   } catch (error) { showWizardError(friendlyError(error).message); button.disabled = false; button.textContent = 'Create video'; }
 }
 
