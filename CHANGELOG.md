@@ -19,6 +19,11 @@
 
 ## Unreleased
 
+- Redesign the loopback UI around a creator-first Home, recoverable three-step
+  New video flow, focused production progress, actionable recovery states,
+  dedicated review/completion experiences, and intent-grouped Settings. Keep
+  diagnostics and advanced provider detail behind disclosure while preserving
+  the canonical CLI, artifacts, services, and production behavior.
 - Lock Story Auto V1 production images and videos to Google Flow Web by owner
   decision; close unfinished provider benchmarking while preserving all Flow,
   Gemini API 429, and partial Gemini Web provenance.

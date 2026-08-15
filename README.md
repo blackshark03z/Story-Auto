@@ -36,6 +36,29 @@ The V1 workflow is:
 
 The CLI remains a canonical execution path. The local operator UI uses the same application services rather than implementing a second pipeline.
 
+### Creator workspace
+
+The local UI is organized around the creator journey rather than pipeline
+internals:
+
+1. **Home** lists projects by story title, human status, progress, and one next
+   action. Work needing attention is separated from recent work.
+2. **New video** guides Content, Style & Voice, and Review & Create in a
+   recoverable dialog. The default free narrator is Kokoro Local's **George**.
+3. **Project** shows the current production stage, useful progress, saved-work
+   reassurance, and one primary Start or Resume action.
+4. **Review** presents quality checks, flagged scenes, publishing copy, and the
+   final video without exposing manifests or request IDs by default.
+5. **Settings** groups defaults, provider health, and storage by user intent;
+   raw paths, models, IDs, and manifest detail stay under Advanced or
+   Diagnostics.
+
+Errors preserve entered work and provide a specific next action. The interface
+uses native labeled controls, a keyboard-focus ring, live status regions, and
+responsive layouts for compact through large desktop windows. Canonical
+artifacts and provider execution still flow exclusively through
+`OperatorService` and the accepted core services.
+
 ## Canonical project knowledge
 
 - Product intent and requirements: `PROJECT_BRIEF.md`

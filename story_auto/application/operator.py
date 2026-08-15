@@ -4,7 +4,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +19,7 @@ from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_req
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.pipeline import run_audio_stages, run_content_stage
 from story_auto.providers.flow import (
-    FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, preflight,
+    FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
 )
 from story_auto.providers.flow.service import queue_regeneration, review_production_asset
@@ -25,6 +28,58 @@ from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 
 class OperatorServiceError(RuntimeError):
     pass
+
+
+_ATTENTION = {
+    "VALID_NARRATION_REQUIRED": {
+        "title": "Content needs attention",
+        "message": "Add one Narration section before Story Auto can begin.",
+        "action": "Edit content",
+        "action_id": "edit_content",
+    },
+    "PLANNING_APPROVAL_REQUIRED": {
+        "title": "Review the production plan",
+        "message": "Story Auto prepared the story plan and needs your approval before it creates visuals.",
+        "action": "Review plan",
+        "action_id": "review_plan",
+    },
+    "MEDIA_QC_REQUIRED": {
+        "title": "Review generated visuals",
+        "message": "Some generated scenes need a quick quality decision before production can continue.",
+        "action": "Review visuals",
+        "action_id": "review_visuals",
+    },
+    "FLOW_AUTH_REQUIRED": {
+        "title": "Google sign-in required",
+        "message": "Story Auto needs access to Google Flow before it can continue creating visuals.",
+        "action": "Open Flow sign-in",
+        "action_id": "open_flow_sign_in",
+    },
+}
+
+
+def _content_title(content: str, project_id: str, publishing: dict[str, Any]) -> str:
+    selected = publishing.get("selected_title")
+    if isinstance(selected, str) and selected.strip():
+        return selected.strip()
+    for line in content.splitlines():
+        if re.match(r"^#\s+\S", line):
+            return line[2:].strip()
+    words = project_id.removeprefix("prj_").replace("_", " ").replace("-", " ").split()
+    return " ".join(word.upper() if word.lower().startswith("v") and word[1:].isdigit() else word.capitalize() for word in words) or "Untitled video"
+
+
+def _updated_at(paths) -> str:
+    candidates = [paths.project_file, paths.content_file]
+    output = paths.root / "output"
+    if output.is_dir():
+        candidates.extend(path for path in output.iterdir() if path.is_file())
+    stamp = max((path.stat().st_mtime for path in candidates if path.is_file()), default=paths.root.stat().st_mtime)
+    return datetime.fromtimestamp(stamp, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _word_count(narration: str) -> int:
+    return len(re.findall(r"\b[\w’'-]+\b", narration, flags=re.UNICODE))
 
 
 def _safe_json(path: Path, default: Any) -> Any:
@@ -45,11 +100,11 @@ class OperatorService:
 
     def list_projects(self) -> list[dict[str, Any]]:
         result=[]
-        for path in sorted(self.runtime.projects.glob("prj_*")):
+        for path in self.runtime.projects.glob("prj_*"):
             if not path.is_dir(): continue
             try: result.append(self.snapshot(path.name))
             except Exception as error: result.append({"project_id":path.name,"status":"INVALID","error":str(error)})
-        return result
+        return sorted(result,key=lambda item:item.get("updated_at", ""),reverse=True)
 
     def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
                        content: str | None=None, settings: dict[str, Any] | None=None) -> dict[str, Any]:
@@ -62,12 +117,21 @@ class OperatorService:
     def snapshot(self, project_id: str) -> dict[str, Any]:
         paths,config=self._project(project_id)
         content=paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
-        try: parse_content_markdown(content); content_status="VALID"
-        except Exception: content_status="ACTION_REQUIRED"
+        try:
+            narration=parse_content_markdown(content).narration; content_status="VALID"
+        except Exception:
+            narration=""; content_status="ACTION_REQUIRED"
         review=_safe_json(paths.artifact_path("output/review_state.json"),{})
         manifest=_safe_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[]})
+        requests=_safe_json(paths.artifact_path("output/generation_requests.json"),{"requests":[]})
+        alignment=_safe_json(paths.artifact_path("output/alignment.json"),{})
+        publishing=_safe_json(paths.artifact_path("output/publishing_package.json"),{})
+        active_request_ids={item.get("request_id") for item in requests.get("requests",[]) if item.get("request_id")}
         counts={}
-        for entry in manifest.get("requests",[]): counts[entry.get("status","UNKNOWN")]=counts.get(entry.get("status","UNKNOWN"),0)+1
+        for entry in manifest.get("requests",[]):
+            if entry.get("request_id") not in active_request_ids:
+                continue
+            counts[entry.get("status","UNKNOWN")]=counts.get(entry.get("status","UNKNOWN"),0)+1
         artifacts={name:paths.artifact_path(f"output/{name}").is_file() for name in (
             "content_manifest.json","alignment.json","story_timeline.json","continuity_bible.json","shot_plan.json",
             "media_plan.json","generation_requests.json","render_plan.json","final.mp4","publishing_package.json")}
@@ -76,7 +140,52 @@ class OperatorService:
         if review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
         if counts.get("QC_PENDING"): blocked.append("MEDIA_QC_REQUIRED")
         if counts.get("AUTH_REQUIRED"): blocked.append("FLOW_AUTH_REQUIRED")
-        return {"project_id":project_id,"content_status":content_status,"render_mode":config.render_mode,
+        total_visuals=len([item for item in requests.get("requests",[]) if item.get("purpose")!="THUMBNAIL"])
+        finished_visuals=sum(counts.get(name,0) for name in ("SUCCEEDED","QC_PENDING"))
+        progress=0
+        stage="Content"
+        activity="Add approved narration to begin."
+        if content_status=="VALID": progress,stage,activity=12,"Voice","Ready to create narration."
+        if artifacts["alignment.json"]: progress,stage,activity=28,"Plan","Narration is ready. Planning the visual story."
+        if artifacts["story_timeline.json"]: progress,stage,activity=40,"Plan","Story structure and continuity are ready."
+        if artifacts["generation_requests.json"]:
+            ratio=(finished_visuals/total_visuals) if total_visuals else 0
+            progress,stage=45+round(35*ratio),"Create visuals"
+            activity=f"Creating visuals — {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
+        if counts.get("QC_PENDING"):
+            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality — {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
+        if artifacts["render_plan.json"]:
+            progress,stage,activity=max(progress,88),"Render","Rendering the final video."
+        if artifacts["final.mp4"]:
+            progress,stage,activity=100,"Finish","Final video is ready."
+
+        plan_status=review.get("plan_approval",{}).get("status")
+        if blocked:
+            if blocked[0]=="MEDIA_QC_REQUIRED":
+                progress,stage,activity=min(progress,94),"Quality check",f"{counts.get('QC_PENDING',0)} scene{'s' if counts.get('QC_PENDING',0)!=1 else ''} need quality review"
+            elif blocked[0]=="FLOW_AUTH_REQUIRED":
+                progress,stage,activity=min(progress,74),"Create visuals","Visual creation is waiting for Google sign-in."
+            elif blocked[0]=="PLANNING_APPROVAL_REQUIRED":
+                progress,stage,activity=min(progress,44),"Plan","The story plan is ready for review."
+            user_status="Needs your attention"
+            primary_action=_ATTENTION.get(blocked[0],{"action":"Review project","action_id":"review_project"})
+        elif artifacts["final.mp4"]:
+            user_status="Complete"; primary_action={"action":"Open final video","action_id":"open_final"}
+        elif counts and any(name not in {"SUCCEEDED"} for name in counts):
+            user_status=activity; primary_action={"action":"Resume","action_id":"resume_generation"}
+        elif artifacts["generation_requests.json"] and total_visuals and finished_visuals>=total_visuals:
+            user_status="Ready to render"; primary_action={"action":"Render final video","action_id":"render"}
+        elif artifacts["generation_requests.json"] and plan_status=="APPROVED":
+            user_status="Ready to create visuals"; primary_action={"action":"Start visual creation","action_id":"resume_generation"}
+        elif content_status=="VALID":
+            user_status="Ready to start"; primary_action={"action":"Start production","action_id":"process"}
+        else:
+            user_status="Content needed"; primary_action={"action":"Add content","action_id":"edit_content"}
+
+        thumbnail=publishing.get("thumbnail",{}).get("path") if isinstance(publishing,dict) else None
+        duration=alignment.get("duration_seconds") if isinstance(alignment,dict) else None
+        attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
+        return {"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),
                 "planning_status":"APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED"),
                 "continuity_status":"READY" if artifacts["continuity_bible.json"] else "NOT_STARTED",
@@ -84,13 +193,23 @@ class OperatorService:
                 "generation_status":counts or {"NOT_STARTED":0},
                 "render_status":"COMPLETE" if artifacts["final.mp4"] else ("PLANNED" if artifacts["render_plan.json"] else "NOT_STARTED"),
                 "publishing_status":"READY" if artifacts["publishing_package.json"] else "NOT_STARTED",
-                "blocked":blocked,"artifacts":artifacts,"project_path":str(paths.root)}
+                "blocked":blocked,"artifacts":artifacts,"project_path":str(paths.root),
+                "user_status":user_status,"current_stage":stage,"current_activity":activity,"progress":min(100,progress),
+                "completed_visuals":finished_visuals,"total_visuals":total_visuals,"primary_action":primary_action,
+                "attention":attention,"work_saved":True,"updated_at":_updated_at(paths),"word_count":_word_count(narration),
+                "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] else None}
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
         try: narration=parse_content_markdown(text).narration; status="VALID"
         except Exception as error: narration=""; status=str(error)
         return {"content":text,"narration":narration,"status":status}
+
+    def inspect_content(self, content: str) -> dict[str, Any]:
+        narration=parse_content_markdown(content).narration
+        words=_word_count(narration)
+        title=_content_title(content,"prj_untitled",{})
+        return {"status":"VALID","title":title,"word_count":words,"estimated_duration_seconds":round(words/150*60)}
 
     def save_content(self, project_id: str, content: str) -> dict[str, str]:
         parse_content_markdown(content)
@@ -125,6 +244,76 @@ class OperatorService:
             item={"request":request,"status":entry.get("status","PENDING"),"selected_asset":entry.get("selected_asset"),"attempts":entry.get("attempts",[]),"quality_reviews":entry.get("quality_reviews",[]),"failure_class":entry.get("failure_class")}
             (references if request.get("purpose")=="REFERENCE" else shots).append(item)
         return {"references":references,"shots":shots}
+
+    def review_overview(self, project_id: str) -> dict[str, Any]:
+        snapshot=self.snapshot(project_id); planning=self.planning_review(project_id); media=self.media_items(project_id)
+        items=media["references"]+media["shots"]
+        problems={"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","AUTH_REQUIRED","AMBIGUOUS","REJECTED"}
+        issues=[]
+        for index,item in enumerate(media["shots"],1):
+            status=item.get("status","PENDING")
+            if status not in problems: continue
+            request=item.get("request",{})
+            if status=="QC_PENDING": message=f"Scene {index} is ready for your quality review."
+            elif status=="AUTH_REQUIRED": message=f"Scene {index} is waiting for Google sign-in."
+            elif status=="AMBIGUOUS": message=f"Scene {index} needs Story Auto to confirm the generated result."
+            else: message=f"Scene {index} could not be completed and can be retried."
+            issues.append({"scene":index,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type")})
+        pending=sum(1 for item in items if item.get("status") in problems)
+        video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
+        publishing=planning.get("publishing_package") or {}
+        return {
+            "project_id":project_id,"title":snapshot["title"],"duration_seconds":snapshot.get("duration_seconds"),
+            "final_path":snapshot.get("final_path"),"publishing":publishing,
+            "quality":[
+                {"label":"Visual match","status":"Passed" if not pending else "Needs review"},
+                {"label":"Motion quality","status":"Needs review" if video_problem else ("Passed" if items else "Waiting")},
+                {"label":"Naturalness","status":"Needs review" if any(item.get("status")=="QC_PENDING" for item in items) else ("Passed" if items else "Waiting")},
+                {"label":"Final render","status":"Passed" if snapshot.get("final_path") else "Waiting"},
+            ],
+            "issues":issues,"work_saved":True,
+        }
+
+    def settings_overview(self) -> dict[str, Any]:
+        projects=self.list_projects()
+        latest_settings={}
+        if projects:
+            try: _,config=self._project(projects[0]["project_id"]); latest_settings=config.settings
+            except Exception: latest_settings={}
+        tts=latest_settings.get("tts",{}) if isinstance(latest_settings,dict) else {}
+        provider=tts.get("provider")
+        kokoro_settings=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
+        flow=latest_settings.get("flow",{}) if isinstance(latest_settings,dict) else {}
+        llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
+        flow_auth=any("FLOW_AUTH_REQUIRED" in item.get("blocked",[]) for item in projects)
+        usage=shutil.disk_usage(self.runtime.root)
+        voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
+        voices={"bm_george":"George","am_michael":"Michael","af_heart":"Heart"}
+        creation_defaults=json.loads(json.dumps(latest_settings)) if latest_settings else {"llm":{"provider":"gemini","model":"gemini-3.5-flash"}}
+        creation_defaults["tts"]={"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":{
+            "voice_id":voice_id,"runtime_path":str(kokoro_settings.get("runtime_path") or Path(os.environ.get("STORY_AUTO_KOKORO_RUNTIME","D:/kokoro"))),
+            "device":"cpu","speed":1.0,"language":str(kokoro_settings.get("language","b")),
+        }}
+        creation_defaults.pop("secrets",None)
+        return {
+            "defaults":{"render_mode":"hybrid_hook","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
+            "creation_defaults":creation_defaults,
+            "providers":[
+                {"name":"Voice","detail":f"{voices.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos","status":"Ready" if provider else "Not configured"},
+                {"name":"Visual generation","detail":"Google Flow","status":"Sign-in required" if flow_auth else ("Ready" if flow else "Not configured")},
+                {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
+            ],
+            "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow.get("project_identity","Not configured"),"tts_provider":provider or "Not configured"},
+        }
+
+    def diagnostics(self, project_id: str) -> dict[str, Any]:
+        return {"snapshot":self.snapshot(project_id),"planning":self.planning_review(project_id),"media":self.media_items(project_id)}
+
+    def open_flow_sign_in(self, project_id: str) -> dict[str, str]:
+        paths,config=self._project(project_id)
+        launch_dedicated_session(FlowRuntime.from_settings(paths.runtime,config.settings))
+        return {"status":"OPENED","message":"Complete Google sign-in in the Story Auto Flow window, then return and try again."}
 
     def review_asset(self, project_id: str, request_id: str, report: dict[str, Any]) -> dict[str, Any]:
         review_production_asset(self.runtime.root,project_id,request_id,report); return self.media_items(project_id)

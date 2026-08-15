@@ -1,32 +1,52 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Story Auto Operator</title><link rel="stylesheet" href="/static/styles.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Story Auto</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <aside class="rail">
-    <div class="brand"><span class="brand-mark">SA</span><div><b>Story Auto</b><small>Production operator</small></div></div>
-    <button class="new-project" id="newProject">＋ New project</button>
-    <nav id="projectList" aria-label="Projects"></nav>
-    <div class="rail-foot">Local workspace<br><span id="runtimeState">Ready</span></div>
-  </aside>
-  <main>
-    <header class="topbar">
-      <div><p class="eyebrow">PRODUCTION RELEASE</p><h1 id="projectTitle">Select a project</h1></div>
-      <div class="top-actions"><span class="mode" id="renderMode">—</span><button id="resumeTop">Resume processing</button></div>
-    </header>
-    <section id="emptyState" class="empty"><div class="empty-orb"></div><h2>Your story workspace is ready.</h2><p>Select a project or create one to begin.</p></section>
-    <div id="workspace" hidden>
-      <section class="status-grid" id="statusGrid"></section>
-      <div class="blocked" id="blocked" hidden></div>
-      <nav class="tabs" id="tabs" aria-label="Project sections">
-        <button data-tab="content" class="active">Content</button><button data-tab="planning">Planning</button><button data-tab="references">References</button><button data-tab="shots">Shots</button><button data-tab="render">Render</button><button data-tab="publishing">Publishing</button>
+  <a class="skip-link" href="#mainContent">Skip to main content</a>
+  <div class="app-shell">
+    <aside class="app-nav" aria-label="Application">
+      <div class="brand" aria-label="Story Auto">
+        <span class="brand-mark" aria-hidden="true">SA</span>
+        <span><strong>Story Auto</strong><small>Video production</small></span>
+      </div>
+      <nav class="nav-list" aria-label="Main navigation">
+        <button class="nav-item is-active" id="homeNav" type="button" aria-current="page"><span aria-hidden="true">⌂</span> Home</button>
+        <button class="nav-item" id="settingsNav" type="button"><span aria-hidden="true">⚙</span> Settings</button>
       </nav>
-      <section class="panel" id="panel"></section>
+      <div class="nav-foot"><span class="health-dot" aria-hidden="true"></span><span>Local workspace</span><small id="runtimeState">Ready</small></div>
+    </aside>
+    <main id="mainContent" tabindex="-1">
+      <header class="app-bar">
+        <div>
+          <p class="eyebrow" id="viewEyebrow">YOUR VIDEOS</p>
+          <h1 id="viewTitle">Home</h1>
+        </div>
+        <div class="app-bar-actions" id="appBarActions"></div>
+      </header>
+      <section class="view" id="view" aria-live="polite" aria-busy="false"></section>
+    </main>
+  </div>
+
+  <dialog id="newVideoDialog" aria-labelledby="wizardTitle">
+    <div class="dialog-shell">
+      <header class="dialog-head">
+        <div><p class="eyebrow">NEW VIDEO</p><h2 id="wizardTitle">Add your content</h2></div>
+        <button class="icon-button" id="closeWizard" type="button" aria-label="Close new video">×</button>
+      </header>
+      <ol class="stepper" id="wizardSteps" aria-label="New video progress"></ol>
+      <div class="error-summary" id="wizardError" role="alert" hidden></div>
+      <div class="dialog-content" id="wizardContent"></div>
+      <footer class="dialog-actions" id="wizardActions"></footer>
     </div>
-  </main>
-  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

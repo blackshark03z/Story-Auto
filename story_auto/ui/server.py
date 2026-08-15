@@ -42,6 +42,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             parsed=urlparse(self.path); parts=[unquote(item) for item in parsed.path.split("/") if item]
             if not parts: return self._static("index.html")
             if parts[0]=="static" and len(parts)==2: return self._static(parts[1])
+            if parts==["api","settings"]: return self._json(self.service.settings_overview())
             if parts==["api","projects"]: return self._json({"projects":self.service.list_projects()})
             if len(parts)>=3 and parts[:2]==["api","projects"]:
                 project_id=parts[2]; view=parts[3] if len(parts)>3 else "snapshot"
@@ -49,6 +50,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 elif view=="content": result=self.service.get_content(project_id)
                 elif view=="planning": result=self.service.planning_review(project_id)
                 elif view=="media": result=self.service.media_items(project_id)
+                elif view=="review": result=self.service.review_overview(project_id)
+                elif view=="diagnostics": result=self.service.diagnostics(project_id)
                 elif view=="asset":
                     relative=parse_qs(parsed.query).get("path",[""])[0]; paths,_=load_project(self.service.runtime,project_id); target=paths.artifact_path(relative)
                     payload=target.read_bytes(); content=mimetypes.guess_type(target.name)[0] or "application/octet-stream"
@@ -61,6 +64,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             parts=[unquote(item) for item in urlparse(self.path).path.split("/") if item]; body=self._body()
+            if parts==["api","validate-content"]:
+                return self._json(self.service.inspect_content(body.get("content","")))
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),content=body.get("content"),settings=body.get("settings")),HTTPStatus.CREATED)
             if len(parts)!=4 or parts[:2]!=["api","projects"] or parts[3]!="actions": raise ValueError("unknown action route")
@@ -73,6 +78,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="generate": result=self.service.generate(project_id,request_ids=set(body.get("request_ids",[])) or None,max_requests=body.get("max_requests"))
             elif action=="pause": result=self.service.set_pause(project_id,True)
             elif action=="resume_generation": result=self.service.generate(project_id,max_requests=body.get("max_requests"))
+            elif action=="open_flow_sign_in": result=self.service.open_flow_sign_in(project_id)
             elif action=="approve_asset": result=self.service.review_asset(project_id,body["request_id"],body["report"])
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))
             elif action=="regenerate": result=self.service.regenerate(project_id,body["request_id"],body.get("reason","operator requested regeneration"))

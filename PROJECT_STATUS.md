@@ -6,10 +6,11 @@
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
-The repository contains the frozen product authorities and a production-capable
-CLI/application pipeline through hybrid rendering and publishing assets. Goal 08
-production-release work is active; local UI and live representative evidence are
-not yet accepted.
+The repository contains the frozen product authorities and the Story Auto
+v1.0.0 Stable production-capable CLI/application pipeline through hybrid
+rendering and publishing assets. Goal 10 adds a tested creator-oriented local UI
+candidate over the same services; experiential owner acceptance is pending at
+the `REVIEW_REQUIRED` gate.
 
 ## Accepted feature inventory
 
@@ -110,6 +111,11 @@ not yet accepted.
   planning, references, shots, prompt edits, replacement/regeneration, production
   QC, safe generation controls, rendering, provenance, and publishing. CLI and UI
   mutations share `OperatorService` and the accepted core services.
+- The Goal 10 UI candidate reorganizes that operator capability into Home,
+  three-step New video, focused Project, Review, completion, and Settings
+  surfaces. Human status, progress, and one next action lead; raw IDs, paths,
+  manifests, provider attempts, and low-level controls are disclosed only under
+  Advanced or Diagnostics. Owner visual/experiential acceptance remains pending.
 - Release hardening adds pre-dispatch workspace-capacity checks, atomic
   normalized/final media publication, restart proofs for interrupted planning
   and acquisition, zero-byte/partial-media rejection, and a credential/signed-URL/

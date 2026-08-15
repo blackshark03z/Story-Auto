@@ -44,5 +44,65 @@ class OperatorApplicationTests(unittest.TestCase):
             paths,_=app._project("prj_operator03")
             self.assertNotIn("media",read_json(paths.project_file)["settings"])
 
+    def test_user_facing_projection_translates_attention_and_progress(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_creator_story",content="# The Lantern Room\n\n## Narration\n\nA quiet story begins here.\n")
+            paths,_=app._project("prj_creator_story")
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[
+                {"request_id":"req_hidden_01","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":"quiet room"},
+                {"request_id":"req_hidden_02","purpose":"SHOT","shot_id":"sh_0002","media_type":"IMAGE","prompt":"old piano"}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[
+                {"request_id":"req_hidden_01","status":"SUCCEEDED","attempts":[]},
+                {"request_id":"req_hidden_02","status":"AUTH_REQUIRED","attempts":[]}]})
+            value=app.snapshot("prj_creator_story")
+            self.assertEqual(value["title"],"The Lantern Room")
+            self.assertEqual(value["user_status"],"Needs your attention")
+            self.assertEqual(value["attention"][0]["title"],"Google sign-in required")
+            self.assertEqual(value["attention"][0]["action"],"Open Flow sign-in")
+            self.assertEqual(value["current_activity"],"Visual creation is waiting for Google sign-in.")
+            self.assertLess(value["progress"],100)
+            self.assertNotIn("req_hidden_01",value["current_activity"])
+
+    def test_complete_and_review_projection_uses_plain_quality_language(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_finished_story",content="# A Promise Kept\n\n## Narration\n\nThe promise was kept.\n")
+            paths,_=app._project("prj_finished_story")
+            paths.artifact_path("output/final.mp4").write_bytes(b"fixture")
+            atomic_write_json(paths.artifact_path("output/alignment.json"),{"duration_seconds":72.4})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[]})
+            snapshot=app.snapshot("prj_finished_story")
+            review=app.review_overview("prj_finished_story")
+            self.assertEqual((snapshot["user_status"],snapshot["progress"]),("Complete",100))
+            self.assertEqual(snapshot["primary_action"]["action"],"Open final video")
+            self.assertEqual(review["quality"][-1],{"label":"Final render","status":"Passed"})
+            self.assertEqual(review["issues"],[])
+
+    def test_user_projection_ignores_superseded_manifest_attempts(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_superseded",content="# Current Cut\n\n## Narration\n\nThe current cut is complete.\n")
+            paths,_=app._project("prj_superseded")
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[
+                {"request_id":"req_current","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":"current"}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[
+                {"request_id":"req_old","status":"QC_PENDING","attempts":[]},
+                {"request_id":"req_current","status":"SUCCEEDED","attempts":[]}]})
+            snapshot=app.snapshot("prj_superseded")
+            self.assertEqual(snapshot["generation_status"],{"SUCCEEDED":1})
+            self.assertNotIn("MEDIA_QC_REQUIRED",snapshot["blocked"])
+            self.assertEqual(app.review_overview("prj_superseded")["issues"],[])
+
+    def test_new_video_defaults_are_voice_oriented_and_secret_free(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            settings=app.settings_overview()
+            self.assertEqual(settings["defaults"]["voice_name"],"George")
+            self.assertEqual(settings["creation_defaults"]["tts"]["provider"],"kokoro_local")
+            self.assertEqual(settings["creation_defaults"]["tts"]["kokoro_local"]["voice_id"],"bm_george")
+            self.assertNotIn("api_key",str(settings).lower())
+
 
 if __name__ == "__main__": unittest.main()
