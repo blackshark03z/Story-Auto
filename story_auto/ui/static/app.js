@@ -1,6 +1,6 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
-  busy: false, busyLabel: '', error: null,
+  busy: false, busyLabel: '', error: null, lastAction: null, runToken: null,
   wizard: { step: 1, content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook' }
 };
 
@@ -54,6 +54,7 @@ function setNav(active) {
 }
 
 function focusMain() {
+  window.scrollTo({top:0,left:0,behavior:'instant'});
   requestAnimationFrame(() => $('#mainContent').focus({preventScroll:true}));
 }
 
@@ -113,7 +114,7 @@ async function showHome(announce = false) {
   const view = $('#view');
   view.innerHTML = '<div class="empty-library"><p>Loading your videos…</p></div>';
   try { await loadProjects(); } catch (error) {
-    view.innerHTML = errorCard(friendlyError(error)); return;
+    view.innerHTML = errorCard(friendlyError(error)); bindErrorActions(); return;
   }
   const attention = state.projects.filter(project => project.attention?.length);
   const recent = state.projects.filter(project => !project.attention?.length);
@@ -135,7 +136,7 @@ async function openProject(projectId, moveFocus = true) {
   state.view = 'project'; state.project = projectId; state.error = null;
   setNav('home'); setBusy(true,'Opening project');
   try { state.snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/snapshot`); setBusy(false); renderProject(); }
-  catch (error) { setHeader('PROJECT','Could not open project'); $('#view').innerHTML = errorCard(friendlyError(error)); }
+  catch (error) { setHeader('PROJECT','Could not open project'); $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
   finally { if (state.busy) setBusy(false); }
   if (moveFocus) focusMain();
 }
@@ -165,13 +166,14 @@ function renderProject() {
     <div class="progress-panel"><div class="progress-value"><span>Overall progress</span><strong>${Number(snapshot.progress)}%</strong></div><div class="progress-track" role="progressbar" aria-label="Overall production progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(snapshot.progress)}"><span style="width:${Number(snapshot.progress)}%"></span></div><p>${esc(currentActivity)}</p></div>
   </section>
   ${state.error ? errorCard(state.error) : ''}
-  ${attention ? `<section class="attention-card" aria-labelledby="attentionTitle"><div><h2 id="attentionTitle">${esc(attention.title)}</h2><p>${esc(attention.message)}</p><p class="reassurance">Your completed work is saved.</p></div><button class="button-primary" data-project-action="${esc(attention.action_id)}" type="button">${esc(attention.action)}</button><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(attention.code)}</div></details></section>` : `<section class="surface next-action"><div><h2>${esc(snapshot.primary_action.action)}</h2><p>${snapshot.work_saved ? 'Completed stages are saved, so Resume continues from the next unfinished step.' : esc(snapshot.current_activity)}</p>${state.busy ? '<p class="hint">This may take several minutes. You can keep this window open.</p>' : ''}</div><button class="button-primary" data-project-action="${esc(snapshot.primary_action.action_id)}" type="button" ${state.busy ? 'disabled aria-describedby="busyReason"' : ''}>${state.busy ? 'Working…' : esc(snapshot.primary_action.action)}</button></section>`}
+  ${attention ? `<section class="attention-card" aria-labelledby="attentionTitle"><div><h2 id="attentionTitle">${esc(attention.title)}</h2><p>${esc(attention.message)}</p><p class="reassurance">Your completed work is saved.</p></div><button class="button-primary" data-project-action="${esc(attention.action_id)}" type="button">${esc(attention.action)}</button><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(attention.code)}</div></details></section>` : `<section class="surface next-action"><div><h2>${esc(snapshot.primary_action.action)}</h2><p>${snapshot.work_saved ? 'Completed stages are saved, so Resume continues from the next unfinished step.' : esc(snapshot.current_activity)}</p>${state.busy ? '<p class="hint" id="busyReason">This may take several minutes. You can keep this window open.</p>' : ''}</div><button class="button-primary" data-project-action="${esc(snapshot.primary_action.action_id)}" type="button" ${state.busy ? 'disabled aria-describedby="busyReason"' : ''}>${state.busy ? 'Working…' : esc(snapshot.primary_action.action)}</button></section>`}
   <section class="surface"><div class="surface-head"><div><h2>Project overview</h2><p>Review the result when it is ready, or open technical detail when you need it.</p></div><div class="button-row"><button id="reviewProject" type="button">Review</button>${snapshot.current_stage === 'Create visuals' && !snapshot.final_path ? '<button id="pauseProject" type="button">Pause safely</button>' : ''}</div></div>
     <details class="disclosure" id="projectDetails"><summary>Show details</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details>
   </section>`;
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
   $('#reviewProject')?.addEventListener('click', showReview);
-  $('#pauseProject')?.addEventListener('click', () => runAction('pause','Pausing safely…'));
+  $('#pauseProject')?.addEventListener('click', requestPause);
+  bindErrorActions();
   bindDiagnosticsDisclosure();
 }
 
@@ -213,13 +215,32 @@ async function handleProjectAction(action) {
 
 async function runAction(action, label) {
   if (!state.project || state.busy) return;
+  const token = Symbol(action); state.runToken = token; state.lastAction = {action,label};
   setBusy(true,label); state.error = null; renderProject();
+  let polling = false;
+  const poll = setInterval(async () => {
+    if (state.runToken !== token || polling) return;
+    polling = true;
+    try { state.snapshot = await api(`/api/projects/${encodeURIComponent(state.project)}/snapshot`); if (state.runToken === token) renderProject(); }
+    catch (_) { /* the primary request owns failure reporting */ }
+    finally { polling = false; }
+  },2500);
   try {
     await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action})});
     state.snapshot = await api(`/api/projects/${encodeURIComponent(state.project)}/snapshot`);
     toast(action === 'pause' ? 'Production will pause at the next safe point.' : action === 'open_flow_sign_in' ? 'Flow sign-in opened.' : 'Project updated.');
   } catch (error) { state.error = friendlyError(error); toast(state.error.title,true); }
-  finally { setBusy(false); renderProject(); }
+  finally { clearInterval(poll); if (state.runToken === token) state.runToken = null; setBusy(false); renderProject(); }
+}
+
+async function requestPause() {
+  if (!state.project) return;
+  const button = $('#pauseProject'); if (button) { button.disabled = true; button.textContent = 'Pausing…'; }
+  try {
+    await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'pause'})});
+    toast('Production will pause at the next safe point.');
+    if (!state.busy) { state.snapshot = await api(`/api/projects/${encodeURIComponent(state.project)}/snapshot`); renderProject(); }
+  } catch (error) { state.error = friendlyError(error); toast(state.error.title,true); if (!state.busy) renderProject(); }
 }
 
 function friendlyError(error) {
@@ -227,6 +248,9 @@ function friendlyError(error) {
   const raw = error?.payload?.error || error?.message || code;
   const known = {
     FLOW_AUTH_REQUIRED: ['Google sign-in required','Sign in to Google Flow, then return here and choose Try again.','open_flow_sign_in','Open Flow sign-in'],
+    FLOW_CDP_UNAVAILABLE: ['Google Flow is not open','Open the dedicated Story Auto Flow window, sign in if needed, then try again.','open_flow_sign_in','Open Flow sign-in'],
+    FLOW_PROJECT_MISMATCH: ['Choose the Story Auto Flow project','Open the configured Story Auto project in Google Flow, then try again.','open_flow_sign_in','Open Flow project'],
+    FLOW_CAPABILITY_UNAVAILABLE: ['Visual setup needs attention','Review the Flow project and production mode in Settings before trying again.','settings','Open Settings'],
     TTS_PROVIDER_CREDITS_REQUIRED: ["Voice generation can't continue",'The selected paid voice provider does not have enough credits. Choose another voice or update the provider account.','settings','Open settings'],
     CREDENTIAL_MISSING: ['AI quality is not configured','Add the provider credential in the secure Story Auto configuration, then try again.','settings','Open settings'],
     GEMINI_CREDENTIAL_MISSING: ['AI quality is not configured','Add a Gemini credential in the secure Story Auto configuration, then try again.','settings','Open settings'],
@@ -237,7 +261,17 @@ function friendlyError(error) {
 }
 
 function errorCard(error) {
-  return `<section class="attention-card" role="alert"><div><h2>${esc(error.title)}</h2><p>${esc(error.message)}</p><p class="reassurance">Your completed work is saved.</p></div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(error.code)}\n${esc(error.raw)}</div></details></section>`;
+  return `<section class="attention-card" role="alert"><div><h2>${esc(error.title)}</h2><p>${esc(error.message)}</p><p class="reassurance">Your completed work is saved.</p></div><button class="button-primary" data-error-action="${esc(error.action_id)}" type="button">${esc(error.action)}</button><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(error.code)}\n${esc(error.raw)}</div></details></section>`;
+}
+
+function bindErrorActions() {
+  document.querySelectorAll('[data-error-action]').forEach(button => button.addEventListener('click', async () => {
+    const action = button.dataset.errorAction;
+    if (action === 'settings') return showSettings();
+    if (action === 'open_flow_sign_in') return runAction('open_flow_sign_in','Opening the Story Auto Flow sign-in window…');
+    if (action === 'retry' && state.lastAction) return runAction(state.lastAction.action,state.lastAction.label);
+    return state.project ? openProject(state.project) : showHome();
+  }));
 }
 
 async function showContentEditor() {
@@ -296,11 +330,12 @@ async function showReview() {
   try {
     const [review, media] = await Promise.all([api(`/api/projects/${encodeURIComponent(state.project)}/review`),api(`/api/projects/${encodeURIComponent(state.project)}/media`)]);
     setHeader('REVIEW',review.title,'<button class="button-quiet" id="backProject" type="button">← Project</button>');
-    const byId = new Map([...media.references,...media.shots].map(item => [item.request.request_id,item]));
+    const byId = new Map([...media.references,...media.shots,...(media.thumbnails || [])].map(item => [item.request.request_id,item]));
     const issues = review.issues.map(issue => {
       const item = byId.get(issue.request_id) || {}; const selected = item.selected_asset;
-      const preview = selected ? (issue.media_type === 'VIDEO' ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(state.project,selected.path)}"></video>` : `<img class="video-frame" src="${assetUrl(state.project,selected.path)}" alt="Generated scene ${issue.scene}">`) : '';
-      return `<article class="issue">${preview}<h3>Scene ${issue.scene}</h3><p>${esc(issue.message)}</p><div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button">Approve scene</button>` : ''}<button data-regenerate="${esc(issue.request_id)}" type="button">Regenerate</button></div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.request_id)}</div></details></article>`;
+      const preview = selected ? (issue.media_type === 'VIDEO' ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(state.project,selected.path)}"></video>` : `<img class="video-frame" src="${assetUrl(state.project,selected.path)}" alt="Generated ${esc(issue.label).toLowerCase()}">`) : '';
+      const recovery = issue.status === 'AUTH_REQUIRED' ? '<button data-review-flow type="button">Open Flow sign-in</button>' : ['CREDIT_BLOCKED','FAILED_PERMANENT','CANCELLED'].includes(issue.status) ? '<button data-review-settings type="button">Open Settings</button>' : '';
+      return `<article class="issue">${preview}<h3>${esc(issue.label)}</h3><p>${esc(issue.message)}</p><div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button">Approve ${esc(issue.label).toLowerCase()}</button>` : ''}${issue.retryable ? `<button data-regenerate="${esc(issue.request_id)}" type="button">Regenerate</button>` : ''}${recovery}</div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.request_id)}</div></details></article>`;
     }).join('');
     const publishing = review.publishing || {};
     $('#view').innerHTML = `<section class="surface"><div class="surface-head"><div><h2>Quality review</h2><p>${review.final_path ? `Final duration ${esc(formatDuration(review.duration_seconds))}.` : 'Review flagged scenes before production continues.'}</p></div>${review.final_path ? `<a class="button button-primary" href="${assetUrl(state.project,review.final_path)}" target="_blank" rel="noopener">Open final video</a>` : ''}</div>${qualityCards(review.quality)}</section>
@@ -310,7 +345,9 @@ async function showReview() {
     $('#copyPublishing')?.addEventListener('click', async () => { await navigator.clipboard.writeText(`${publishing.selected_title || review.title}\n\n${publishing.description}`); toast('Title and description copied.'); });
     document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport()})}); toast('Scene approved.'); await showReview(); }));
     document.querySelectorAll('[data-regenerate]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'regenerate',request_id:button.dataset.regenerate})}); toast('Scene queued for regeneration.'); await openProject(state.project); }));
-  } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); }
+    document.querySelectorAll('[data-review-flow]').forEach(button => button.addEventListener('click', () => runAction('open_flow_sign_in','Opening the Story Auto Flow sign-in window…')));
+    document.querySelectorAll('[data-review-settings]').forEach(button => button.addEventListener('click', showSettings));
+  } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
   finally { setBusy(false); }
   focusMain();
 }
@@ -323,7 +360,7 @@ async function showSettings() {
   state.view = 'settings'; state.project = null; state.snapshot = null; state.error = null;
   setNav('settings'); setHeader('APPLICATION','Settings');
   $('#view').innerHTML = '<div class="empty-library"><p>Loading settings…</p></div>';
-  try { state.settings = await api('/api/settings'); } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); return; }
+  try { state.settings = await api('/api/settings'); } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); return; }
   const saved = savedDefaults(); const defaults = {...state.settings.defaults,...saved};
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
@@ -347,7 +384,7 @@ async function showDiagnostics(projectId) {
   try {
     const value = await api(`/api/projects/${encodeURIComponent(projectId)}/diagnostics`);
     $('#view').innerHTML = `<section class="surface"><div class="surface-head"><div><h2>Project diagnostics</h2><p>Engineering detail is separated from the normal production workflow.</p></div></div><div class="technical">${esc(JSON.stringify(value,null,2))}</div></section>`;
-  } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); }
+  } catch (error) { $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
   $('#backSettings').addEventListener('click', showSettings);
   focusMain();
 }
@@ -357,10 +394,14 @@ async function ensureSettings() { if (!state.settings) state.settings = await ap
 async function openWizard() {
   try { await ensureSettings(); } catch (error) { toast(friendlyError(error).message,true); return; }
   const saved = savedDefaults();
-  state.wizard = {step:1,content:'',info:null,voice:saved.voice_id || state.settings.defaults.voice_id || 'bm_george',style:'natural',mode:saved.render_mode || state.settings.defaults.render_mode || 'hybrid_hook'};
+  if (!state.wizard.content) {
+    state.wizard.voice = saved.voice_id || state.settings.defaults.voice_id || 'bm_george';
+    state.wizard.mode = saved.render_mode || state.settings.defaults.render_mode || 'hybrid_hook';
+  }
+  state.wizard.step = 1;
   renderWizard();
   $('#newVideoDialog').showModal();
-  requestAnimationFrame(() => $('#contentInput')?.focus());
+  focusWizardStep();
 }
 
 function wizardSteps() {
@@ -368,9 +409,19 @@ function wizardSteps() {
   return labels.map((label,index) => `<li class="${index + 1 < state.wizard.step ? 'is-done' : index + 1 === state.wizard.step ? 'is-current' : ''}" ${index + 1 === state.wizard.step ? 'aria-current="step"' : ''}>${index + 1}. ${label}</li>`).join('');
 }
 
-function showWizardError(message) {
+function showWizardError(message, fieldId = '') {
   const error = $('#wizardError');
   error.textContent = message; error.hidden = !message;
+  document.querySelectorAll('[aria-invalid="true"]').forEach(field => { field.removeAttribute('aria-invalid'); field.removeAttribute('aria-describedby'); });
+  const field = fieldId ? $(`#${fieldId}`) : null;
+  if (message && field) { field.setAttribute('aria-invalid','true'); field.setAttribute('aria-describedby','wizardError contentHelp'); }
+}
+
+function focusWizardStep() {
+  requestAnimationFrame(() => {
+    const target = state.wizard.step === 1 ? $('#contentInput') : state.wizard.step === 2 ? $('#voiceChoice') : $('#wizardTitle');
+    target?.focus();
+  });
 }
 
 function renderWizard() {
@@ -379,7 +430,7 @@ function renderWizard() {
   const title = wizard.step === 1 ? 'Add your content' : wizard.step === 2 ? 'Choose style and voice' : 'Review and create';
   $('#wizardTitle').textContent = title;
   if (wizard.step === 1) {
-    $('#wizardContent').innerHTML = `<div class="file-drop"><label class="field-label" for="contentFile">Choose an approved content package or content.md</label><input id="contentFile" type="file" accept=".md,.txt,text/markdown,text/plain"><p class="hint">The file stays on this computer and is read into the project when you create it.</p></div><div class="field" style="margin-top:18px"><label for="contentInput">Content</label><textarea id="contentInput" spellcheck="true" placeholder="# Story title\n\n## Narration\n\nPaste approved narration here.">${esc(wizard.content)}</textarea><small>Story Auto checks for one non-empty Narration section.</small></div>`;
+    $('#wizardContent').innerHTML = `<div class="file-drop"><label class="field-label" for="contentFile">Choose an approved content package or content.md</label><input id="contentFile" type="file" accept=".md,.txt,text/markdown,text/plain"><p class="hint">The file stays on this computer and is read into the project when you create it.</p></div><div class="field" style="margin-top:18px"><label for="contentInput">Content</label><textarea id="contentInput" spellcheck="true" placeholder="# Story title\n\n## Narration\n\nPaste approved narration here.">${esc(wizard.content)}</textarea><small id="contentHelp">Story Auto checks for one non-empty Narration section.</small></div>`;
     $('#contentInput').addEventListener('input', event => wizard.content = event.target.value);
     $('#contentFile').addEventListener('change', async event => { const file = event.target.files?.[0]; if (file) { wizard.content = await file.text(); $('#contentInput').value = wizard.content; } });
   } else if (wizard.step === 2) {
@@ -390,11 +441,11 @@ function renderWizard() {
   } else {
     const voiceNames = {bm_george:'George — Natural male narrator',am_michael:'Michael — Clear male narrator',af_heart:'Heart — Warm female narrator'};
     $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Story</dt><dd>${esc(wizard.info.title)}</dd><button class="change-step" data-change-step="1" type="button">Change<span class="sr-only"> content</span></button></div><div class="summary-row"><dt>Narration</dt><dd>${wizard.info.word_count.toLocaleString()} words · about ${esc(formatDuration(wizard.info.estimated_duration_seconds))}</dd><span></span></div><div class="summary-row"><dt>Narrator</dt><dd>${esc(voiceNames[wizard.voice])}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> narrator</span></button></div><div class="summary-row"><dt>Style</dt><dd>${wizard.style === 'documentary' ? 'Quiet documentary' : 'Natural cinematic'}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> style</span></button></div><div class="summary-row"><dt>Production</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change<span class="sr-only"> production mode</span></button></div></dl><div class="surface" style="margin-top:22px"><strong>What happens next</strong><p class="hint">The project opens ready to start. Production moves through voice, planning, visuals, quality checks, and the final render while saving completed work.</p></div>`;
-    document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); renderWizard(); }));
+    document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); renderWizard(); focusWizardStep(); }));
   }
   $('#wizardActions').innerHTML = `<button class="button-quiet" id="cancelWizard" type="button">Cancel</button><div class="right">${wizard.step > 1 ? '<button id="wizardBack" type="button">Back</button>' : ''}<button class="button-primary" id="wizardNext" type="button">${wizard.step === 3 ? 'Create video' : 'Continue'}</button></div>`;
   $('#cancelWizard').addEventListener('click', closeWizard);
-  $('#wizardBack')?.addEventListener('click', () => { wizard.step -= 1; renderWizard(); });
+  $('#wizardBack')?.addEventListener('click', () => { wizard.step -= 1; renderWizard(); focusWizardStep(); });
   $('#wizardNext').addEventListener('click', advanceWizard);
 }
 
@@ -402,11 +453,11 @@ async function advanceWizard() {
   const wizard = state.wizard;
   if (wizard.step === 1) {
     wizard.content = $('#contentInput').value;
-    try { wizard.info = await api('/api/validate-content',{method:'POST',body:JSON.stringify({content:wizard.content})}); wizard.step = 2; renderWizard(); requestAnimationFrame(() => $('#voiceChoice').focus()); }
-    catch (_) { showWizardError('Add exactly one non-empty Narration section before continuing.'); $('#contentInput').focus(); }
+    try { wizard.info = await api('/api/validate-content',{method:'POST',body:JSON.stringify({content:wizard.content})}); wizard.step = 2; renderWizard(); focusWizardStep(); }
+    catch (_) { showWizardError('Add exactly one non-empty Narration section before continuing.','contentInput'); $('#contentInput').focus(); }
     return;
   }
-  if (wizard.step === 2) { wizard.step = 3; renderWizard(); return; }
+  if (wizard.step === 2) { wizard.step = 3; renderWizard(); focusWizardStep(); return; }
   const button = $('#wizardNext'); button.disabled = true; button.textContent = 'Creating…';
   try {
     const settings = clone(state.settings.creation_defaults || {});
@@ -414,7 +465,7 @@ async function advanceWizard() {
     settings.tts = {provider:'kokoro_local',allow_cross_provider_fallback:false,kokoro_local:{...existingKokoro,voice_id:wizard.voice}};
     settings.ui = {production_style:wizard.style};
     const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,content:wizard.content,settings})});
-    closeWizard(); toast('Video project created.'); await loadProjects(); state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
+    closeWizard(); state.wizard = {step:1,content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode}; toast('Video project created.'); await loadProjects(); state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
   } catch (error) { showWizardError(friendlyError(error).message); button.disabled = false; button.textContent = 'Create video'; }
 }
 
@@ -426,4 +477,4 @@ $('#homeNav').addEventListener('click', () => showHome(true));
 $('#settingsNav').addEventListener('click', async () => { if (!state.projects.length) { try { await loadProjects(); } catch (_) {} } await showSettings(); });
 
 window.addEventListener('unhandledrejection', event => { event.preventDefault(); toast(friendlyError(event.reason).message,true); });
-showHome().catch(error => { $('#view').innerHTML = errorCard(friendlyError(error)); });
+showHome().catch(error => { $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); });

@@ -55,6 +55,24 @@ _ATTENTION = {
         "action": "Open Flow sign-in",
         "action_id": "open_flow_sign_in",
     },
+    "PROVIDER_CREDITS_REQUIRED": {
+        "title": "Provider credits required",
+        "message": "Add credits to the visual provider account before Story Auto can continue.",
+        "action": "Review recovery steps",
+        "action_id": "review_project",
+    },
+    "GENERATION_SETUP_REQUIRED": {
+        "title": "Visual setup needs attention",
+        "message": "A provider capability or project setting must be corrected before visual creation can continue.",
+        "action": "Review recovery steps",
+        "action_id": "review_project",
+    },
+    "GENERATION_CANCELLED": {
+        "title": "Visual creation was cancelled",
+        "message": "Review the affected visual before deciding whether to create it again.",
+        "action": "Review project",
+        "action_id": "review_project",
+    },
 }
 
 
@@ -80,6 +98,28 @@ def _updated_at(paths) -> str:
 
 def _word_count(narration: str) -> int:
     return len(re.findall(r"\b[\w’'-]+\b", narration, flags=re.UNICODE))
+
+
+def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any]:
+    """Build new-project defaults from a small secret-free global allowlist."""
+    llm=settings.get("llm",{}) if isinstance(settings,dict) else {}
+    flow=settings.get("flow",{}) if isinstance(settings,dict) else {}
+    tts=settings.get("tts",{}) if isinstance(settings,dict) else {}
+    kokoro=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
+    result={
+        "llm":{"provider":str(llm.get("provider","gemini")),"model":str(llm.get("model","gemini-3.5-flash"))},
+        "tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":{
+            "voice_id":voice_id,
+            "runtime_path":str(kokoro.get("runtime_path") or Path(os.environ.get("STORY_AUTO_KOKORO_RUNTIME","D:/kokoro"))),
+            "device":str(kokoro.get("device","cpu")),
+            "speed":float(kokoro.get("speed",1.0)),
+            "language":str(kokoro.get("language","b")),
+        }},
+    }
+    if isinstance(llm.get("max_attempts"),int): result["llm"]["max_attempts"]=llm["max_attempts"]
+    safe_flow={key:str(flow[key]) for key in ("cdp_url","project_url","project_identity") if isinstance(flow.get(key),str)}
+    if safe_flow: result["flow"]=safe_flow
+    return result
 
 
 def _safe_json(path: Path, default: Any) -> Any:
@@ -127,10 +167,9 @@ class OperatorService:
         alignment=_safe_json(paths.artifact_path("output/alignment.json"),{})
         publishing=_safe_json(paths.artifact_path("output/publishing_package.json"),{})
         active_request_ids={item.get("request_id") for item in requests.get("requests",[]) if item.get("request_id")}
+        entries={item.get("request_id"):item for item in manifest.get("requests",[]) if item.get("request_id") in active_request_ids}
         counts={}
-        for entry in manifest.get("requests",[]):
-            if entry.get("request_id") not in active_request_ids:
-                continue
+        for entry in entries.values():
             counts[entry.get("status","UNKNOWN")]=counts.get(entry.get("status","UNKNOWN"),0)+1
         artifacts={name:paths.artifact_path(f"output/{name}").is_file() for name in (
             "content_manifest.json","alignment.json","story_timeline.json","continuity_bible.json","shot_plan.json",
@@ -138,10 +177,17 @@ class OperatorService:
         blocked=[]
         if content_status!="VALID": blocked.append("VALID_NARRATION_REQUIRED")
         if review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
-        if counts.get("QC_PENDING"): blocked.append("MEDIA_QC_REQUIRED")
         if counts.get("AUTH_REQUIRED"): blocked.append("FLOW_AUTH_REQUIRED")
-        total_visuals=len([item for item in requests.get("requests",[]) if item.get("purpose")!="THUMBNAIL"])
-        finished_visuals=sum(counts.get(name,0) for name in ("SUCCEEDED","QC_PENDING"))
+        if counts.get("CREDIT_BLOCKED"): blocked.append("PROVIDER_CREDITS_REQUIRED")
+        if counts.get("FAILED_PERMANENT") or counts.get("FAILED_FATAL"): blocked.append("GENERATION_SETUP_REQUIRED")
+        if counts.get("CANCELLED"): blocked.append("GENERATION_CANCELLED")
+        if counts.get("QC_PENDING"): blocked.append("MEDIA_QC_REQUIRED")
+        shot_groups={}
+        for request in requests.get("requests",[]):
+            if request.get("purpose")!="SHOT": continue
+            shot_groups.setdefault(request.get("shot_id") or request.get("request_id"),[]).append(request.get("request_id"))
+        total_visuals=len(shot_groups)
+        finished_visuals=sum(all(entries.get(request_id,{}).get("status") in {"SUCCEEDED","QC_PENDING"} for request_id in request_ids) for request_ids in shot_groups.values())
         progress=0
         stage="Content"
         activity="Add approved narration to begin."
@@ -167,11 +213,13 @@ class OperatorService:
                 progress,stage,activity=min(progress,74),"Create visuals","Visual creation is waiting for Google sign-in."
             elif blocked[0]=="PLANNING_APPROVAL_REQUIRED":
                 progress,stage,activity=min(progress,44),"Plan","The story plan is ready for review."
+            elif blocked[0] in {"PROVIDER_CREDITS_REQUIRED","GENERATION_SETUP_REQUIRED","GENERATION_CANCELLED"}:
+                progress,stage,activity=min(progress,74),"Create visuals",_ATTENTION[blocked[0]]["message"]
             user_status="Needs your attention"
             primary_action=_ATTENTION.get(blocked[0],{"action":"Review project","action_id":"review_project"})
         elif artifacts["final.mp4"]:
             user_status="Complete"; primary_action={"action":"Open final video","action_id":"open_final"}
-        elif counts and any(name not in {"SUCCEEDED"} for name in counts):
+        elif any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE","AMBIGUOUS"}):
             user_status=activity; primary_action={"action":"Resume","action_id":"resume_generation"}
         elif artifacts["generation_requests.json"] and total_visuals and finished_visuals>=total_visuals:
             user_status="Ready to render"; primary_action={"action":"Render final video","action_id":"render"}
@@ -238,27 +286,32 @@ class OperatorService:
 
     def media_items(self, project_id: str) -> dict[str, list[dict[str, Any]]]:
         paths,_=self._project(project_id); requests=_safe_json(paths.artifact_path("output/generation_requests.json"),{"requests":[]}); manifest=_safe_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[]})
-        entries={item.get("request_id"):item for item in manifest.get("requests",[])}; references=[]; shots=[]
+        entries={item.get("request_id"):item for item in manifest.get("requests",[])}; references=[]; shots=[]; thumbnails=[]
         for request in requests.get("requests",[]):
             entry=entries.get(request.get("request_id"),{})
             item={"request":request,"status":entry.get("status","PENDING"),"selected_asset":entry.get("selected_asset"),"attempts":entry.get("attempts",[]),"quality_reviews":entry.get("quality_reviews",[]),"failure_class":entry.get("failure_class")}
-            (references if request.get("purpose")=="REFERENCE" else shots).append(item)
-        return {"references":references,"shots":shots}
+            purpose=request.get("purpose")
+            (references if purpose=="REFERENCE" else thumbnails if purpose=="THUMBNAIL" else shots).append(item)
+        return {"references":references,"shots":shots,"thumbnails":thumbnails}
 
     def review_overview(self, project_id: str) -> dict[str, Any]:
         snapshot=self.snapshot(project_id); planning=self.planning_review(project_id); media=self.media_items(project_id)
-        items=media["references"]+media["shots"]
-        problems={"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","AUTH_REQUIRED","AMBIGUOUS","REJECTED"}
+        items=media["references"]+media["shots"]+media["thumbnails"]
+        problems={"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","AMBIGUOUS","REJECTED"}
         issues=[]
-        for index,item in enumerate(media["shots"],1):
-            status=item.get("status","PENDING")
-            if status not in problems: continue
-            request=item.get("request",{})
-            if status=="QC_PENDING": message=f"Scene {index} is ready for your quality review."
-            elif status=="AUTH_REQUIRED": message=f"Scene {index} is waiting for Google sign-in."
-            elif status=="AMBIGUOUS": message=f"Scene {index} needs Story Auto to confirm the generated result."
-            else: message=f"Scene {index} could not be completed and can be retried."
-            issues.append({"scene":index,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type")})
+        for kind,group in (("Reference",media["references"]),("Scene",media["shots"]),("Thumbnail",media["thumbnails"])):
+            for index,item in enumerate(group,1):
+                status=item.get("status","PENDING")
+                if status not in problems: continue
+                request=item.get("request",{}); label=kind if kind=="Thumbnail" else f"{kind} {index}"
+                if status=="QC_PENDING": message=f"{label} is ready for your quality review."
+                elif status=="AUTH_REQUIRED": message=f"{label} is waiting for Google sign-in."
+                elif status=="CREDIT_BLOCKED": message=f"{label} is waiting for provider credits. Add credits before trying again."
+                elif status=="FAILED_PERMANENT": message=f"{label} needs a provider setup or capability correction before it can continue."
+                elif status=="CANCELLED": message=f"{label} was cancelled. Review its details before creating it again."
+                elif status=="AMBIGUOUS": message=f"{label} needs Story Auto to confirm the generated result."
+                else: message=f"{label} could not be completed and can be retried."
+                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","AMBIGUOUS","REJECTED"}})
         pending=sum(1 for item in items if item.get("status") in problems)
         video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
         publishing=planning.get("publishing_package") or {}
@@ -289,12 +342,7 @@ class OperatorService:
         usage=shutil.disk_usage(self.runtime.root)
         voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
         voices={"bm_george":"George","am_michael":"Michael","af_heart":"Heart"}
-        creation_defaults=json.loads(json.dumps(latest_settings)) if latest_settings else {"llm":{"provider":"gemini","model":"gemini-3.5-flash"}}
-        creation_defaults["tts"]={"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":{
-            "voice_id":voice_id,"runtime_path":str(kokoro_settings.get("runtime_path") or Path(os.environ.get("STORY_AUTO_KOKORO_RUNTIME","D:/kokoro"))),
-            "device":"cpu","speed":1.0,"language":str(kokoro_settings.get("language","b")),
-        }}
-        creation_defaults.pop("secrets",None)
+        creation_defaults=_creation_settings(latest_settings,voice_id)
         return {
             "defaults":{"render_mode":"hybrid_hook","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
             "creation_defaults":creation_defaults,

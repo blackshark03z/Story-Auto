@@ -104,5 +104,48 @@ class OperatorApplicationTests(unittest.TestCase):
             self.assertEqual(settings["creation_defaults"]["tts"]["kokoro_local"]["voice_id"],"bm_george")
             self.assertNotIn("api_key",str(settings).lower())
 
+    def test_new_video_defaults_allowlist_excludes_project_specific_and_token_like_values(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_defaults",content="# Defaults\n\n## Narration\n\nA safe default.\n")
+            paths,_=app._project("prj_defaults")
+            project=read_json(paths.project_file)
+            project["settings"]={
+                "llm":{"provider":"gemini","model":"gemini-3.6-flash","max_attempts":3},
+                "flow":{"cdp_url":"http://127.0.0.1:9222","project_identity":"studio","access_token":"nested-secret"},
+                "tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":{"runtime_path":"D:/kokoro","voice_id":"am_michael"}},
+                "media":{"overrides":{"sh_0001":{"media_type":"IMAGE"}}},
+                "audio":{"bgm_path":"D:/music/from-another-project.mp3"},
+                "custom":{"access_token":"nested-secret"},
+            }
+            atomic_write_json(paths.project_file,project)
+            defaults=app.settings_overview()["creation_defaults"]
+            self.assertEqual(set(defaults),{"llm","flow","tts"})
+            self.assertEqual(set(defaults["flow"]),{"cdp_url","project_identity"})
+            self.assertNotIn("token",str(defaults).lower())
+            self.assertNotIn("overrides",str(defaults).lower())
+            self.assertNotIn("bgm_path",str(defaults).lower())
+
+    def test_scene_progress_and_review_keep_request_purposes_distinct(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_purposes",content="# Purpose Test\n\n## Narration\n\nA visual test.\n")
+            paths,_=app._project("prj_purposes")
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[
+                {"request_id":"ref_1","purpose":"REFERENCE","media_type":"IMAGE","prompt":"reference"},
+                {"request_id":"shot_1","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":"scene"},
+                {"request_id":"thumb_1","purpose":"THUMBNAIL","media_type":"IMAGE","prompt":"thumbnail"}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[
+                {"request_id":"ref_1","status":"QC_PENDING","attempts":[]},
+                {"request_id":"shot_1","status":"SUCCEEDED","attempts":[]},
+                {"request_id":"thumb_1","status":"FAILED_PERMANENT","attempts":[]}]})
+            snapshot=app.snapshot("prj_purposes")
+            review=app.review_overview("prj_purposes")
+            self.assertEqual((snapshot["completed_visuals"],snapshot["total_visuals"]),(1,1))
+            self.assertEqual([issue["label"] for issue in review["issues"]],["Reference 1","Thumbnail"])
+            self.assertEqual(len(app.media_items("prj_purposes")["thumbnails"]),1)
+            self.assertEqual(snapshot["primary_action"]["action"],"Review recovery steps")
+            self.assertNotEqual(snapshot["primary_action"]["action"],"Resume")
+
 
 if __name__ == "__main__": unittest.main()

@@ -24,6 +24,8 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"Skip to main content",html); self.assertIn(b"newVideoDialog",html); self.assertIn(b" Settings</button>",html)
                 _,styles,_=call("/static/styles.css"); self.assertIn(b":focus-visible",styles); self.assertIn(b"[hidden]",styles)
                 _,script,_=call("/static/app.js"); self.assertNotIn(b"prompt(",script); self.assertIn(b"showModal()",script)
+                self.assertIn(b"requestPause",script); self.assertIn(b"focusWizardStep",script); self.assertIn(b"aria-invalid",script)
+                self.assertIn(b"data-error-action",script); self.assertIn(b'id="busyReason"',script)
                 status,payload,_=call("/api/projects",{"project_id":"prj_ui001","render_mode":"hybrid_hook","content":"# Story\n\n## Narration\n\nA local operator test.\n"}); self.assertEqual(status,201)
                 created=json.loads(payload); self.assertEqual(created["content_status"],"VALID")
                 _,payload,_=call("/api/projects/prj_ui001/actions",{"action":"save_content","content":"# Story\n\n## Narration\n\nUpdated through the shared service.\n"}); self.assertIn(b"Updated through the shared service",payload)

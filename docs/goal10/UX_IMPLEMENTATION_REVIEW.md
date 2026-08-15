@@ -22,7 +22,8 @@ of existing state and remains the only browser mutation seam.
 - Default free Stable narration through Kokoro Local George; advanced render
   mode stays optional and collapsed.
 - Focused project execution with six lifecycle stages, exact scene progress,
-  saved-work reassurance, Resume, safe pause, and actionable blocked states.
+  periodic live refresh, saved-work reassurance, Resume, concurrent safe pause,
+  and actionable blocked states.
 - Dedicated Review with quality dimensions, flagged-scene actions, final video,
   and publishing copy.
 - Distinct completion state with preview, title, duration, output readiness, and
@@ -47,6 +48,9 @@ of existing state and remains the only browser mutation seam.
   labels are present in rendered DOM snapshots.
 - Dialog opening moves focus to Content. All inspected visible interactive
   targets are at least 24 by 24 CSS pixels; primary controls are 40 pixels high.
+- Wizard transitions restore focus to the first relevant control or step
+  heading; invalid Content exposes `aria-invalid` and a direct error/help
+  association. Cancelling preserves the current-session draft.
 - `:focus-visible` provides a 3-pixel high-contrast focus treatment. Focused
   Content rendered with the treatment in browser validation.
 - Sampled rendered contrast: body text 15.23:1, muted text 5.42:1, status text
@@ -55,7 +59,8 @@ of existing state and remains the only browser mutation seam.
 
 ## Validation
 
-- `python -m unittest discover -s tests -v`: PASS (129 tests)
+- `python -m pytest -q`: PASS (163 tests and 7 subtests)
+- Focused application/UI regression: PASS (12 tests)
 - `python tools/quality_gate.py`: PASS
 - `python tools/security_gate.py`: PASS
 - `node --check story_auto/ui/static/app.js`: PASS
@@ -73,6 +78,13 @@ Baseline screenshots are in `docs/evidence/goal10/before/`. Candidate
 screenshots are in `docs/evidence/goal10/after/`, including first launch,
 wizard, production/resume, auth recovery, Settings/Diagnostics, compact and
 large desktop layouts, final review, and completion.
+
+The first independent R3 review identified pause, live-refresh, wizard-focus,
+error-action, settings-copy, request-purpose accounting, and evidence-capture
+defects. Each finding was corrected with focused regression coverage; affected
+desktop screenshots were recaptured at the true 1440x900 viewport with scroll
+restored to the top. A second independent pass is required against the amended
+commit before technical validation is bound.
 
 The implementation is technically validated. Owner visual and experiential
 acceptance is intentionally unresolved and must be recorded before the task can
