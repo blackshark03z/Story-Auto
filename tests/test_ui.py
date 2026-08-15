@@ -29,6 +29,8 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"const projectId = state.project",script)
                 self.assertIn(b"state.view === 'project' && state.project === projectId",script)
                 self.assertIn(b"Create again",script)
+                self.assertIn(b"Use recovered file",script)
+                self.assertIn(b"data-use-recovered",script)
                 status,payload,_=call("/api/projects",{"project_id":"prj_ui001","render_mode":"hybrid_hook","content":"# Story\n\n## Narration\n\nA local operator test.\n"}); self.assertEqual(status,201)
                 created=json.loads(payload); self.assertEqual(created["content_status"],"VALID")
                 _,payload,_=call("/api/projects/prj_ui001/actions",{"action":"save_content","content":"# Story\n\n## Narration\n\nUpdated through the shared service.\n"}); self.assertIn(b"Updated through the shared service",payload)

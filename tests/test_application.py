@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from PIL import Image
+
 from story_auto.application import OperatorService, OperatorServiceError
 from story_auto.core.artifacts import atomic_write_json, read_json
 
@@ -52,7 +54,7 @@ class OperatorApplicationTests(unittest.TestCase):
             atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[
                 {"request_id":"req_hidden_01","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO","prompt":"quiet room"},
                 {"request_id":"req_hidden_02","purpose":"SHOT","shot_id":"sh_0002","media_type":"IMAGE","prompt":"old piano"}]})
-            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":"prj_creator_story","requests":[
                 {"request_id":"req_hidden_01","status":"SUCCEEDED","attempts":[]},
                 {"request_id":"req_hidden_02","status":"AUTH_REQUIRED","attempts":[]}]})
             value=app.snapshot("prj_creator_story")
@@ -148,6 +150,34 @@ class OperatorApplicationTests(unittest.TestCase):
             self.assertEqual(len(app.media_items("prj_purposes")["thumbnails"]),1)
             self.assertEqual(snapshot["primary_action"]["action"],"Review recovery steps")
             self.assertNotEqual(snapshot["primary_action"]["action"],"Resume")
+
+    def test_auth_and_ambiguous_recovery_match_provider_safety(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.create_project(project_id="prj_recovery",content="# Recovery Test\n\n## Narration\n\nA recovery test.\n")
+            paths,_=app._project("prj_recovery")
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[
+                {"request_id":"shot_auth","purpose":"SHOT","shot_id":"sh_0001","media_type":"IMAGE","prompt":"auth"},
+                {"request_id":"shot_ambiguous","purpose":"SHOT","shot_id":"sh_0002","media_type":"IMAGE","prompt":"ambiguous"}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":"prj_recovery","requests":[
+                {"request_id":"shot_auth","status":"AUTH_REQUIRED","attempts":[]},
+                {"request_id":"shot_ambiguous","status":"AMBIGUOUS","media_type":"IMAGE","attempts":[{"failure_class":"FLOW_TIMEOUT","dispatch_confirmed":True}]}]})
+            snapshot=app.snapshot("prj_recovery")
+            issues={issue["status"]:issue for issue in app.review_overview("prj_recovery")["issues"]}
+            self.assertEqual(snapshot["primary_action"]["action"],"Open Flow sign-in")
+            self.assertTrue(issues["AUTH_REQUIRED"]["retryable"])
+            self.assertEqual(issues["AUTH_REQUIRED"]["recovery_action"],"flow_sign_in_then_requeue")
+            self.assertFalse(issues["AMBIGUOUS"]["retryable"])
+            self.assertEqual(issues["AMBIGUOUS"]["recovery_action"],"manual_asset")
+            app.regenerate("prj_recovery","shot_auth",reason="signed in; create again")
+            self.assertEqual(app.snapshot("prj_recovery")["primary_action"]["action"],"Review recovery")
+            recovered=Path(root)/"recovered.png"; Image.new("RGB",(32,32),"navy").save(recovered,"PNG")
+            app.replace_asset("prj_recovery","shot_ambiguous",recovered)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            adopted=next(item for item in manifest["requests"] if item["request_id"]=="shot_ambiguous")
+            self.assertEqual(adopted["status"],"SUCCEEDED")
+            self.assertEqual(adopted["attempts"][0]["failure_class"],"FLOW_TIMEOUT")
+            self.assertEqual(adopted["attempts"][1]["dispatch_origin"],"human_manual_recovery")
 
 
 if __name__ == "__main__": unittest.main()

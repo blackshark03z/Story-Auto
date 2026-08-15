@@ -73,6 +73,12 @@ _ATTENTION = {
         "action": "Review project",
         "action_id": "review_project",
     },
+    "GENERATION_RECONCILIATION_REQUIRED": {
+        "title": "Confirm a Flow result",
+        "message": "Story Auto could not confirm whether Flow created a visual. Check Flow and attach the recovered file before continuing.",
+        "action": "Review recovery",
+        "action_id": "review_project",
+    },
 }
 
 
@@ -181,6 +187,7 @@ class OperatorService:
         if counts.get("CREDIT_BLOCKED"): blocked.append("PROVIDER_CREDITS_REQUIRED")
         if counts.get("FAILED_PERMANENT") or counts.get("FAILED_FATAL"): blocked.append("GENERATION_SETUP_REQUIRED")
         if counts.get("CANCELLED"): blocked.append("GENERATION_CANCELLED")
+        if counts.get("AMBIGUOUS"): blocked.append("GENERATION_RECONCILIATION_REQUIRED")
         if counts.get("QC_PENDING"): blocked.append("MEDIA_QC_REQUIRED")
         shot_groups={}
         for request in requests.get("requests",[]):
@@ -213,13 +220,13 @@ class OperatorService:
                 progress,stage,activity=min(progress,74),"Create visuals","Visual creation is waiting for Google sign-in."
             elif blocked[0]=="PLANNING_APPROVAL_REQUIRED":
                 progress,stage,activity=min(progress,44),"Plan","The story plan is ready for review."
-            elif blocked[0] in {"PROVIDER_CREDITS_REQUIRED","GENERATION_SETUP_REQUIRED","GENERATION_CANCELLED"}:
+            elif blocked[0] in {"PROVIDER_CREDITS_REQUIRED","GENERATION_SETUP_REQUIRED","GENERATION_CANCELLED","GENERATION_RECONCILIATION_REQUIRED"}:
                 progress,stage,activity=min(progress,74),"Create visuals",_ATTENTION[blocked[0]]["message"]
             user_status="Needs your attention"
             primary_action=_ATTENTION.get(blocked[0],{"action":"Review project","action_id":"review_project"})
         elif artifacts["final.mp4"]:
             user_status="Complete"; primary_action={"action":"Open final video","action_id":"open_final"}
-        elif any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE","AMBIGUOUS"}):
+        elif any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE"}):
             user_status=activity; primary_action={"action":"Resume","action_id":"resume_generation"}
         elif artifacts["generation_requests.json"] and total_visuals and finished_visuals>=total_visuals:
             user_status="Ready to render"; primary_action={"action":"Render final video","action_id":"render"}
@@ -305,14 +312,16 @@ class OperatorService:
                 if status not in problems: continue
                 request=item.get("request",{}); label=kind if kind=="Thumbnail" else f"{kind} {index}"
                 if status=="QC_PENDING": message=f"{label} is ready for your quality review."
-                elif status=="AUTH_REQUIRED": message=f"{label} is waiting for Google sign-in."
+                elif status=="AUTH_REQUIRED": message=f"{label} is waiting for Google sign-in. Sign in, then choose Create again."
                 elif status=="CREDIT_BLOCKED": message=f"{label} is waiting for provider credits. Add credits, then choose Create again."
                 elif status=="FAILED_PERMANENT": message=f"{label} needs a provider setup or capability correction. Fix it, then choose Create again."
                 elif status=="CANCELLED": message=f"{label} was cancelled. Choose Create again when you are ready."
-                elif status=="AMBIGUOUS": message=f"{label} needs Story Auto to confirm the generated result."
+                elif status=="AMBIGUOUS": message=f"Story Auto could not confirm whether Flow created {label.lower()}. Check Flow; if the result exists, download it and use the recovered file."
                 else: message=f"{label} could not be completed and can be retried."
-                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","AMBIGUOUS","REJECTED"}})
+                recovery_action=("manual_asset" if status=="AMBIGUOUS" else "flow_sign_in_then_requeue" if status=="AUTH_REQUIRED" else "requeue" if status in {"FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","REJECTED"} else None)
+                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","REJECTED"},"recovery_action":recovery_action})
         pending=sum(1 for item in items if item.get("status") in problems)
+        has_video=any(item.get("request",{}).get("media_type")=="VIDEO" for item in items)
         video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
         publishing=planning.get("publishing_package") or {}
         return {
@@ -320,8 +329,8 @@ class OperatorService:
             "final_path":snapshot.get("final_path"),"publishing":publishing,
             "quality":[
                 {"label":"Visual match","status":"Passed" if not pending else "Needs review"},
-                {"label":"Motion quality","status":"Needs review" if video_problem else ("Passed" if items else "Waiting")},
-                {"label":"Naturalness","status":"Needs review" if any(item.get("status")=="QC_PENDING" for item in items) else ("Passed" if items else "Waiting")},
+                {"label":"Motion quality","status":"Needs review" if video_problem else ("Passed" if has_video else "Waiting")},
+                {"label":"Naturalness","status":"Needs review" if pending else ("Passed" if items else "Waiting")},
                 {"label":"Final render","status":"Passed" if snapshot.get("final_path") else "Waiting"},
             ],
             "issues":issues,"work_saved":True,
@@ -373,7 +382,9 @@ class OperatorService:
         queue_regeneration(self.runtime.root,project_id,request_id,reason=reason); return self.media_items(project_id)
 
     def replace_asset(self, project_id: str, request_id: str, source: Path | str) -> dict[str, Any]:
-        queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
+        current=next((item for group in self.media_items(project_id).values() for item in group if item.get("request",{}).get("request_id")==request_id),None)
+        if not current: raise OperatorServiceError("request not found")
+        if current.get("status")!="AMBIGUOUS": queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
         adopt_manual_recovery(self.runtime.root,project_id,request_id,Path(source),settings={"source":"operator_replacement"},attribution="operator-selected local file")
         return self.media_items(project_id)
 
