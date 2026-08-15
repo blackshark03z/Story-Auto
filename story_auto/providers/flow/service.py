@@ -13,11 +13,26 @@ from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
 from story_auto.core.visual import MediaQualityError, validate_production_qc
+from .postprocess import (
+    PROCESSOR_NAME,
+    PROCESSOR_VERSION,
+    FlowImagePostprocessError,
+    process_flow_image,
+    profile_evidence,
+)
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
 FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
+LOCAL_IMAGE_FAILURES = {
+    "FLOW_IMAGE_POSTPROCESS_FAILED",
+    "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
+    "FLOW_IMAGE_POSTPROCESS_UNSUPPORTED_GEOMETRY",
+    "FLOW_IMAGE_POSTPROCESS_DIMENSIONS_CHANGED",
+    "FLOW_IMAGE_POSTPROCESS_OUTPUT_CONFLICT",
+    "FLOW_IMAGE_DERIVATIVE_INVALID",
+}
 
 class FlowError(RuntimeError):
     def __init__(self, failure_class: str, detail: str = ""):
@@ -49,6 +64,137 @@ def _valid_selected(paths, entry):
         return metadata["sha256"] == selected.get("sha256")
     except Exception: return False
 
+
+def _successful_raw_image(paths, entry):
+    """Return the newest valid raw provider image explicitly awaiting cleanup."""
+    for attempt in reversed(entry.get("attempts", [])):
+        if (attempt.get("status") != "SUCCEEDED"
+                or attempt.get("production_image_postprocess_required") is not True
+                or not isinstance(attempt.get("asset_path"), str)):
+            continue
+        try:
+            metadata = validate_image(paths.artifact_path(attempt["asset_path"]))
+        except AssetValidationError:
+            continue
+        if metadata["sha256"] == attempt.get("asset_sha256"):
+            return attempt, metadata
+    return None, None
+
+
+def _clean_rel(entry: dict, attempt: dict) -> str:
+    return f"assets/image/{entry['request_id']}/attempt_{attempt['attempt']:03d}_clean.png"
+
+
+def _process_raw_image(paths, entry: dict, attempt: dict, *, output_rel: str | None = None) -> dict:
+    """Append one local processing record and bind selected bytes on success."""
+    source_rel = attempt["asset_path"]
+    source_sha = attempt["asset_sha256"]
+    output_rel = output_rel or _clean_rel(entry, attempt)
+    processing_number = len(entry.setdefault("postprocess_attempts", [])) + 1
+    source_metadata = attempt.get("metadata", {})
+    profile = profile_evidence(int(source_metadata.get("width", 0)), int(source_metadata.get("height", 0)))
+    record = {
+        "processing_attempt": processing_number,
+        "status": "PROCESSING",
+        "source_provider_attempt": attempt["attempt"],
+        "source_path": source_rel,
+        "source_sha256": source_sha,
+        "output_path": output_rel,
+        "processor_name": PROCESSOR_NAME,
+        "processor_version": PROCESSOR_VERSION,
+        "flow_mark_profile_version": profile["profile_version"],
+        "profile_sha256": profile["profile_sha256"],
+        "started_at": _now(),
+    }
+    entry["postprocess_attempts"].append(record)
+    try:
+        result = process_flow_image(paths.artifact_path(source_rel), paths.artifact_path(output_rel))
+    except FlowImagePostprocessError as error:
+        record.update({"status": "FAILED", "failure_class": error.failure_class,
+                       "diagnostic": str(error), "completed_at": _now()})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class,
+                      "updated_at": _now()})
+        raise
+    if result["source_sha256"] != source_sha:
+        record.update({"status": "FAILED", "failure_class": "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
+                       "completed_at": _now()})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
+                      "updated_at": _now()})
+        raise FlowImagePostprocessError("FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID")
+    record.update({
+        "status": "SUCCEEDED",
+        "output_sha256": result["output_sha256"],
+        "processor_name": result["processor_name"],
+        "processor_version": result["processor_version"],
+        "flow_mark_profile_version": result["profile_version"],
+        "profile_sha256": result["profile_sha256"],
+        "mask_sha256": result["mask_sha256"],
+        "completed_at": _now(),
+    })
+    selected = {
+        "path": output_rel,
+        "sha256": result["output_sha256"],
+        "attempt": attempt["attempt"],
+        "metadata": result["output_metadata"],
+        "production_qc": "PENDING",
+        "source_provider_attempt": attempt["attempt"],
+        "source_path": source_rel,
+        "source_sha256": source_sha,
+        "postprocess_attempt": processing_number,
+        "processor_name": result["processor_name"],
+        "processor_version": result["processor_version"],
+        "flow_mark_profile_version": result["profile_version"],
+        "mask_sha256": result["mask_sha256"],
+    }
+    entry.update({"selected_asset": selected, "status": "QC_PENDING", "failure_class": None,
+                  "updated_at": _now()})
+    return selected
+
+
+def _repair_local_image(paths, entry: dict, request: dict) -> bool:
+    """Retry cleanup from preserved raw bytes; return whether provider dispatch must stop."""
+    if request.get("media_type") != "IMAGE" or request.get("execution_tier") != "STANDARD_PRODUCTION":
+        return False
+    attempt, _ = _successful_raw_image(paths, entry)
+    if attempt is None:
+        return False
+    selected = entry.get("selected_asset")
+    lineage_matches = isinstance(selected, dict) and selected.get("source_provider_attempt") == attempt.get("attempt")
+    local_failure = entry.get("failure_class") in LOCAL_IMAGE_FAILURES
+    derivative_invalid = lineage_matches and not _valid_selected(paths, entry)
+    if not local_failure and not derivative_invalid:
+        return False
+    try:
+        _process_raw_image(paths, entry, attempt, output_rel=(selected or {}).get("path"))
+    except FlowImagePostprocessError:
+        pass
+    return True
+
+
+def _find_duplicate_selection(paths, manifest: dict, request: dict, metadata: dict, entry: dict):
+    identity_field = "dhash256" if request["media_type"] == "IMAGE" else "sha256"
+    for other in manifest["requests"]:
+        if other is entry or other.get("media_type") != request["media_type"]:
+            continue
+        other_selected = other.get("selected_asset")
+        if not isinstance(other_selected, dict):
+            continue
+        other_identity = other_selected.get("metadata", {}).get(identity_field)
+        if not other_identity and request["media_type"] == "IMAGE":
+            try:
+                other_identity = validate_image(paths.artifact_path(other_selected["path"]))[identity_field]
+            except Exception:
+                other_identity = None
+        same = other_identity == metadata.get(identity_field)
+        if request["media_type"] == "IMAGE" and other_identity and metadata.get(identity_field):
+            try:
+                same = (int(other_identity, 16) ^ int(metadata[identity_field], 16)).bit_count() <= 4
+            except ValueError:
+                same = False
+        if same:
+            return other
+    return None
+
 def _runnable(request, entries): return all(entries.get(dep, {}).get("status") == "SUCCEEDED" for dep in request.get("depends_on", []))
 
 
@@ -59,14 +205,16 @@ def reconcile_local_assets(runtime_root: Path | str, project_id: str) -> set[str
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         for entry in manifest["requests"]:
-            if entry.get("status") != "SUCCEEDED" or _valid_selected(paths, entry):
+            if entry.get("status") not in {"SUCCEEDED", "QC_PENDING"} or _valid_selected(paths, entry):
                 continue
             selected = entry.get("selected_asset") if isinstance(entry.get("selected_asset"), dict) else {}
+            raw_attempt, _ = _successful_raw_image(paths, entry)
+            failure_class = "FLOW_IMAGE_DERIVATIVE_INVALID" if raw_attempt is not None else "ASSET_INVALID"
             entry.setdefault("asset_invalidations", []).append({
                 "detected_at": _now(), "path": selected.get("path"),
-                "expected_sha256": selected.get("sha256"), "failure_class": "ASSET_INVALID",
+                "expected_sha256": selected.get("sha256"), "failure_class": failure_class,
             })
-            entry.update({"status": "FAILED_RETRYABLE", "failure_class": "ASSET_INVALID", "updated_at": _now()})
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": failure_class, "updated_at": _now()})
             invalidated.add(entry["request_id"])
         if invalidated:
             atomic_write_json(path, manifest)
@@ -121,7 +269,9 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         if not entry or entry.get("status") not in {"SUCCEEDED", "QC_PENDING"} or not isinstance(entry.get("selected_asset"), dict):
             raise FlowError("MEDIA_QC_INVALID")
         try:
-            accepted = validate_production_qc(report, provider=entry.get("provider"))
+            accepted = validate_production_qc(
+                report, provider=entry.get("provider"), media_type=entry.get("media_type")
+            )
             # Story shots require an explicit structured comparison to their
             # narration intent. Technical/media quality alone is insufficient.
             try:
@@ -219,8 +369,13 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
         if not entry or entry.get("status") in {"GENERATING", "AMBIGUOUS"}: raise FlowError("REGENERATION_NOT_ALLOWED")
-        entry.setdefault("operator_actions", []).append({"action":"REGENERATE","reason":reason.strip(),"at":_now()})
-        entry.update({"status":"FAILED_RETRYABLE","failure_class":"OPERATOR_REGENERATION","updated_at":_now()})
+        raw_attempt, _ = _successful_raw_image(paths, entry)
+        retry_local = raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES
+        action = "RETRY_LOCAL_POSTPROCESS" if retry_local else "REGENERATE"
+        entry.setdefault("operator_actions", []).append({"action":action,"reason":reason.strip(),"at":_now()})
+        entry.update({"status":"FAILED_RETRYABLE",
+                      "failure_class":entry.get("failure_class") if retry_local else "OPERATOR_REGENERATION",
+                      "updated_at":_now()})
         atomic_write_json(path, manifest)
 
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
@@ -270,12 +425,30 @@ def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id:
         path, manifest=_manifest(paths, project_id); entry=next((e for e in manifest["requests"] if e.get("request_id")==request_id),None)
         if not entry or entry.get("status") not in {"AMBIGUOUS", "NOT_DISPATCHED", "FAILED_RETRYABLE"} or not attribution: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
         metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
-        number=len(entry["attempts"])+1; rel=f"assets/{entry['media_type'].lower()}/{request_id}/manual_recovery_{number:03d}{source.suffix}"; target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
+        number=len(entry["attempts"])+1
         try: request=next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"] if item.get("request_id")==request_id)
         except Exception: request={}
         production=request.get("execution_tier")=="STANDARD_PRODUCTION"
+        raw_suffix = source.suffix.lower() or (".png" if entry["media_type"] == "IMAGE" else ".mp4")
+        raw_label = "manual_recovery_raw" if production and entry["media_type"] == "IMAGE" else "manual_recovery"
+        rel=f"assets/{entry['media_type'].lower()}/{request_id}/{raw_label}_{number:03d}{raw_suffix}"
+        target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
         attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"metadata":metadata,"completed_at":_now()}
-        entry["attempts"].append(attempt);entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":{"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"},"failure_class":None,"updated_at":_now()});atomic_write_json(path,manifest);return entry["selected_asset"]
+        if production and entry["media_type"] == "IMAGE":
+            attempt["production_image_postprocess_required"] = True
+        entry["attempts"].append(attempt)
+        if production and entry["media_type"] == "IMAGE":
+            try:
+                selected = _process_raw_image(paths, entry, attempt)
+            except FlowImagePostprocessError as error:
+                atomic_write_json(path, manifest)
+                raise FlowError(error.failure_class, str(error)) from error
+        else:
+            selected={"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,
+                      "production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}
+            entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":selected,
+                          "failure_class":None,"updated_at":_now()})
+        atomic_write_json(path,manifest);return selected
 
 
 def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_request_id: str,
@@ -299,7 +472,27 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
             raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
         source_attempt = next((item for item in source_entry.get("attempts", [])
                                if item.get("attempt") == source_selected.get("attempt")), None)
-        if not isinstance(source_attempt, dict) or source_attempt.get("status") != "SUCCEEDED" or source_attempt.get("asset_sha256") != source_selected.get("sha256"):
+        if not isinstance(source_attempt, dict) or source_attempt.get("status") != "SUCCEEDED":
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        legacy_lineage = source_attempt.get("asset_sha256") == source_selected.get("sha256")
+        processing = next((item for item in source_entry.get("postprocess_attempts", [])
+                           if item.get("status") == "SUCCEEDED"
+                           and item.get("source_provider_attempt") == source_attempt.get("attempt")
+                           and item.get("source_sha256") == source_attempt.get("asset_sha256")
+                           and item.get("output_sha256") == source_selected.get("sha256")), None)
+        processed_lineage = (
+            isinstance(processing, dict)
+            and source_selected.get("source_provider_attempt") == source_attempt.get("attempt")
+            and source_selected.get("source_sha256") == source_attempt.get("asset_sha256")
+        )
+        if not legacy_lineage and not processed_lineage:
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        try:
+            raw_source = paths.artifact_path(source_attempt["asset_path"])
+            raw_metadata = validate_video(raw_source) if source_entry.get("media_type") == "VIDEO" else validate_image(raw_source)
+        except (KeyError, AssetValidationError):
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        if raw_metadata["sha256"] != source_attempt.get("asset_sha256"):
             raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
         source = paths.artifact_path(source_selected["path"])
         if not source.is_file():
@@ -310,18 +503,31 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
         if entry is None or entry.get("status") not in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"}:
             raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
         metadata = validate_video(source) if target_request["media_type"] == "VIDEO" else validate_image(source)
+        if metadata["sha256"] != source_selected.get("sha256"):
+            raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
         number = len(entry["attempts"]) + 1
         rel = f"assets/{target_request['media_type'].lower()}/{target_request_id}/exact_reuse_{number:03d}{source.suffix}"
         target = paths.artifact_path(rel); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
+        source_lineage = {
+            "source_request_id": source_request_id,
+            "source_provider_attempt": source_attempt.get("attempt"),
+            "source_raw_path": source_attempt.get("asset_path"),
+            "source_raw_sha256": source_attempt.get("asset_sha256"),
+            "source_selected_path": source_selected.get("path"),
+            "source_selected_sha256": source_selected.get("sha256"),
+            "lineage_kind": "RAW_TO_DERIVATIVE" if processed_lineage else "LEGACY_RAW_EQUALS_SELECTED",
+        }
         attempt = {"attempt": number, "status": "SUCCEEDED", "dispatch_origin": "prior_exact_flow_asset_repair",
                    "source_request_id": source_request_id, "source_asset_sha256": metadata["sha256"],
+                   "source_lineage": source_lineage,
                    "attribution_evidence": attribution.strip(), "asset_path": rel, "asset_sha256": metadata["sha256"],
                    "metadata": metadata, "completed_at": _now()}
         entry["attempts"].append(attempt)
         entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now(),
                       "selected_asset": {"path": rel, "sha256": metadata["sha256"], "attempt": number,
                                          "metadata": metadata, "production_qc": "PENDING",
-                                         "reuse_source_request_id": source_request_id}})
+                                         "reuse_source_request_id": source_request_id,
+                                         "source_lineage": source_lineage}})
         atomic_write_json(path, manifest)
         return entry["selected_asset"]
 
@@ -371,6 +577,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if entry is None: continue # identity changed: retain old provenance, a planner-generated id is required
             if entry.get("status") == "SUCCEEDED" and _valid_selected(paths, entry): continue
             if entry.get("status") == "QC_PENDING" and _valid_selected(paths, entry): continue
+            if _repair_local_image(paths, entry, request):
+                atomic_write_json(path, manifest); entries[request["request_id"]] = entry
+                continue
             if entry.get("status") == "AMBIGUOUS": continue # reconcile provider-visible state before any new dispatch
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
             if not _runnable(request, entries): continue
@@ -395,35 +604,39 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
-                metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
-                # A newly dispatched production asset must not resolve to a
-                # result already selected for another request. Images can have
-                # different container hashes while decoding to identical
-                # pixels, so compare decoded pixel identity for stills.
-                if request.get("execution_tier") == "STANDARD_PRODUCTION":
-                    identity_field = "dhash256" if request["media_type"] == "IMAGE" else "sha256"
-                    duplicate = None
-                    for other in manifest["requests"]:
-                        other_selected = other.get("selected_asset")
-                        if not isinstance(other_selected, dict) or other.get("media_type") != request["media_type"]: continue
-                        other_identity = other_selected.get("metadata", {}).get(identity_field)
-                        if not other_identity and request["media_type"] == "IMAGE":
-                            try: other_identity = validate_image(paths.artifact_path(other_selected["path"]))[identity_field]
-                            except Exception: other_identity = None
-                        same = other_identity == metadata.get(identity_field)
-                        if request["media_type"] == "IMAGE" and other_identity and metadata.get(identity_field):
-                            try: same = (int(other_identity, 16) ^ int(metadata[identity_field], 16)).bit_count() <= 4
-                            except ValueError: same = False
-                        if same: duplicate = other; break
-                    if duplicate is not None:
-                        raise FlowError("FLOW_STALE_RESULT", f"candidate content already selected for {duplicate['request_id']}")
-                final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/attempt_{attempt_number:03d}{temp.suffix}"
-                final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
                 production = request.get("execution_tier") == "STANDARD_PRODUCTION"
-                resulting_status = "QC_PENDING" if production else "SUCCEEDED"
-                attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel, "asset_sha256":metadata["sha256"], "metadata":metadata})
-                entry.update({"status":resulting_status, "failure_class":None,
-                              "selected_asset":{"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,"metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}, "updated_at":_now()}); submissions += 1
+                metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
+                raw_label = f"attempt_{attempt_number:03d}_raw" if production and request["media_type"] == "IMAGE" else f"attempt_{attempt_number:03d}"
+                final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/{raw_label}{temp.suffix}"
+                final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
+                attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel,
+                                "asset_sha256":metadata["sha256"], "metadata":metadata})
+                if production and request["media_type"] == "IMAGE":
+                    attempt["production_image_postprocess_required"] = True
+                    try:
+                        selected_asset = _process_raw_image(paths, entry, attempt)
+                    except FlowImagePostprocessError:
+                        selected_asset = None
+                else:
+                    selected_asset = {"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,
+                                      "metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}
+                    entry.update({"status":"QC_PENDING" if production else "SUCCEEDED", "failure_class":None,
+                                  "selected_asset":selected_asset, "updated_at":_now()})
+                # Compare like-for-like identities: clean image derivative to
+                # clean image derivative, and provider video bytes to video.
+                if selected_asset is not None and production:
+                    duplicate = _find_duplicate_selection(paths, manifest, request, selected_asset["metadata"], entry)
+                    if duplicate is not None:
+                        entry.pop("selected_asset", None)
+                        entry.update({"status":"FAILED_RETRYABLE", "failure_class":"FLOW_STALE_RESULT", "updated_at":_now()})
+                        entry.setdefault("stale_result_events", []).append({
+                            "detected_at": _now(), "candidate_path": selected_asset["path"],
+                            "candidate_sha256": selected_asset["sha256"],
+                            "matches_request_id": duplicate["request_id"],
+                        })
+                        selected_asset = None
+                if selected_asset is not None:
+                    submissions += 1
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)

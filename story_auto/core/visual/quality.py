@@ -21,7 +21,9 @@ class MediaQualityError(ValueError):
         super().__init__(failure_class + (f": {detail}" if detail else ""))
 
 
-def validate_production_qc(report: Any, *, provider: str | None = None) -> dict[str, Any]:
+def validate_production_qc(
+    report: Any, *, provider: str | None = None, media_type: str | None = None
+) -> dict[str, Any]:
     if not isinstance(report, dict):
         raise MediaQualityError("MEDIA_QC_INVALID")
     results = report.get("results")
@@ -33,8 +35,11 @@ def validate_production_qc(report: Any, *, provider: str | None = None) -> dict[
     visible_watermark = raw_watermark is True
     if not isinstance(raw_watermark, bool):
         raise MediaQualityError("MEDIA_QC_INVALID", "visible_provider_watermark must be boolean")
-    if visible_watermark and provider != "google_flow":
-        raise MediaQualityError("VISIBLE_PROVIDER_WATERMARK")
+    if visible_watermark:
+        if provider != "google_flow" or media_type == "IMAGE":
+            raise MediaQualityError("VISIBLE_PROVIDER_WATERMARK")
+        if media_type != "VIDEO":
+            raise MediaQualityError("MEDIA_QC_INVALID", "media_type is required for a visible Flow watermark")
     failures = [field for field, value in results.items() if value == "FAIL"]
     if failures:
         raise MediaQualityError("NATURALNESS_QC_REJECTED", ",".join(failures))

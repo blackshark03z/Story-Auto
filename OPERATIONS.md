@@ -77,10 +77,13 @@ Render recovery expectations are executable behavior:
 
 Goal 08 release evidence distinguishes technical fixtures from production
 acceptance. Run `python tools/goal08_production.py` after local reviews to rebuild
-the sanitized inventory. Story Auto V1 uses `GOOGLE_FLOW_WEB` for both images and
-videos. Its visible sparkle mark is an `ACCEPTED_KNOWN_LIMITATION`, not a QC or
-release failure. Preserve it honestly: never remove, erase, inpaint, mask, cover,
-or crop specifically to hide it.
+the sanitized inventory. Story Auto uses `GOOGLE_FLOW_WEB` for both images and
+videos. Production Flow images are postprocessed locally inside the provider
+adapter: preserve the raw provider file, verify its recorded hash, create the
+clean derivative, and verify the derivative lineage before review or rendering.
+A remaining visible mark on a production image is a QC failure. Flow video is
+unchanged; its visible sparkle mark remains an `ACCEPTED_KNOWN_LIMITATION` and
+must not be removed, covered, or cropped specifically to hide it.
 
 Flow-bound prompts use a soft `BOTTOM_RIGHT` provider-mark safe area. Keep faces,
 eyes, critical hand actions, important props/text, and focal details out of that
@@ -88,7 +91,9 @@ region where practical without making the shot unnatural. Subtitles remain a
 centered lower-third with extra right-side clearance; subtitle boxes must not
 cover the mark. Naturalness, anatomy, identity, continuity, material, and motion
 defects remain normal QC failures. Every Flow image request must resolve and
-verify `output_count=1` before dispatch.
+verify `output_count=1` before dispatch. If local image cleanup fails or a clean
+derivative is missing/corrupt, resume retries cleanup from the valid raw attempt
+first. Do not requeue or resubmit Flow solely to repair a local derivative.
 
 ## Provider quality benchmark (closed)
 

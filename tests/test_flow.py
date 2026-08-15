@@ -66,7 +66,7 @@ class FlowTests(unittest.TestCase):
         calls=[]
         def generate(request, refs, path):
             from PIL import Image
-            calls.append((request["request_id"], refs)); path.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB", (32, 32), "navy").save(path, "PNG"); return path
+            calls.append((request["request_id"], refs)); path.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB", (1280, 720), "navy").save(path, "PNG"); return path
         cap=FlowCapabilities(True,True,True,True,True,True)
         return FlowExecutor(cap,generate), calls
     def test_fail_closed_composer(self):
@@ -221,10 +221,10 @@ class FlowTests(unittest.TestCase):
             entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((entry["status"],len(entry["attempts"]),entry["selected_asset"]["production_qc"]),("SUCCEEDED",1,"APPROVED"))
             report["visible_provider_watermark"]=True
-            review_production_asset(runtime.root,cfg.project_id,"ref",report)
+            with self.assertRaisesRegex(FlowError, "VISIBLE_PROVIDER_WATERMARK"):
+                review_production_asset(runtime.root,cfg.project_id,"ref",report)
             reviewed=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
-            self.assertEqual(reviewed["quality_reviews"][-1]["report"]["watermark_disposition"],
-                             "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION")
+            self.assertEqual(reviewed["quality_reviews"][-1]["failure_class"], "VISIBLE_PROVIDER_WATERMARK")
             self.assertEqual(len(reviewed["attempts"]),1)
 
     def test_atmospheric_qc_requires_explicitly_planned_atmospheric_shot(self):

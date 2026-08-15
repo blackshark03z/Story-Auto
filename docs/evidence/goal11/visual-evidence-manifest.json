@@ -1,0 +1,321 @@
+{
+  "schema": "story-auto-flow-image-postprocess-visual-evidence/1.0.0",
+  "sample_count": 24,
+  "source_corpus": "existing Goal 08 Flow image assets; no provider calls",
+  "full_contact_sheet": "docs/evidence/goal11/flow-image-postprocess-full-contact-sheet.jpg",
+  "crop_contact_sheet": "docs/evidence/goal11/flow-image-postprocess-crops-contact-sheet.jpg",
+  "records": [
+    {
+      "index": 1,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_0f8e4e1eb9e507aff4cd/attempt_001.png",
+      "source_sha256": "ae0660d2a199a5a379b8d9806f831fd279a3ad3f6df9fe40fae33da09c1346e2",
+      "output_sha256": "7847edddcda7f28b8b9556306c49475a2d3fd6d22fd5cc37b99af4e3949c5eb9",
+      "dimensions": [
+        1280,
+        720
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1280x720-v1",
+      "mask_sha256": "839e1fc9f994ddbeab66fdf1c18887136634ee03a648983a371e3ce2425505ed"
+    },
+    {
+      "index": 2,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_cfe35d066c2c01998e8f/attempt_001.png",
+      "source_sha256": "d6498887b86e2e52f374eec8d17be99228b34c5dc438c73cd06f37ae9e503298",
+      "output_sha256": "ff776f41ce935f3d5e9d87d010359630b4e78905c854cc475c5eb90837c6ed4b",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 3,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_f934101e12fac9b99a51/attempt_001.png",
+      "source_sha256": "0ec67df97c8bccd056d6b431cec8b910d452d8924d79d4142e9df3cad11723b7",
+      "output_sha256": "c0cf31a8332fc3d9213cda60b3931ea250ca05978b4ea1afafb8354848fbadb5",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 4,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_15f6577feef388a2ca75/manual_recovery_004.png",
+      "source_sha256": "7c98578ef702a1c648a0f7367630d48e7ad8c0a779f25ac3336f01f018a2631b",
+      "output_sha256": "5d56206a7420a46c91bf51baac5d98684065b1ffb4d9b917a7d7361f51bce32c",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 5,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_d7055c19ab62ed7cbf85/attempt_002.png",
+      "source_sha256": "97a361e5a05720eb3f7f6aba30b4cab27a762c38033affdb17d89ae34608a692",
+      "output_sha256": "8fad9f08e4ecb110cfd78e4b25d9f411fac60c1f1ce5bb9752257973dff4ed27",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 6,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_36f63b3a328989ce21f5/manual_recovery_003.png",
+      "source_sha256": "5823fc91e70e4691405a42af62147dddcd474baf37435eb0ee72072b76cf5e2e",
+      "output_sha256": "662d771abfa8ab96e446c37cf764362b2c5231429cefd08f4d1041bd1eb326b2",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 7,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_881099f6855b3ac923bf/attempt_001.png",
+      "source_sha256": "05794fb47734585477d490e46473e37631fd73d34d2a19d2cc48a1a4f19c55d0",
+      "output_sha256": "829409acde2bdc56290ca2b7e28086b11e1c10affa676fc4eb98b29f56fe9418",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 8,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_2b138d35966541bea7d1/attempt_001.png",
+      "source_sha256": "d4c88c53a66984a80c47f75ba1ed4f2c0462ab1ff8943a4ad27c61d380222dfe",
+      "output_sha256": "e10e7272ef7daf1b779e9a46981b25e8d100bf668c6d98ab05fb418cf0b51207",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 9,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_0a6d7faa9905ad4d6ec9/attempt_001.png",
+      "source_sha256": "2999e4bb77930f90cad4c52687d13df07a70802104465f1ed3fc8a9c23879c4c",
+      "output_sha256": "a9ecdea0fb9e7af7f03dd67f61e51032aebead4f0da5a4b3e3ec6f6ba2a7efdb",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 10,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_1d36c6fdc81017d5382b/manual_recovery_005.png",
+      "source_sha256": "0b6ae3c1bd3813c4ede7f5265a0c377959e6f516b9cb3b73aee31c45c5833b0d",
+      "output_sha256": "f9a70cf95aa3b50ccc012ff5322e08e68d7fd98bb54036c813d1066878a74407",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 11,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_5636dcffdc11d05f5de2/attempt_001.png",
+      "source_sha256": "9ca9d651cfc0bb39f2870fdc8b0f7e765571a0d90e5f0fd54aab7922e5cd5cd0",
+      "output_sha256": "1bd60ea4ba02003b0ab7d7036653822cd818e8dff4e82d4eb60276e4a0c9751c",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 12,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_3cdb5660665030f72ee2/attempt_001.png",
+      "source_sha256": "6297d3c6924c256bed546cdfa9fbf116b38d40df32511fc7b62738a4db067c64",
+      "output_sha256": "6f07e23fba70c853649dbdfb4f37c112086702fbe84f9e127114de90262b87db",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 13,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_5e59f15b0a9c0de5c9c0/attempt_001.png",
+      "source_sha256": "bb02eef03bb5a2497d3ee3fdde1fe916f645819cede896f207eeb7a6052e49af",
+      "output_sha256": "3896a24271ca4046239673d36d35f1fb4f01f93166f47eb51b86cdd564182efa",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 14,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_f75b4cac97687c0e1128/manual_recovery_002.png",
+      "source_sha256": "9feac2407dd9a354a23534099f3a19309c353caef91973e4ae9117a50e3e7f26",
+      "output_sha256": "53c431b424be7e7715beda36bb0df98ea2b30c873433a7ad42a7f86e14c0d6e9",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 15,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_2fcc919e3025075a983c/attempt_001.png",
+      "source_sha256": "3bcf9946dfabc0f576cf8b862eef8f53e0b9d93faaae340a7466beb8aa5da24a",
+      "output_sha256": "1b9998f6dfc1ed46fcf2273482bcbb70e0e4e7a2a4b7cb42ba34f5f683f51ef2",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 16,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_4433ec08facc5077f799/attempt_001.png",
+      "source_sha256": "e27648b179ac59b1e6fc2861f8fd68bb29d8bc0aac39c847a4a7474f16ddf092",
+      "output_sha256": "60e0fc60f0fdc88d21ff63ef60dc22a8927202da1d1c7946bf77972af56b73b6",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 17,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_51d292b166f9a62a22b6/attempt_002.png",
+      "source_sha256": "f93ba7f33a12753fb2454f83b02fae88790dc4904c4394178ac3d560b3a49e89",
+      "output_sha256": "ef80b988d1ffb06a4d0e7d8a0999aad354e8d4179eaedfc4a731be087651b210",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 18,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_0b847d9fa0016fafeeea/attempt_001.png",
+      "source_sha256": "36bd91d541f7a58af163f12924d53757d76ad9643acd173bc1f05807323b8014",
+      "output_sha256": "f185146775c48b06280b703a95cdda245cad5a36151306b7102a15145e6f89aa",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 19,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_2cf86180ea4fb0705dd2/manual_recovery_004.png",
+      "source_sha256": "b5c4611868a964d511fea83799048d9a6dd4a11f51725b159c1c95f33591b895",
+      "output_sha256": "1153827e2e53c1317fd0ff5d07eab36d2443c58e5bcd9ecffa986dc732d704d8",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 20,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_4674ebcf673de7dfb843/attempt_001.png",
+      "source_sha256": "87f0df8f3d73c156f6b01c7f9786d74a78aa371fbc4723c02ff71cc0d96e85e1",
+      "output_sha256": "6e3267aba852293d4e5ae4cded62ac655d0613c198c243a65de80b3d89e713d6",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 21,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_ac1db7c5cad97ccd97ee/attempt_002.png",
+      "source_sha256": "09809238dfc963b0f15f5dd682f0df83ff58f638a265fdc8c23abf156c807089",
+      "output_sha256": "6abf6c769f5feb797b76f369794754fbbe14901a81fa324aa16be1f7e6d070df",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 22,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_19017b07433d69a70efa/attempt_001.png",
+      "source_sha256": "6d7c3ba4cdd3594fb52dfb328c5381cd75c94329b9adc42d187d3412a8dfaa82",
+      "output_sha256": "ff21fe2525f40fcea6a3a5637e689216228a37ed7b913a35235c6e870b6bbf81",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 23,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_43b552bd4556dfeb5475/attempt_001.png",
+      "source_sha256": "18fc15f866007ffd85159566ba55e388bdc2029d8d7359258a7614df447684da",
+      "output_sha256": "038c36820c9189f5ff05594b42eda2337ef72c8d4c7fe5c4279335dd203a8d9f",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    },
+    {
+      "index": 24,
+      "source_path": "runtime/projects/prj_goal08_video001_temporal_v3/assets/image/req_dd6d7d5457829ffebee2/attempt_001.png",
+      "source_sha256": "5bdeecec9336698cee8d5c9db342ea693182acb9e43a526410667d1c441ec40c",
+      "output_sha256": "bea754b7b87fea5d39a1bca18f9aca67f141f72ba77a1cae2eb09ffeb1920806",
+      "dimensions": [
+        1376,
+        768
+      ],
+      "processor_version": "1.0.0",
+      "profile_version": "flow-sparkle-1376x768-v1",
+      "mask_sha256": "d544cddfdd612faf2145068718da470677789078a5c178dd4a4f432eb6bec9b4"
+    }
+  ]
+}

@@ -204,12 +204,17 @@ Gemini metadata and Flow thumbnail provenance. Publishing requests share the
 generation ledger but are excluded from render fingerprints, so publishing
 changes cannot invalidate video stages.
 
-For V1, the provider execution boundary resolves both image and video requests
-to `GOOGLE_FLOW_WEB`; upstream narration, continuity, shot/media planning,
+The provider execution boundary resolves both image and video requests to
+`GOOGLE_FLOW_WEB`; upstream narration, continuity, shot/media planning,
 generation requests, and rendering remain provider-independent. Flow-bound
 prompt policy carries a soft bottom-right provider-mark safe area, and subtitle
-styles reserve extra right clearance. The visible Flow mark is retained as an
-accepted known limitation; no processing stage removes or covers it.
+styles reserve extra right clearance. For production images, the Flow adapter
+preserves the provider-original bytes and creates a separately hashed local
+derivative with the visible sparkle mark removed before `selected_asset` is
+bound. The generation manifest records raw-to-derivative lineage, and local
+cleanup failure is retried from the raw bytes without another provider submit.
+Flow video remains unchanged: its visible mark is the accepted known
+limitation. The renderer continues to consume only the selected path and hash.
 
 ## UI boundary
 
