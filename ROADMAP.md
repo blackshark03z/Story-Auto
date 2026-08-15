@@ -1,8 +1,13 @@
 # Roadmap
 
-Current phase status: Phases 0-7 are accepted. Phase 8 (local UI) and Phase 9
-(full-video production) are implemented with offline integration coverage;
-representative production acceptance remains in Goal 08.
+Stable release baseline: **Story Auto v1.0.0 Stable** at
+`6dc3188a16bd1ae4f84906f891083ec6c0651154` (`v1.0.0`). The accepted
+post-release development state includes Goal 10 UX/UI simplification and Goal
+11 Flow image mark postprocessing; neither is a new release version.
+
+There is no active engineering feature goal. Next mode is normal product use:
+run a real production trial through the normal Story Auto UI, observe any real
+defect, then open a narrow corrective goal with regression coverage.
 
 ## Phase 0 — Design + Build OS baseline — ACCEPTED
 
@@ -66,9 +71,11 @@ No live provider calls.
 - [x] technical representative hybrid production; approved long-form fixture was unavailable.
 - [x] metadata + Flow thumbnail.
 
-## Phase 8 — Local UI
+## Phase 8 — Local UI — ACCEPTED
 
-Implementation: complete; representative operator-session acceptance pending.
+Goal 10 acceptance is complete. The creator workflow is
+`CONTENT → SETUP → CREATE → REVIEW → DONE`, with Home, Project, and Settings
+as the primary surfaces; Advanced and Diagnostics remain secondary.
 
 Only after Phase 7 pipeline is stable.
 
@@ -80,12 +87,11 @@ Only after Phase 7 pipeline is stable.
 
 UI must use existing application services.
 
-## Phase 9 — Full-video V1
+## Phase 9 — Full-video V1 — IMPLEMENTED
 
-- 2–3 minute all-video prototype.
-- continuity/resume hardening.
-- explicit cost confirmation.
-- then one representative 18–24 minute run.
+The V1 implementation, continuity/resume hardening, and explicit cost
+confirmation are complete. Do not schedule speculative follow-on work here;
+use defect-driven corrective goals after normal production trials.
 
 ## Deferred
 

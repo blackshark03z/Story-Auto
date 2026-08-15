@@ -4,6 +4,12 @@ Current stable release: **Story Auto v1.0.0 Stable**. See
 [`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) and the machine-readable
 [`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
 
+The current accepted post-release development state includes Goal 10’s
+creator-first UI and Goal 11’s Flow IMAGE mark postprocessing. This is not a
+new release version: `v1.0.0` remains the stable release baseline. Next use is
+a real production trial through the normal UI; observed defects should become
+narrow corrective work with regression coverage.
+
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
 ## Product modes
@@ -115,7 +121,11 @@ Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
 scene and the downstream final render without submitting to a provider.
 
 Production image and video assets pause in `QC_PENDING` until the complete
-naturalness rubric passes; a visible provider watermark is always rejected.
+naturalness rubric passes. For Flow IMAGE, the raw provider bytes are retained
+as immutable evidence and a deterministic locally cleaned, lineage-validated
+derivative becomes `selected_asset`; a remaining visible provider mark fails
+QC. Flow VIDEO remains unchanged: its visible provider mark is the accepted V1
+limitation.
 Long `full_video_ai` shots are partitioned into stable provider-duration request
 parts and every part must resolve to video before rendering. `NATURAL_SOFT` is an
 optional restrained finishing profile with no blur or artificial sharpening.

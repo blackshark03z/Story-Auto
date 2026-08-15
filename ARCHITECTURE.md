@@ -213,6 +213,11 @@ preserves the provider-original bytes and creates a separately hashed local
 derivative with the visible sparkle mark removed before `selected_asset` is
 bound. The generation manifest records raw-to-derivative lineage, and local
 cleanup failure is retried from the raw bytes without another provider submit.
+The supported versioned image profiles are `1280x720 v1` and `1376x768 v1`;
+unknown geometry fails closed locally. Postprocessing only repairs a derivative
+from valid raw evidence and never by submitting another Flow request solely for
+local cleanup failure. This is a Flow IMAGE boundary, not a universal watermark
+removal system.
 Flow video remains unchanged: its visible mark is the accepted known
 limitation. The renderer continues to consume only the selected path and hash.
 

@@ -81,7 +81,9 @@ the sanitized inventory. Story Auto uses `GOOGLE_FLOW_WEB` for both images and
 videos. Production Flow images are postprocessed locally inside the provider
 adapter: preserve the raw provider file, verify its recorded hash, create the
 clean derivative, and verify the derivative lineage before review or rendering.
-A remaining visible mark on a production image is a QC failure. Flow video is
+A remaining visible mark on a production image is a QC failure. The supported
+Flow IMAGE profiles are `1280x720 v1` and `1376x768 v1`; any other geometry
+fails closed locally. Flow video is
 unchanged; its visible sparkle mark remains an `ACCEPTED_KNOWN_LIMITATION` and
 must not be removed, covered, or cropped specifically to hide it.
 

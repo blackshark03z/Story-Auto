@@ -19,6 +19,16 @@
 
 ## Unreleased
 
+- Record accepted post-v1.0.0 development without creating a new release:
+  Goal 10 simplifies the local creator experience to
+  `CONTENT → SETUP → CREATE → REVIEW → DONE` across Home, Project, and
+  Settings, with Advanced and Diagnostics secondary; product core behavior is
+  unchanged.
+- Record Goal 11 Flow IMAGE postprocessing: immutable raw provider evidence,
+  deterministic locally cleaned and lineage-validated selected derivatives,
+  fail-closed unsupported geometry, and QC failure for a remaining visible
+  provider mark. Flow VIDEO retains the historical accepted visible-mark
+  limitation.
 - Redesign the loopback UI around a creator-first Home, recoverable three-step
   New video flow, focused production progress, actionable recovery states,
   dedicated review/completion experiences, and intent-grouped Settings. Keep

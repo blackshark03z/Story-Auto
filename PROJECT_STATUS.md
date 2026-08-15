@@ -2,15 +2,32 @@
 
 ## Current accepted state
 
-**DESIGN_FROZEN / HYBRID_PRODUCTION_MVP_ACCEPTED**
+**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_ACCEPTED**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
-The repository contains the frozen product authorities and the Story Auto
-v1.0.0 Stable production-capable CLI/application pipeline through hybrid
-rendering and publishing assets. Goal 10 adds a tested creator-oriented local UI
-candidate over the same services; experiential owner acceptance is pending at
-the `REVIEW_REQUIRED` gate.
+The stable release baseline is **Story Auto v1.0.0 Stable**, release commit
+`6dc3188a16bd1ae4f84906f891083ec6c0651154`, annotated tag `v1.0.0`.
+That release evidence remains historical and immutable.
+
+The current accepted post-release development state includes:
+
+- **Goal 10** (`STORY-AUTO-GOAL-10-UX-UI-SIMPLIFICATION`), accepted at
+  `b132c8c38fa3cd2041282df8d6109a8efe9d0992`: the creator workflow is
+  `CONTENT → SETUP → CREATE → REVIEW → DONE` across Home, Project, and
+  Settings, with Advanced and Diagnostics secondary. Product core behavior did
+  not change.
+- **Goal 11** (`STORY-AUTO-GOAL-11-FLOW-IMAGE-MARK-POSTPROCESSING`), accepted
+  at `3d4e2a423d806f3feb091d1076bda901fc8b43d1`: production Flow images retain
+  immutable raw provider evidence, then use a deterministic locally cleaned,
+  validated derivative as `selected_asset`. Flow video retains its accepted
+  visible-provider-mark limitation. Focused tests passed 34/34, the full
+  offline suite passed 141/141, quality and security gates passed, and the
+  24-item visual corpus passed.
+
+No engineering feature goal is active after this documentation synchronization.
+Normal operating mode is: use the product, run a real production trial through
+the normal UI, and open a narrow corrective goal only for an observed defect.
 
 ## Accepted feature inventory
 
@@ -99,9 +116,11 @@ the `REVIEW_REQUIRED` gate.
   remain append-only provenance and cannot become the selected thumbnail.
 - Structured `NATURAL_SOFT_REALISM` policy now compiles image intent separately
   from motion-only reference-video prompts; generic AI-polish defaults are not injected.
-- Production media uses `IMAGE output_count=1`, pauses at naturalness QC, and
-  accepts the visible Flow mark as a documented V1 limitation without deleting
-  or altering provider output.
+- Production media uses `IMAGE output_count=1` and pauses at naturalness QC.
+  For Flow IMAGE, raw provider bytes are immutable evidence and a deterministic
+  local postprocess creates the separately hashed clean derivative selected for
+  downstream use; a remaining visible provider mark fails QC. Flow VIDEO is
+  unchanged and retains the visible-provider-mark limitation accepted in V1.
 - `full_video_ai` now partitions long shots into deterministic video request
   parts, supports explicit repeated-kind production batches, and renders only
   complete all-video coverage through the common compositor.
@@ -111,11 +130,15 @@ the `REVIEW_REQUIRED` gate.
   planning, references, shots, prompt edits, replacement/regeneration, production
   QC, safe generation controls, rendering, provenance, and publishing. CLI and UI
   mutations share `OperatorService` and the accepted core services.
-- The Goal 10 UI candidate reorganizes that operator capability into Home,
+- Goal 10 reorganizes that operator capability into Home,
   three-step New video, focused Project, Review, completion, and Settings
   surfaces. Human status, progress, and one next action lead; raw IDs, paths,
   manifests, provider attempts, and low-level controls are disclosed only under
-  Advanced or Diagnostics. Owner visual/experiential acceptance remains pending.
+  Advanced or Diagnostics. Owner visual and experiential acceptance is complete.
+- Goal 11 supports the verified Flow image profiles `1280x720 v1` and
+  `1376x768 v1`; unsupported image geometry fails closed locally. A missing,
+  corrupt, or failed clean derivative is rebuilt from valid raw evidence and
+  must not cause a new Flow submission solely for postprocessing recovery.
 - Release hardening adds pre-dispatch workspace-capacity checks, atomic
   normalized/final media publication, restart proofs for interrupted planning
   and acquisition, zero-byte/partial-media rejection, and a credential/signed-URL/
@@ -129,12 +152,13 @@ the `REVIEW_REQUIRED` gate.
 
 Normative V1 artifact semantics are in `docs/specs/ARTIFACT_CONTRACTS_V1.md` and `contracts/schemas/`. Secrets are never stored in project artifacts.
 
-## Goal 08 owner decision and remaining dependency
+## Historical Goal 08 release decision and remaining dependency
 
 - Production media routing is final: `GOOGLE_FLOW_WEB` for images and videos.
   Provider-selection research is `CLOSED_BY_OWNER_DECISION`; completed Flow,
   Gemini API, and Gemini Web evidence remains append-only provenance.
-- The Flow sparkle mark is `ACCEPTED_KNOWN_LIMITATION`. It is never removed,
+- At the v1.0.0 release, the Flow sparkle mark was an
+  `ACCEPTED_KNOWN_LIMITATION` for both media types and was never removed,
   covered, masked, inpainted, or cropped away. Bottom-right prompt composition
   and right-cleared lower-third subtitles mitigate collision without distorting
   shots. Representative review found zero focal-subject, subtitle, or critical
