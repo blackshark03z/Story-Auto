@@ -15,7 +15,7 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
-from story_auto.providers.flow.live import records_for_media
+from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
 
 
 class Editor:
@@ -36,7 +36,9 @@ class NativePage:
     def __init__(self): self.clicked = None; self.commands=[]; self.keys=[]; self.evaluations=0
     def evaluate(self, _):
         self.evaluations += 1
-        return [{"enabled":True,"x":10,"y":20}] if self.evaluations == 1 else True
+        if self.evaluations == 1: return [{"enabled":True,"x":30,"y":40}]
+        if self.evaluations == 2: return True
+        return [{"type":"pointerdown","isTrusted":True},{"type":"click","isTrusted":True}]
     def command(self, method, params=None): self.commands.append(method); return {"windowId":1} if method=="Browser.getWindowForTarget" else {}
     def click(self, x, y): self.clicked=(x,y)
     def key(self, key, *, code=None): self.keys.append((key,code))
@@ -84,20 +86,69 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(events,["references","baseline"])
         self.assertTrue(dom.controls[0].clicked)
 
+    def test_reference_readiness_is_committed_before_generate_resolution(self):
+        events=[]
+        class ReferenceDom(DOM):
+            def add_references(self, _):
+                events.append("reference_committed")
+                return {"expected":1,"committed":True,"method":"fixture"}
+            def generate_controls(self, *_):
+                events.append("generate_resolved")
+                return super().generate_controls(*_)
+        result=FlowComposer(ReferenceDom()).submit("p",references=["reference.png"],media_type="IMAGE")
+        self.assertEqual(events,["reference_committed","generate_resolved"])
+        self.assertTrue(result["composer_ready_state"]["reference_state"]["committed"])
+
     def test_preconfigured_mode_is_not_reopened_before_submit(self):
         class ModeDom(DOM):
             def choose_mode(self, _): raise AssertionError("mode menu must remain closed")
         dom=ModeDom(); FlowComposer(dom).submit("p", references=[], media_type="IMAGE", mode_already_configured=True)
         self.assertTrue(dom.controls[0].clicked)
-    def test_live_generate_control_uses_trusted_pointer_then_focused_key_fallback(self):
+    def test_live_generate_control_reresolves_and_uses_one_trusted_pointer_activation(self):
         from story_auto.providers.flow.live import _Control
-        page=NativePage(); _Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click(); self.assertEqual(page.clicked,(10,20)); self.assertEqual(page.keys,[("Enter","Enter")]); self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
+        page=NativePage(); receipt=_Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click()
+        self.assertEqual(page.clicked,(30,40)); self.assertEqual(page.keys,[])
+        self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
+        self.assertEqual((receipt["interaction_method"],receipt["interaction_version"],receipt["trusted_click_seen"]),("CDP_TRUSTED_POINTER",2,True))
+
+    def test_click_acknowledgement_alone_is_dispatch_uncertain(self):
+        tracker=DispatchEvidenceTracker()
+        self.assertEqual(tracker.observe(input_dispatched=True,trusted_click_seen=True),"UNCERTAIN")
+        self.assertEqual((tracker.signal,tracker.confirmation_count),("trusted_click_only",0))
+
+    def test_attributable_provider_signal_confirms_exactly_once(self):
+        tracker=DispatchEvidenceTracker()
+        tracker.observe(input_dispatched=True,trusted_click_seen=True)
+        self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,legacy_ack_present=False),"CONFIRMED")
+        tracker.observe(input_dispatched=True,attributable_output=True,legacy_ack_present=False)
+        self.assertEqual(tracker.confirmation_count,1)
+
+    def test_unrelated_dom_mutation_does_not_confirm_dispatch(self):
+        tracker=DispatchEvidenceTracker()
+        self.assertEqual(tracker.observe(input_dispatched=True,unrelated_dom_mutation=True),"NOT_CONFIRMED")
+        self.assertEqual(tracker.confirmation_count,0)
+
+    def test_later_reconciliation_converts_uncertain_to_confirmed_without_activation(self):
+        tracker=DispatchEvidenceTracker()
+        tracker.observe(input_dispatched=True,prompt_transition=True)
+        self.assertEqual(tracker.state,"UNCERTAIN")
+        tracker.observe(input_dispatched=True,attributable_output=True)
+        self.assertEqual((tracker.state,tracker.signal,tracker.confirmation_count),("CONFIRMED","new_attributable_output",1))
 
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]
             def no_dispatch(*_): calls.append(1); raise FlowError("FLOW_NOT_DISPATCHED")
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_dispatch)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual(len(calls),2)
+
+    def test_verified_pre_dispatch_activation_failure_remains_runnable(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,_=self._project(root); calls=[]
+            def no_activation(*_): calls.append(1); raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_activation)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             self.assertEqual(len(calls),2)
@@ -171,6 +222,35 @@ class FlowTests(unittest.TestCase):
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             self.assertEqual(len(calls),1)
+    def test_dispatch_uncertain_never_resubmits(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,_=self._project(root); calls=[]
+            def uncertain(*_): calls.append(1); raise FlowError("FLOW_DISPATCH_UNCERTAIN")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),uncertain)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual(len(calls),1)
+
+    def test_attempt_provenance_is_append_only_across_safe_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            class SequencedGenerator:
+                def __init__(self): self.calls=0; self.dispatch_confirmed=False; self.last_settings=None
+                def __call__(self,request,refs,destination):
+                    self.calls+=1
+                    state="PRE_DISPATCH_FAILURE" if self.calls==1 else "CONFIRMED"
+                    self.dispatch_confirmed=self.calls>1
+                    self.last_settings={"activation":{"activation_time":f"time-{self.calls}","interaction_method":"CDP_TRUSTED_POINTER","interaction_version":2},"composer_ready_state":{"prompt_committed":True,"reference_state":{"committed":True},"generate_enabled":True},"dispatch_confirmation_state":state,"dispatch_confirmation_signal":"input_not_dispatched" if self.calls==1 else "new_attributable_output","provider_job_id":None}
+                    if self.calls==1: raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
+                    from PIL import Image
+                    destination.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"blue").save(destination,"PNG"); return destination
+            generate=SequencedGenerator(); executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            attempts=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["attempts"]
+            self.assertEqual([item["status"] for item in attempts],["NOT_DISPATCHED","SUCCEEDED"])
+            self.assertEqual([item["activation_time"] for item in attempts],["time-1","time-2"])
+            self.assertEqual(attempts[1]["dispatch_confirmation_signal"],"new_attributable_output")
     def test_execution_gate(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); executor,_=self._executor()

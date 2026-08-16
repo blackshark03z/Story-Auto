@@ -6,12 +6,14 @@ import io
 import shutil
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from story_auto.core.artifacts import atomic_write_bytes, sha256_file
 from .cdp import CdpPage
 from .page import FlowComposer
 from .service import FlowError
+from .session import FlowSessionError
 from .settings import ResolvedFlowGenerationSettings, resolve_settings
 from .validation import validate_image
 
@@ -65,25 +67,67 @@ class _Control:
         except Exception:
             pass
         self.dom.page.command("Page.bringToFront")
-        x, y = float(self.evidence["x"]), float(self.evidence["y"])
-        self.dom.page.click(x, y)
-        time.sleep(.6)
-        # If the exact Generate control is still present, the trusted pointer
-        # sequence was ignored by Flow's floating wrapper. Focus that same
-        # unique control and try one keyboard activation. If dispatch already
-        # changed the composer, do not send another event.
+        receipt = {
+            "activation_time": datetime.now(timezone.utc).isoformat(),
+            "interaction_method": "CDP_TRUSTED_POINTER",
+            "interaction_version": 2,
+            "target_resolved_at_activation": False,
+            "input_dispatched": False,
+            "trusted_click_seen": False,
+        }
+        self.dom.last_activation_receipt = receipt
+        # Flow's floating composer can reflow during the baseline/readiness
+        # window. Re-resolve the target and coordinates immediately before
+        # input; cached coordinates create a time-of-check/time-of-use defect.
         controls = self.dom.page.evaluate(_CONTROL_JS) or []
-        if not controls:
-            return
-        if len(controls) != 1:
-            raise FlowError("FLOW_UI_CHANGED", "Generate control changed during activation")
-        if not controls[0].get("enabled"):
-            # Flow disables Generate while accepting an in-flight submission.
-            # Let the outer acknowledgement loop verify the prompt transition.
-            return
-        focused = self.dom.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return false;let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){xs[0].focus();return document.activeElement===xs[0]}if(xs.length>1)return false;p=p.parentElement}return false})()""")
-        if not focused: raise FlowError("FLOW_UI_CHANGED", "unable to focus the unique Flow Generate control")
-        self.dom.page.key("Enter", code="Enter")
+        if len(controls) != 1 or not controls[0].get("enabled"):
+            raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate was not uniquely ready at activation")
+        receipt["target_resolved_at_activation"] = True
+        installed = self.dom.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);if(!editor)return false;let p=editor.parentElement,control=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){control=xs[0];break}if(xs.length>1)return false;p=p.parentElement}if(!control)return false;window.__storyAutoFlowActivationV2=[];for(const name of ['pointerdown','mousedown','pointerup','mouseup','click'])control.addEventListener(name,e=>window.__storyAutoFlowActivationV2.push({type:e.type,isTrusted:e.isTrusted,button:e.button,buttons:e.buttons,pointerType:e.pointerType||null,defaultPrevented:e.defaultPrevented}),true);return true})()""")
+        if not installed:
+            raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate target changed before input")
+        try:
+            self.dom.page.click(float(controls[0]["x"]), float(controls[0]["y"]))
+            receipt["input_dispatched"] = True
+        except Exception as error:
+            receipt["transport_error"] = type(error).__name__
+            raise FlowError("FLOW_DISPATCH_UNCERTAIN", "native activation transport failed after input began") from error
+        time.sleep(.25)
+        events = self.dom.page.evaluate("window.__storyAutoFlowActivationV2||[]") or []
+        receipt["event_types"] = [item.get("type") for item in events]
+        receipt["trusted_click_seen"] = any(item.get("type") == "click" and item.get("isTrusted") is True for item in events)
+        self.dom.last_activation_receipt = receipt
+        return receipt
+
+
+class DispatchEvidenceTracker:
+    """Conservative, request-local dispatch acknowledgement state machine."""
+    def __init__(self):
+        self.state = "NOT_CONFIRMED"
+        self.signal = None
+        self.confirmation_count = 0
+
+    def observe(self, *, input_dispatched: bool, trusted_click_seen: bool = False,
+                prompt_transition: bool = False, attributable_job: bool = False,
+                attributable_output: bool = False, provider_job_id: str | None = None,
+                unrelated_dom_mutation: bool = False, legacy_ack_present: bool | None = None) -> str:
+        del unrelated_dom_mutation, legacy_ack_present
+        signal = None
+        if provider_job_id:
+            signal = "provider_job_id"
+        elif attributable_job:
+            signal = "new_attributable_job_state"
+        elif attributable_output:
+            signal = "new_attributable_output"
+        if signal:
+            if self.state != "CONFIRMED": self.confirmation_count += 1
+            self.state, self.signal = "CONFIRMED", signal
+        elif not input_dispatched:
+            self.state, self.signal = "PRE_DISPATCH_FAILURE", "input_not_dispatched"
+        elif self.state != "CONFIRMED" and (trusted_click_seen or prompt_transition):
+            self.state = "UNCERTAIN"
+            self.signal = "composer_transition_after_activation" if prompt_transition else "trusted_click_only"
+        return self.state
 
 
 class FlowBrowserDom:
@@ -139,20 +183,14 @@ class FlowBrowserDom:
         if len(last) == 1 and not last[0].get("enabled"):
             raise FlowError("FLOW_GENERATE_DISABLED", "Flow did not enable composer Generate after reference upload")
         return [_Control(self, x) for x in last]
-    def activate_generate_dom(self) -> bool:
-        """Last-resort exact-window activation after verified non-acknowledgement."""
-        controls = self.page.evaluate(_CONTROL_JS) or []
-        if len(controls) != 1 or not controls[0].get("enabled"): return False
-        focused=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){xs[0].focus();return document.activeElement===xs[0]}if(xs.length>1)return false;p=p.parentElement}return false})()""")
-        if not focused: return False
-        return self.page.os_click(float(controls[0]["x"]), float(controls[0]["y"]))
     def add_references(self, files):
         # The only file input belongs to Flow's project media library.  Upload
         # there first, then explicitly select the library item in the active
         # composer's add-media dialog; uploading alone is not an ingredient.
         if len(files) > 1:
-            for reference in files: self.add_references([reference])
-            return
+            states = [self.add_references([reference]) for reference in files]
+            return {"expected": len(files), "committed": all(item.get("committed") for item in states),
+                    "method": "library_hash_match_and_composer_attach"}
         count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
         if count != 1: raise FlowError("FLOW_UI_CHANGED", f"expected one reference input, found {count}")
         local = [str(Path(f).resolve()) for f in files]
@@ -184,7 +222,8 @@ class FlowBrowserDom:
         if not attached: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be attached")
         deadline=time.monotonic()+6
         while time.monotonic()<deadline:
-            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
+            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"):
+                return {"expected": 1, "committed": True, "method": "library_hash_match_and_composer_attach"}
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
         deadline=time.monotonic()+20
@@ -251,11 +290,12 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 480): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed=runtime,timeout_seconds,None,False
+    def __init__(self, runtime, *, timeout_seconds: int = 480): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed,self.dispatch_confirmation_state=runtime,timeout_seconds,None,False,"NOT_ATTEMPTED"
     def __call__(self, request, references, destination: Path):
         # The generator is reused across a batch. Dispatch evidence is local
         # to one request and must never leak from a prior attempt.
         self.dispatch_confirmed = False
+        self.dispatch_confirmation_state = "NOT_ATTEMPTED"
         self.last_settings = None
         page=CdpPage.open(self.runtime)
         try:
@@ -276,9 +316,8 @@ class LiveFlowGenerator:
                 raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
             before = {item["key"] for item in historical_records}
             before_output = {item["key"] for item in records_for_media(historical_records, request["media_type"])}
-            before_text = ""
             def baseline():
-                nonlocal before, before_output, before_text
+                nonlocal before, before_output
                 # Reference attachment and Flow's virtualized grid can lazily
                 # reveal or hide historical media. Accumulate the union for a
                 # full observation window so a resurfacing old URL cannot
@@ -289,7 +328,6 @@ class LiveFlowGenerator:
                     keys = {item["key"] for item in records}
                     before.update(keys)
                     before_output.update(item["key"] for item in records_for_media(records, request["media_type"]))
-                    before_text = page.evaluate("document.body.innerText")
                     time.sleep(.5)
                 self.last_settings["baseline_candidate_count"] = len(before)
                 self.last_settings["baseline_media_candidate_count"] = len(before_output)
@@ -310,31 +348,30 @@ class LiveFlowGenerator:
                     with Image.open(source) as image: image.convert("RGB").save(staged,"PNG",pnginfo=metadata)
                     staged_references.append(str(staged))
                     self.last_settings.setdefault("staged_reference_uploads",[]).append({"source_sha256":source_hash,"upload_sha256":sha256_file(staged)})
-                FlowComposer(dom).submit(request["prompt"], references=staged_references,
-                                         media_type=request["media_type"], before_dispatch=baseline,
-                                         mode_already_configured=True)
-            def acknowledged():
-                states = page.evaluate(_EDITOR_JS) or []
-                prompt_cleared = len(states) == 0 or all(item.get("text", "") != request["prompt"] for item in states)
-                # Uploaded references and virtualized history can surface as
-                # apparently new media nodes. Flow clears the composer on a
-                # real submission, so prompt transition is the only safe
-                # dispatch acknowledgement.
-                return prompt_cleared
-            # A cleared composer is dispatch evidence.
-            # Arbitrary body-text changes are not attributable to Generate.
-            for _ in range(8):
-                if acknowledged():
-                    self.dispatch_confirmed = True; self.last_settings["dispatch_ack_method"]="composer_clear_or_output_transition"; break
-                time.sleep(.25)
-            if not self.dispatch_confirmed:
-                if not dom.activate_generate_dom():
-                    raise FlowError("FLOW_NOT_DISPATCHED", "native click produced no Flow acknowledgement")
-                for _ in range(12):
-                    if acknowledged():
-                        self.dispatch_confirmed=True; self.last_settings["dispatch_ack_method"]="verified_dom_fallback_transition"; break
-                    time.sleep(.25)
-            if not self.dispatch_confirmed: raise FlowError("FLOW_NOT_DISPATCHED", "generate activation produced no Flow acknowledgement")
+                try:
+                    submit = FlowComposer(dom).submit(request["prompt"], references=staged_references,
+                                                      media_type=request["media_type"], before_dispatch=baseline,
+                                                      mode_already_configured=True)
+                except (FlowError, FlowSessionError) as error:
+                    composer = getattr(dom, "last_composer_ready_state", None)
+                    activation = getattr(dom, "last_activation_receipt", None)
+                    if isinstance(composer, dict): self.last_settings["composer_ready_state"] = composer
+                    if isinstance(activation, dict): self.last_settings["activation"] = activation
+                    state = "UNCERTAIN" if error.failure_class == "FLOW_DISPATCH_UNCERTAIN" else "PRE_DISPATCH_FAILURE"
+                    self.dispatch_confirmation_state = state
+                    self.last_settings.update({"dispatch_confirmation_state":state,
+                                               "dispatch_confirmation_signal":"activation_transport_uncertain" if state == "UNCERTAIN" else "input_not_dispatched",
+                                               "provider_job_id":None})
+                    raise
+            self.last_settings.update(submit)
+            activation = submit["activation"]
+            tracker = DispatchEvidenceTracker()
+            tracker.observe(input_dispatched=bool(activation.get("input_dispatched")),
+                            trusted_click_seen=bool(activation.get("trusted_click_seen")))
+            self.dispatch_confirmation_state = tracker.state
+            self.last_settings.update({"dispatch_confirmation_state":tracker.state,
+                                       "dispatch_confirmation_signal":tracker.signal,
+                                       "provider_job_id":None})
             reference_hashes = []
             if request["media_type"] == "IMAGE":
                 for reference in references:
@@ -342,6 +379,13 @@ class LiveFlowGenerator:
                     except Exception: pass
             deadline=time.monotonic()+self.timeout_seconds
             while time.monotonic()<deadline:
+                states = page.evaluate(_EDITOR_JS) or []
+                prompt_transition = len(states) == 0 or all(item.get("text", "") != request["prompt"] for item in states)
+                if prompt_transition:
+                    self.last_settings["composer_transition_seen"] = True
+                    tracker.observe(input_dispatched=bool(activation.get("input_dispatched")),
+                                    trusted_click_seen=bool(activation.get("trusted_click_seen")),
+                                    prompt_transition=True)
                 pool = dom.media_candidate_records()
                 pool = records_for_media(pool, request["media_type"])
                 added=[item for item in pool if item["key"] not in before_output]
@@ -365,6 +409,12 @@ class LiveFlowGenerator:
                             before_output.add(added[0]["key"])
                             self.last_settings["filtered_reference_echo_count"] = self.last_settings.get("filtered_reference_echo_count", 0) + 1
                             time.sleep(2); continue
+                    tracker.observe(input_dispatched=True, attributable_output=True)
+                    self.dispatch_confirmed = True
+                    self.dispatch_confirmation_state = tracker.state
+                    self.last_settings.update({"dispatch_confirmation_state":tracker.state,
+                                               "dispatch_confirmation_signal":tracker.signal,
+                                               "dispatch_ack_method":tracker.signal})
                     return destination
                 if len(added)>resolved.output_count:
                     # Lazy-loaded historical media can appear after the
@@ -372,7 +422,12 @@ class LiveFlowGenerator:
                     # instead of binding an arbitrary added candidate.
                     time.sleep(2); continue
                 time.sleep(2)
-            raise FlowError("FLOW_TIMEOUT", "submitted request has no uniquely attributable result")
+            self.dispatch_confirmation_state = tracker.state
+            self.last_settings.update({"dispatch_confirmation_state":tracker.state,
+                                       "dispatch_confirmation_signal":tracker.signal})
+            if tracker.state == "PRE_DISPATCH_FAILURE":
+                raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "no Generate input was dispatched")
+            raise FlowError("FLOW_DISPATCH_UNCERTAIN", "activation occurred but no attributable Flow job or output was proven")
         finally: page.close()
 
 

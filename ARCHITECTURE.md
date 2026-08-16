@@ -167,6 +167,17 @@ Core code does not know Flow DOM selectors, browser profile paths, login state, 
 
 It does **not** decide story beats, media policy, continuity, or final editorial timing.
 
+Flow Generate activation and provider dispatch acknowledgement are separate
+contracts. The adapter resolves the unique enabled Generate control immediately
+before one trusted CDP pointer sequence; it does not follow an acknowledgement
+delay with keyboard, JavaScript, or OS-mouse activation. Prompt readback,
+reference attachment completion, and an enabled control establish composer
+readiness, but neither a click nor a generic composer/DOM transition counts as
+a provider submission. Dispatch is confirmed only by attributable provider
+evidence, currently a new request-bound output (or a provider job identifier or
+job state if Flow exposes one). After input has occurred without that evidence,
+the attempt is dispatch-uncertain and must reconcile before any new activation.
+
 ## TTS and alignment abstraction
 
 ```text

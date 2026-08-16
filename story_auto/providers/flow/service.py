@@ -39,6 +39,23 @@ class FlowError(RuntimeError):
         self.failure_class = failure_class; super().__init__(failure_class + (f": {detail}" if detail else ""))
 
 def _now(): return datetime.now(timezone.utc).isoformat()
+
+
+def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
+    settings = getattr(generator, "last_settings", None)
+    attempt["provider_settings"] = settings
+    if not isinstance(settings, dict): return
+    activation = settings.get("activation", {}) if isinstance(settings.get("activation"), dict) else {}
+    composer = settings.get("composer_ready_state") if isinstance(settings.get("composer_ready_state"), dict) else None
+    attempt.update({
+        "activation_time": activation.get("activation_time"),
+        "interaction_method": activation.get("interaction_method"),
+        "interaction_version": activation.get("interaction_version"),
+        "composer_ready_state": composer,
+        "dispatch_confirmation_state": settings.get("dispatch_confirmation_state"),
+        "dispatch_confirmation_signal": settings.get("dispatch_confirmation_signal"),
+        "provider_job_id": settings.get("provider_job_id"),
+    })
 def _manifest(paths, project_id):
     path = paths.artifact_path("output/generation_manifest.json")
     if not path.exists(): return path, {"schema_version": MANIFEST_VERSION, "project_id": project_id, "requests": []}
@@ -601,7 +618,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
             try:
                 temp.parent.mkdir(parents=True, exist_ok=True)
-                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); attempt["provider_settings"] = getattr(executor.generate, "last_settings", None); source = Path(result or temp)
+                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); _record_attempt_provider_state(attempt, executor.generate); source = Path(result or temp)
                 if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
                 if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
                 production = request.get("execution_tier") == "STANDARD_PRODUCTION"
@@ -639,8 +656,8 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     submissions += 1
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
-                attempt["provider_settings"] = getattr(executor.generate, "last_settings", None)
-                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS"} else ("NOT_DISPATCHED" if error.failure_class == "FLOW_NOT_DISPATCHED" else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
+                _record_attempt_provider_state(attempt, executor.generate)
+                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS", "FLOW_DISPATCH_UNCERTAIN"} else ("NOT_DISPATCHED" if error.failure_class in {"FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
                 attempt.update({"status":state, "failure_class":error.failure_class, "diagnostic":str(error), "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})
