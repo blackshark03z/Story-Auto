@@ -20,6 +20,7 @@ class AmbientStyleProfile:
     style_id: str
     label: str
     preferred_images: tuple[int, int]
+    hard_max_images: int
     prompt_directive: str
     motion_cycle: tuple[str, ...]
     overlay: str
@@ -33,6 +34,7 @@ STYLE_PROFILES: dict[str, AmbientStyleProfile] = {
         style_id="quiet_verdict",
         label="Quiet Verdict",
         preferred_images=(2, 5),
+        hard_max_images=8,
         prompt_directive=(
             "Cool-neutral restrained natural realism in a serious institutional environment; "
             "clear character hierarchy, restrained contrast, and meaningful negative space; no glossy or HDR treatment"
@@ -47,6 +49,7 @@ STYLE_PROFILES: dict[str, AmbientStyleProfile] = {
         style_id="hidden_mastery",
         label="Hidden Mastery",
         preferred_images=(4, 7),
+        hard_max_images=10,
         prompt_directive=(
             "Warm restrained natural realism in a tactile human-scale environment; ordinary-looking protagonist, "
             "object-centered composition when relevant, and subtle continuity before and after the reveal"

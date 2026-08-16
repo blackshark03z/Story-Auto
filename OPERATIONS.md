@@ -71,6 +71,19 @@ is a policy failure. Temporal video QC is not run. Semantic/naturalness/visible-
 mark QC, exact selected-asset mapping, Flow image cleanup, subtitles, narration,
 BGM, rendering, resume, and publishing continue through their existing paths.
 
+Quiet Verdict prefers 2–5 images with a hard maximum of 8; Hidden Mastery
+prefers 4–7 with a hard maximum of 10. Preferred counts are not permission to
+merge incompatible narrative states. A preferred-budget overflow records
+`SEMANTIC_STATE_INCOMPATIBILITY`; a hard-limit overflow stops at visual
+planning.
+
+Ambient Flow IMAGE prompts use the centralized 1,200-character provider limit
+and a 1,100-character internal target. If a required structured visual brief
+cannot fit, no Flow call occurs. The normal project state says **Visual planning
+needs to be regenerated**; expand Technical details for the exact failure code.
+Resume from visual planning. Existing content, TTS audio, and canonical
+alignment remain valid unless their own inputs changed.
+
 Rebuild the two provider-free engineering demos with:
 
 ```text

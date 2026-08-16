@@ -45,6 +45,12 @@ _ATTENTION = {
         "action": "Review plan",
         "action_id": "review_plan",
     },
+    "VISUAL_PLANNING_REGENERATION_REQUIRED": {
+        "title": "Visual planning needs attention",
+        "message": "Visual planning needs to be regenerated before Story Auto can create images.",
+        "action": "Regenerate visual plan",
+        "action_id": "review_plan",
+    },
     "MEDIA_QC_REQUIRED": {
         "title": "Review generated visuals",
         "message": "Some generated scenes need a quick quality decision before production can continue.",
@@ -192,8 +198,10 @@ class OperatorService:
             "content_manifest.json","alignment.json","story_timeline.json","continuity_bible.json","shot_plan.json",
             "media_plan.json","generation_requests.json","render_plan.json","final.mp4","publishing_package.json")}
         blocked=[]
+        visual_planning=review.get("visual_planning",{}) if isinstance(review,dict) else {}
         if content_status!="VALID": blocked.append("VALID_NARRATION_REQUIRED")
-        if review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
+        if visual_planning.get("status")=="NEEDS_REGENERATION": blocked.append("VISUAL_PLANNING_REGENERATION_REQUIRED")
+        elif review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
         if counts.get("AUTH_REQUIRED"): blocked.append("FLOW_AUTH_REQUIRED")
         if counts.get("CREDIT_BLOCKED"): blocked.append("PROVIDER_CREDITS_REQUIRED")
         if counts.get("FAILED_PERMANENT") or counts.get("FAILED_FATAL"): blocked.append("GENERATION_SETUP_REQUIRED")
@@ -231,6 +239,8 @@ class OperatorService:
                 progress,stage,activity=min(progress,74),"Create visuals","Visual creation is waiting for Google sign-in."
             elif blocked[0]=="PLANNING_APPROVAL_REQUIRED":
                 progress,stage,activity=min(progress,44),"Plan","The story plan is ready for review."
+            elif blocked[0]=="VISUAL_PLANNING_REGENERATION_REQUIRED":
+                progress,stage,activity=min(progress,44),"Plan","Visual planning needs to be regenerated."
             elif blocked[0] in {"PROVIDER_CREDITS_REQUIRED","GENERATION_SETUP_REQUIRED","GENERATION_CANCELLED","GENERATION_RECONCILIATION_REQUIRED"}:
                 progress,stage,activity=min(progress,74),"Create visuals",_ATTENTION[blocked[0]]["message"]
             user_status="Needs your attention"
@@ -256,17 +266,18 @@ class OperatorService:
                 "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),
-                "planning_status":"APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED"),
+                "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
                 "continuity_status":"READY" if artifacts["continuity_bible.json"] else "NOT_STARTED",
                 "shot_plan_status":"READY" if artifacts["shot_plan.json"] else "NOT_STARTED",
                 "generation_status":counts or {"NOT_STARTED":0},
-                "render_status":"COMPLETE" if artifacts["final.mp4"] else ("PLANNED" if artifacts["render_plan.json"] else "NOT_STARTED"),
+                "render_status":"NOT_STARTED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("COMPLETE" if artifacts["final.mp4"] else ("PLANNED" if artifacts["render_plan.json"] else "NOT_STARTED")),
                 "publishing_status":"READY" if artifacts["publishing_package.json"] else "NOT_STARTED",
                 "blocked":blocked,"artifacts":artifacts,"project_path":str(paths.root),
                 "user_status":user_status,"current_stage":stage,"current_activity":activity,"progress":min(100,progress),
                 "completed_visuals":finished_visuals,"total_visuals":total_visuals,"primary_action":primary_action,
                 "attention":attention,"work_saved":True,"updated_at":_updated_at(paths),"word_count":_word_count(narration),
-                "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] else None}
+                "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] and visual_planning.get("status")!="NEEDS_REGENERATION" else None,
+                "visual_planning":visual_planning}
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
@@ -335,6 +346,23 @@ class OperatorService:
                 recovery_action=("manual_asset" if status=="AMBIGUOUS" else "flow_sign_in_then_requeue" if status=="AUTH_REQUIRED" else "requeue" if status in {"FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","REJECTED"} else None)
                 issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","REJECTED"},"recovery_action":recovery_action})
         pending=sum(1 for item in items if item.get("status") in problems)
+        planning_state=(planning.get("review_state") or {}).get("visual_planning",{})
+        planning_failed=planning_state.get("status")=="NEEDS_REGENERATION"
+        visual_items=media["references"]+media["shots"]
+        selected_visuals=[item for item in visual_items if item.get("status")=="SUCCEEDED" and item.get("selected_asset")]
+        all_visuals_checked=bool(visual_items) and len(selected_visuals)==len(visual_items)
+        if planning_failed:
+            visual_match="Not available yet"
+        elif not visual_items:
+            visual_match="Not checked"
+        elif not selected_visuals:
+            visual_match="Needs review" if pending else "Pending"
+        elif pending:
+            visual_match="Needs review"
+        else:
+            visual_match="Passed" if all_visuals_checked else "Pending"
+        if planning_failed:
+            issues.insert(0,{"label":"Visual planning","scene":None,"message":"Visual planning needs to be regenerated before images can be created.","status":"NEEDS_REGENERATION","request_id":None,"media_type":None,"retryable":False,"recovery_action":None,"technical_code":planning_state.get("failure_class")})
         temporal_qc=temporal_video_qc_applicability(snapshot["render_mode"])
         has_video=any(item.get("request",{}).get("media_type")=="VIDEO" for item in items)
         video_problem=any(item.get("request",{}).get("media_type")=="VIDEO" and item.get("status") in problems for item in items)
@@ -343,9 +371,9 @@ class OperatorService:
             "project_id":project_id,"title":snapshot["title"],"duration_seconds":snapshot.get("duration_seconds"),
             "final_path":snapshot.get("final_path"),"publishing":publishing,
             "quality":[
-                {"label":"Visual match","status":"Passed" if not pending else "Needs review"},
+                {"label":"Visual match","status":visual_match},
                 {"label":"Motion quality","status":"Not applicable" if temporal_qc=="NOT_APPLICABLE" else ("Needs review" if video_problem else ("Passed" if has_video else "Waiting"))},
-                {"label":"Naturalness","status":"Needs review" if pending else ("Passed" if items else "Waiting")},
+                {"label":"Naturalness","status":"Not available yet" if planning_failed else ("Needs review" if pending else ("Passed" if all_visuals_checked else ("Pending" if visual_items else "Waiting")))},
                 {"label":"Final render","status":"Passed" if snapshot.get("final_path") else "Waiting"},
             ],
             "issues":issues,"work_saved":True,"temporal_video_qc":temporal_qc,

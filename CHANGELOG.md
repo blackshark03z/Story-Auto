@@ -19,6 +19,12 @@
 
 ## Unreleased
 
+- Correct Ambient Story planning after Trial A: identify narrative states
+  before compatible visual-anchor merging; make preferred asset budgets soft
+  with bounded hard maxima; separate visual briefs from narration summaries;
+  enforce centralized, priority-aware Flow IMAGE prompt budgets without blind
+  truncation; preserve upstream TTS/alignment on visual-policy invalidation; and
+  prevent Visual match from passing without selected generated evidence.
 - Correct Kokoro Local readiness so Settings and production share one offline,
   load-only runtime/model/voice probe; support explicit durable cache and
   snapshot resolution; and expose actionable missing-model, missing-voice,

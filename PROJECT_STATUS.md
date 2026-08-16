@@ -2,7 +2,7 @@
 
 ## Current accepted state
 
-**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOAL_13_LOCAL_CANDIDATE**
+**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOALS_13_14_15_LOCAL_CANDIDATES**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
@@ -39,6 +39,13 @@ The current accepted post-release development state includes:
   remains preserved for a separate UI resume after corrective validation. The
   observed imported-package title metadata carryover issue is explicitly
   deferred to later UX corrective work.
+- **Goal 15** (`STORY-AUTO-GOAL-15-AMBIENT-VISUAL-PLANNING-AND-PROMPT-BOUNDS`)
+  corrects Trial A's visual-only defects: semantic compatibility now outranks
+  preferred image count, narration summaries are separate from concise visual
+  anchors, Flow IMAGE prompts compile within a centralized bound, and Review
+  cannot claim a visual match before selected generated evidence exists. Trial
+  A's content, Kokoro narration, and alignment remain the resume authority;
+  Trial B has not begun.
 
 After Goal 13 offline closeout, normal operating mode is: run the two authorized
 Ambient production trials through the normal UI and open narrow corrective work
@@ -157,11 +164,15 @@ only for observed defects.
   `1376x768 v1`; unsupported image geometry fails closed locally. A missing,
   corrupt, or failed clean derivative is rebuilt from valid raw evidence and
   must not cause a new Flow submission solely for postprocessing recovery.
-- Goal 13 expresses Ambient visual chapters through the existing shot/media/
-  request/render artifacts, targets 2–5 Quiet Verdict or 4–7 Hidden Mastery
-  chapter images, enforces `IMAGE / REQUIRED`, and records temporal video QC as
-  `NOT_APPLICABLE`. Its six deterministic local motion primitives remain within
-  1–3% scale bounds and use only a seeded subtle fine-grain overlay.
+- Ambient visual planning uses the existing shot/media/request/render artifacts
+  and a two-stage narrative-state → compatible-anchor policy. Quiet Verdict is
+  preferred 2–5/hard maximum 8; Hidden Mastery is preferred 4–7/hard maximum
+  10. Preferred overflow requires `SEMANTIC_STATE_INCOMPATIBILITY`. Visual
+  anchors and broad narration summaries are separate, and only bounded visual
+  intent reaches Flow IMAGE compilation (1,100 internal target, centralized
+  1,200 hard limit, no blind truncation). Ambient remains `IMAGE / REQUIRED`
+  with temporal video QC `NOT_APPLICABLE`; its six deterministic local motion
+  primitives remain within 1–3% scale bounds with seeded subtle fine grain.
 - Ambient style prompt changes invalidate visual-generation descendants while
   local motion/overlay enablement invalidates render descendants only. Existing
   `hybrid_hook` and `full_video_ai` policies remain separate.

@@ -99,18 +99,33 @@ normalization never uses freeze-tail continuation.
 ### ambient_story
 
 Ambient Story reuses the durable story timeline, shot plan, media plan,
-generation requests, manifest, and render plan. Its shot-plan policy treats a
-shot as a long-lived **visual chapter** spanning one or more contiguous timeline
-scenes and chooses boundaries from narrative-state, location, relationship, or
-entity changes rather than elapsed-time slicing.
+generation requests, manifest, and render plan. Its shot-plan policy first
+identifies narrative-state candidates, then merges adjacent candidates only
+when one truthful visual anchor remains valid. A shot is therefore a long-lived
+**visual chapter**, but preferred asset count never authorizes merging action,
+accusation, retirement/death, or other incompatible states. Duration alone
+never forces a split.
 
-The initial style profiles are data-driven `quiet_verdict` (preferred 2–5
-chapter images) and `hidden_mastery` (preferred 4–7). Every Ambient media item
-is `IMAGE / REQUIRED`; overrides cannot request video and temporal video QC is
-`NOT_APPLICABLE`. Style prompt directives participate in visual-generation
-identity. Deterministic motion, fine-grain presentation, subtitle preset, and
-transition settings remain local render inputs, so local-only presentation
-changes do not invalidate Flow requests.
+The data-driven budgets are `quiet_verdict` preferred 2–5/hard maximum 8 and
+`hidden_mastery` preferred 4–7/hard maximum 10. Overflow above the preferred
+maximum requires a machine-readable semantic-incompatibility reason; overflow
+above the hard maximum fails planning. A premise-level `SUPPORTIVE` anchor may
+span compatible location changes when it does not assert misleading literal
+detail.
+
+The shot plan keeps `narrative_summary` separate from a bounded visual brief
+(`visual_anchor`, dominant subject/environment/state, motif, continuity, and
+optional context). Only the brief reaches Flow prompt compilation. The canonical
+Flow IMAGE hard limit is 1,200 characters and Ambient compilation targets 1,100
+with whole-field, priority-aware optional compaction. Required identity,
+continuity, style, safe-area, and safety instructions are never raw-truncated;
+irreducible overflow fails before a provider call.
+
+Every Ambient media item is `IMAGE / REQUIRED`; overrides cannot request video
+and temporal video QC is `NOT_APPLICABLE`. Style prompt directives participate
+in visual-generation identity. Deterministic motion, fine-grain presentation,
+subtitle preset, and transition settings remain local render inputs, so
+local-only presentation changes do not invalidate Flow requests.
 
 ## Provider boundaries
 

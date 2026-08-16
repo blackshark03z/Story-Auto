@@ -14,15 +14,21 @@ from story_auto.core.gemini_qc import MOTION_PLAN_VERSION, compile_flow_motion_p
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import (
+    AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,
     DEFAULT_VISUAL_POLICY,
+    FLOW_IMAGE_PROMPT_HARD_LIMIT,
+    AmbientVisualBriefBudgetError,
     ambient_prompt_directive,
     ambient_style_profile,
     compile_ambient_presentation,
+    compile_ambient_image_prompt,
     compile_image_prompt,
     compile_video_prompt,
     validate_ambient_presentation,
     validate_visual_policy,
 )
+from .ambient import (AmbientPlanningPolicyError, plan_visual_chapters,
+                      reference_visual_brief, validate_visual_brief)
 from story_auto.providers.llm import (GeminiProvider, GeminiProviderError,
                                       GeminiReasoningRouter, LLMRequest,
                                       RoutedGeminiProvider)
@@ -38,9 +44,9 @@ GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.7.0"
 SHOT_SCHEMA_VERSION = "story-auto-shot-plan/1.0.0"
 MEDIA_SCHEMA_VERSION = "story-auto-media-plan/1.0.0"
 REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
-AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/1.0.0"
-AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/1.0.0"
-AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/1.0.0"
+AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/2.0.0"
+AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/2.0.0"
+AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.0.0"
 
 class PlanningError(ValueError):
     def __init__(self, failure_class: str, detail: str = "") -> None:
@@ -206,98 +212,41 @@ def _resolve_shots(project_id: str, proposed: dict[str, Any], timeline: dict[str
     return {"schema_version":SHOT_SCHEMA_VERSION,"project_id":project_id,"timeline_sha256":provenance["direct_input_hashes"]["timeline_sha256"],"continuity_sha256":provenance["direct_input_hashes"]["continuity_sha256"],"shots":shots,"provenance":provenance,"review_status":"VALIDATED"}
 
 
-_AMBIENT_STATE_PATTERNS = (
-    ("POINT_OF_NO_RETURN", ("point of no return", "irreversible", "arrest", "firing", "betrayal", "accusation")),
-    ("REVEAL", ("reveal", "truth", "identity", "mastery", "hidden skill", "discovery")),
-    ("CONSEQUENCE", ("consequence", "aftermath", "response", "punishment", "recognition")),
-    ("CLOSURE", ("closure", "epilogue", "resolution", "reconciliation", "ending")),
-    ("INCIDENT", ("incident", "conflict", "confrontation", "arrival", "opening")),
-    ("ESCALATION", ("escalation", "pressure", "humiliation", "threat", "stakes")),
-    ("POWER_SHIFT", ("power", "relationship", "authority", "reversal", "commitment")),
-)
-
-
-def _ambient_story_state(scene: dict[str, Any], index: int, count: int) -> str:
-    text = f"{scene.get('story_role', '')} {scene.get('summary', '')}".lower()
-    for state, terms in _AMBIENT_STATE_PATTERNS:
-        if any(term in text for term in terms):
-            return state
-    role = _slug(str(scene.get("story_role", "story_state"))).upper()
-    if index == 0: return "INCIDENT"
-    if index == count - 1: return "CLOSURE"
-    return f"ROLE_{role}"
-
-
-def _ambient_chapter_boundaries(timeline: dict[str, Any], continuity: dict[str, Any], style_id: str) -> tuple[list[int], list[str]]:
-    scenes = timeline["scenes"]
-    profile = ambient_style_profile(style_id)
-    states = [_ambient_story_state(scene, index, len(scenes)) for index, scene in enumerate(scenes)]
-    location_ids = {item.get("entity_id") for item in continuity.get("locations", [])}
-    scored: list[tuple[int, int, str]] = []
-    priorities = {"REVEAL": 90, "POINT_OF_NO_RETURN": 85, "CONSEQUENCE": 80, "CLOSURE": 75, "INCIDENT": 70}
-    for index in range(1, len(scenes)):
-        prior, current = scenes[index - 1], scenes[index]
-        reasons: list[str] = []
-        score = priorities.get(states[index], 0)
-        if states[index] != states[index - 1]: score += 100; reasons.append(f"state {states[index - 1]} -> {states[index]}")
-        prior_locations = set(prior.get("entity_ids", [])) & location_ids
-        current_locations = set(current.get("entity_ids", [])) & location_ids
-        if prior_locations != current_locations: score += 80; reasons.append("location change")
-        if set(prior.get("entity_ids", [])) != set(current.get("entity_ids", [])): score += 30; reasons.append("relationship/entity state change")
-        scored.append((score, index, "; ".join(reasons) or "story-role boundary"))
-    preferred_min, preferred_max = profile.preferred_images
-    distinct_states = len(dict.fromkeys(states))
-    target = min(len(scenes), preferred_max, max(preferred_min, distinct_states))
-    selected = sorted(scored, key=lambda item: (-item[0], item[1]))[:max(0, target - 1)]
-    selected.sort(key=lambda item: item[1])
-    return [item[1] for item in selected], [item[2] for item in selected]
-
-
 def compile_ambient_shot_plan(project_id: str, timeline: dict[str, Any], continuity: dict[str, Any], style_id: str,
                               *, timeline_sha256: str, continuity_sha256: str) -> dict[str, Any]:
-    """Compile narrative-state visual chapters without fixed-duration slicing."""
+    """Identify narrative states, then merge only visually compatible anchors."""
     profile = ambient_style_profile(style_id)
-    scenes = timeline["scenes"]
-    boundaries, reasons = _ambient_chapter_boundaries(timeline, continuity, style_id)
-    spans = [0, *boundaries, len(scenes)]
-    kinds, entity_ids = _entity_maps(continuity)
-    names = {item["entity_id"]: item["name"] for kind in ("characters", "locations", "props") for item in continuity.get(kind, [])}
+    try:
+        chapters, asset_budget = plan_visual_chapters(
+            timeline, continuity, preferred_min=profile.preferred_images[0],
+            preferred_max=profile.preferred_images[1], hard_max=profile.hard_max_images,
+        )
+    except AmbientPlanningPolicyError as error:
+        raise PlanningError(error.failure_class, error.detail) from error
     shots: list[dict[str, Any]] = []
-    for chapter_index, (left, right) in enumerate(zip(spans, spans[1:]), 1):
-        group = scenes[left:right]
-        referenced = [item for scene in group for item in scene.get("entity_ids", []) if item in entity_ids]
-        unique_refs = list(dict.fromkeys(referenced))
-        characters = [item for item in unique_refs if kinds[item] == "character"]
-        props = [item for item in unique_refs if kinds[item] == "prop"]
-        locations = [item for item in unique_refs if kinds[item] == "location"]
-        state = _ambient_story_state(group[-1], right - 1, len(scenes))
-        summaries = "; ".join(str(scene.get("summary", "")).strip() for scene in group if str(scene.get("summary", "")).strip())
-        subject = ", ".join(names[item] for item in characters[:2]) or "the story protagonist"
-        change_reason = "opening narrative state" if chapter_index == 1 else reasons[chapter_index - 2]
+    for chapter_index, chapter in enumerate(chapters, 1):
+        location_ids = chapter.pop("location_ids")
+        location_id = location_ids[0] if location_ids else None
+        source_scene_ids = chapter["source_scene_ids"]
+        state = chapter["narrative_function"]
         shots.append({
-            "shot_id": f"sh_{chapter_index:04d}", "scene_id": group[0]["scene_id"],
-            "source_scene_ids": [scene["scene_id"] for scene in group],
-            "start": float(group[0]["start"]), "end": float(group[-1]["end"]),
-            "narration_segment_ids": [segment for scene in group for segment in scene["narration_segment_ids"]],
-            "subject": subject, "action": summaries or f"the {state.lower()} narrative state holds",
-            "character_ids": characters, "location_id": locations[0] if locations else None, "prop_ids": props,
+            **chapter,
+            "shot_id": f"sh_{chapter_index:04d}", "scene_id": source_scene_ids[0],
+            "subject": chapter["dominant_subject"], "action": chapter["dominant_state"],
+            "location_id": location_id,
             "wardrobe_state_refs": [], "time_of_day": None,
             "camera_intent": "locked restrained observational frame",
-            "composition_intent": "clear hierarchy, continuity, and negative space for readable subtitles",
-            "visual_emotional_purpose": f"Represent the {state} scene state across this visual chapter",
-            "motion_value": 0, "story_state": state, "change_reason": change_reason,
-            "resolved_continuity": {"characters": characters, "location": locations[0] if locations else None, "props": props},
+            "visual_emotional_purpose": chapter["visual_anchor"],
+            "motion_value": 0, "story_state": state,
+            "resolved_continuity": {"characters": chapter["character_ids"], "location": location_id, "props": chapter["prop_ids"]},
             "previous_shot_context": shots[-1]["story_state"] if shots else "",
             "next_shot_handoff": "semantic state change",
         })
-    minimum, maximum = profile.preferred_images
-    budget_note = None if len(shots) >= minimum else f"source timeline exposes only {len(scenes)} distinct ordered narrative scenes"
     value = {
         "schema_version": SHOT_SCHEMA_VERSION, "project_id": project_id,
         "timeline_sha256": timeline_sha256, "continuity_sha256": continuity_sha256,
         "planning_policy": "AMBIENT_VISUAL_CHAPTERS", "ambient_style": style_id,
-        "asset_budget": {"preferred_min": minimum, "preferred_max": maximum, "planned_images": len(shots),
-                         "budget_exception_reason": budget_note},
+        "asset_budget": asset_budget,
         "shots": shots,
         "provenance": {"provider": "deterministic_local_policy", "planning_stage": "shot_plan",
                        "prompt_version": AMBIENT_SHOT_POLICY_VERSION,
@@ -311,6 +260,22 @@ def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[st
     if not isinstance(value, dict) or value.get("schema_version") != SHOT_SCHEMA_VERSION or not isinstance(value.get("shots"), list) or not value["shots"]: raise PlanningError("SHOT_PLAN_INVALID")
     scene_map = {s["scene_id"]: s for s in timeline["scenes"]}; kinds, ids = _entity_maps(continuity); previous = -1.0; seen = set()
     if value.get("planning_policy") == "AMBIENT_VISUAL_CHAPTERS":
+        try:
+            profile = ambient_style_profile(value.get("ambient_style"))
+        except ValueError as error:
+            raise PlanningError("AMBIENT_SHOT_POLICY_INVALID") from error
+        budget = value.get("asset_budget")
+        expected_budget = {
+            "preferred_min": profile.preferred_images[0], "preferred_max": profile.preferred_images[1],
+            "hard_max": profile.hard_max_images, "planned_images": len(value["shots"]),
+        }
+        if not isinstance(budget, dict) or any(budget.get(key) != expected for key, expected in expected_budget.items()):
+            raise PlanningError("AMBIENT_ASSET_BUDGET_INVALID")
+        exception = budget.get("budget_exception_reason")
+        if len(value["shots"]) > profile.hard_max_images:
+            raise PlanningError("AMBIENT_CHAPTER_HARD_MAX_EXCEEDED")
+        if len(value["shots"]) > profile.preferred_images[1] and exception != "SEMANTIC_STATE_INCOMPATIBILITY":
+            raise PlanningError("AMBIENT_ASSET_BUDGET_INVALID")
         covered: list[str] = []
         for index, shot in enumerate(value["shots"], 1):
             source_ids = shot.get("source_scene_ids")
@@ -320,6 +285,10 @@ def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[st
             start, end = float(shot["start"]), float(shot["end"])
             if abs(start - float(scene_map[source_ids[0]]["start"])) > .001 or abs(end - float(scene_map[source_ids[-1]]["end"])) > .001 or start < previous: raise PlanningError("SHOT_TIMING_INVALID")
             if not isinstance(shot.get("story_state"), str) or not shot["story_state"] or not isinstance(shot.get("change_reason"), str) or not shot["change_reason"]: raise PlanningError("SHOT_PLAN_INVALID")
+            try: validate_visual_brief(shot)
+            except AmbientPlanningPolicyError as error: raise PlanningError(error.failure_class, error.detail) from error
+            if len(source_ids) > 1 and shot.get("visual_anchor_kind") == "SUPPORTIVE" and not shot.get("long_anchor_justification"):
+                raise PlanningError("AMBIENT_SUPPORTIVE_ANCHOR_JUSTIFICATION_REQUIRED")
             if any(item not in ids or kinds[item] != "character" for item in shot.get("character_ids", [])): raise PlanningError("SHOT_CHARACTER_REFERENCE_INVALID")
             if any(item not in ids or kinds[item] != "prop" for item in shot.get("prop_ids", [])): raise PlanningError("SHOT_CONTINUITY_REFERENCE_INVALID")
             if shot.get("location_id") is not None and (shot["location_id"] not in ids or kinds[shot["location_id"]] != "location"): raise PlanningError("SHOT_CONTINUITY_REFERENCE_INVALID")
@@ -409,6 +378,16 @@ def _generation_media_plan_identity(media_plan: dict[str, Any]) -> dict[str, Any
             "shots":[_generation_media_identity(item,ambient=True) for item in media_plan.get("shots",[])]}
 
 
+def _compile_ambient_prompt(brief: dict[str, Any], visual_policy: dict[str, Any], style_directive: str) -> str:
+    try:
+        return compile_ambient_image_prompt(brief, visual_policy, style_directive=style_directive)
+    except AmbientVisualBriefBudgetError as error:
+        raise PlanningError(
+            error.failure_class,
+            f"field={error.field} observed={error.observed} limit={error.limit}",
+        ) from error
+
+
 def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], media_plan: dict[str, Any], continuity: dict[str, Any], settings: dict[str, Any], *, ambient_style: str | None = None) -> dict[str, Any]:
     requests, reference_ids = [], {}
     ambient = media_plan.get("render_mode") == "ambient_story"
@@ -427,43 +406,57 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
         if ambient: seed["ambient_style"] = ambient_style
         request_id = _request_id(seed); reference_ids[entity_id] = request_id
         entity = entity_by_id[entity_id]
-        details = []
-        if entity.get("facts"): details.append(f"Supported facts: {entity['facts']}")
-        if entity.get("constraints"): details.append(f"Must keep: {entity['constraints']}")
-        if entity.get("visual_design"): details.append(f"Visual design choices: {entity['visual_design']}")
-        intent = f"Canonical fictional {kinds[entity_id]} {entity['name']} reference"
-        if details: intent += ". " + ". ".join(details)
-        if ambient: intent += f". Ambient Story style: {style_directive}"
-        requests.append({"request_id":request_id,"purpose":"REFERENCE","reference_type":purpose,"entity_id":entity_id,"media_type":"IMAGE","provider":"google_flow","prompt":compile_image_prompt(intent, visual_policy),"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":[],"depends_on":[],"target_duration":None,"aspect_ratio":settings["aspect_ratio"],"priority":0,"fingerprint":_hash_text(repr(seed))})
+        if ambient:
+            brief = reference_visual_brief(entity, kinds[entity_id])
+            prompt = _compile_ambient_prompt(brief, visual_policy, style_directive)
+        else:
+            details = []
+            if entity.get("facts"): details.append(f"Supported facts: {entity['facts']}")
+            if entity.get("constraints"): details.append(f"Must keep: {entity['constraints']}")
+            if entity.get("visual_design"): details.append(f"Visual design choices: {entity['visual_design']}")
+            intent = f"Canonical fictional {kinds[entity_id]} {entity['name']} reference"
+            if details: intent += ". " + ". ".join(details)
+            prompt = compile_image_prompt(intent, visual_policy)
+            brief = None
+        requests.append({"request_id":request_id,"purpose":"REFERENCE","reference_type":purpose,"entity_id":entity_id,"media_type":"IMAGE","provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":[],"depends_on":[],"target_duration":None,"aspect_ratio":settings["aspect_ratio"],"priority":0,"fingerprint":_hash_text(repr(seed)),**({"visual_brief":brief,"semantic_target":"DIRECT","prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
     media_by_shot = {m["shot_id"]:m for m in media_plan["shots"]}
     for shot in shot_plan["shots"]:
         media = media_by_shot[shot["shot_id"]]
         if media["media_type"] == "HOLD": continue
-        refs = shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])
+        refs = list(dict.fromkeys(shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])))
         deps = [reference_ids[i] for i in refs]
-        intent = f"{shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['composition_intent']}"
         if ambient:
-            intent = (f"Scene state {shot.get('story_state', 'NARRATIVE_STATE')}. {intent}. "
-                      f"Show the character power/emotional relationship, environment, relevant object, continuity, and negative space. {style_directive}")
+            brief = {key: shot.get(key) for key in (
+                "visual_anchor", "visual_anchor_kind", "dominant_subject", "dominant_environment",
+                "dominant_state", "important_object_or_motif", "continuity_requirements",
+                "composition_intent", "optional_supporting_context",
+            )}
+            try: validate_visual_brief(brief)
+            except AmbientPlanningPolicyError as error: raise PlanningError(error.failure_class, error.detail) from error
+            intent = ""
+        else:
+            brief = None
+            intent = f"{shot['visual_emotional_purpose']}. {shot['subject']} {shot['action']}. {shot['composition_intent']}"
         part_count = math.ceil(float(media["target_duration"]) / settings["provider_video_clip_seconds"]) if media["media_type"] == "VIDEO" else 1
         part_start = float(shot["start"])
         for part_index in range(1, part_count + 1):
             remaining = float(shot["end"]) - part_start
             part_duration = min(settings["provider_video_clip_seconds"], remaining) if media["media_type"] == "VIDEO" else remaining
             part_end = float(shot["end"]) if part_index == part_count else part_start + part_duration
-            seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot,"media":_generation_media_identity(media,ambient=ambient),"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION}
+            shot_identity = brief if ambient else shot
+            seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot_identity,"media":_generation_media_identity(media,ambient=ambient),"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION}
             if ambient: seed["ambient_style"] = ambient_style
             request_id = _request_id(seed)
             if media["media_type"] == "IMAGE":
-                prompt = compile_image_prompt(intent, visual_policy)
+                prompt = _compile_ambient_prompt(brief, visual_policy, style_directive) if ambient else compile_image_prompt(intent, visual_policy)
             else:
                 prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
-            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed)),**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":"DIRECT_OR_SUPPORTIVE"} if ambient else {})})
+            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed)),**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
             part_start = part_end
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
-    return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION,"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED",**({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE"} if ambient else {})}
+    return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION,"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED",**({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE","image_prompt_budget":{"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})}
 
 def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str, Any],
                        motion_plan: dict[str, Any]) -> dict[str, Any]:
@@ -517,6 +510,11 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
 
 def validate_generation_requests(value: Any, media_plan: dict[str, Any], continuity: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != REQUEST_SCHEMA_VERSION or not isinstance(value.get("requests"), list): raise PlanningError("GENERATION_REQUESTS_INVALID")
+    ambient = media_plan.get("render_mode") == "ambient_story"
+    if ambient:
+        budget = value.get("image_prompt_budget")
+        if value.get("prompt_version") != AMBIENT_GENERATION_PROMPT_VERSION or value.get("temporal_video_qc") != "NOT_APPLICABLE": raise PlanningError("AMBIENT_GENERATION_POLICY_INVALID")
+        if not isinstance(budget, dict) or budget.get("internal_target") != AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET or budget.get("provider_hard_limit") != FLOW_IMAGE_PROMPT_HARD_LIMIT: raise PlanningError("AMBIENT_PROMPT_BUDGET_INVALID")
     requests, ids = value["requests"], set(); graph = {}
     for request in requests:
         if not isinstance(request, dict) or not isinstance(request.get("request_id"), str) or request["request_id"] in ids or not isinstance(request.get("prompt"), str) or not request["prompt"].strip(): raise PlanningError("GENERATION_REQUESTS_INVALID")
@@ -525,6 +523,17 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
         try: validate_visual_policy(request.get("visual_policy"))
         except ValueError as error: raise PlanningError("VISUAL_POLICY_INVALID") from error
         if request.get("media_type") == "IMAGE" and request.get("output_count") != 1: raise PlanningError("IMAGE_OUTPUT_COUNT_INVALID")
+        if ambient:
+            if request.get("media_type") != "IMAGE": raise PlanningError("AMBIENT_IMAGE_ONLY_POLICY_INVALID")
+            if len(request["prompt"]) > FLOW_IMAGE_PROMPT_HARD_LIMIT: raise PlanningError("FLOW_IMAGE_PROMPT_TOO_LONG")
+            prompt_budget = request.get("prompt_budget")
+            if not isinstance(prompt_budget, dict) or prompt_budget.get("compiled_chars") != len(request["prompt"]) or prompt_budget.get("provider_hard_limit") != FLOW_IMAGE_PROMPT_HARD_LIMIT: raise PlanningError("AMBIENT_PROMPT_BUDGET_INVALID")
+            brief = request.get("visual_brief")
+            try: validate_visual_brief(brief)
+            except AmbientPlanningPolicyError as error: raise PlanningError(error.failure_class, error.detail) from error
+            target = request.get("semantic_target")
+            if target not in {"DIRECT", "SUPPORTIVE", "ATMOSPHERIC"}: raise PlanningError("AMBIENT_SEMANTIC_TARGET_INVALID")
+            if target == "ATMOSPHERIC" and not request.get("atmospheric_justification"): raise PlanningError("AMBIENT_ATMOSPHERIC_JUSTIFICATION_REQUIRED")
     if any(dep not in ids or dep == node for node, deps in graph.items() for dep in deps): raise PlanningError("REQUEST_DEPENDENCY_INVALID")
     def visit(node, trail):
         if node in trail: raise PlanningError("REQUEST_DEPENDENCY_CYCLE")
@@ -537,6 +546,25 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
         if not parts or [r.get("part_index") for r in parts] != list(range(1, len(parts)+1)) or any(r.get("part_count") != len(parts) for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
         if any(r.get("media_type") != media_type or float(r.get("target_duration",0)) <= 0 for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
         if abs(sum(float(r["target_duration"]) for r in parts) - next(float(m["target_duration"]) for m in media_plan["shots"] if m["shot_id"] == shot_id)) > .001: raise PlanningError("GENERATION_PARTITION_INVALID")
+
+
+def _record_visual_planning_failure(paths, error: PlanningError) -> None:
+    review_path = paths.artifact_path("output/review_state.json")
+    try: prior = read_json(review_path)
+    except Exception: prior = {}
+    prior_approval = prior.get("plan_approval", {}) if isinstance(prior, dict) else {}
+    atomic_write_json(review_path, {
+        "schema_version": REVIEW_SCHEMA_VERSION, "project_id": paths.project_id,
+        "plan_approval": {"status":"INVALIDATED", "bound_hashes":prior_approval.get("bound_hashes", {})},
+        "visual_planning": {
+            "status":"NEEDS_REGENERATION", "failure_class":error.failure_class,
+            "user_message":"Visual planning needs to be regenerated",
+            "technical_detail":str(error), "policy_version":AMBIENT_SHOT_POLICY_VERSION,
+        },
+        "references":prior.get("references", {}), "assets":prior.get("assets", {}),
+        "batch_confirmations":prior.get("batch_confirmations", []),
+    })
+
 
 def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> tuple[str, str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id); model, llm_settings = _settings(config); media_settings = _media_settings(config)
@@ -557,8 +585,14 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             try: shot_plan = read_json(shot_path); validate_shot_plan(shot_plan, timeline, continuity); shot_action="SKIP"
             except Exception: decision = type(decision)("RUN", "artifact invalid")
         if decision.action == "RUN" and ambient:
-            shot_plan = compile_ambient_shot_plan(project_id, timeline, continuity, ambient_style,
-                timeline_sha256=timeline_sha, continuity_sha256=continuity_sha)
+            try:
+                shot_plan = compile_ambient_shot_plan(project_id, timeline, continuity, ambient_style,
+                    timeline_sha256=timeline_sha, continuity_sha256=continuity_sha)
+            except PlanningError as error:
+                for name in ("shot_plan.json", "media_plan.json", "generation_requests.json"):
+                    paths.artifact_path(f"output/{name}").unlink(missing_ok=True)
+                _record_visual_planning_failure(paths, error)
+                raise
             atomic_write_json(shot_path, shot_plan)
             checkpoints.record("shot_plan",fingerprint=shot_fp,status="SUCCESS",outputs=["output/shot_plan.json"],producer_version=shot_producer)
             shot_action = "RUN"
@@ -610,14 +644,21 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             try: requests=read_json(request_path); validate_generation_requests(requests,media_plan,continuity); request_action="SKIP"
             except Exception: decision=type(decision)("RUN","artifact invalid")
         if decision.action == "RUN":
-            requests=compile_generation_requests(project_id,shot_plan,media_plan,continuity,media_settings,ambient_style=ambient_style); validate_generation_requests(requests,media_plan,continuity); atomic_write_json(request_path,requests); checkpoints.record("generation_requests",fingerprint=request_fp,status="SUCCESS",outputs=["output/generation_requests.json"],producer_version=request_producer); request_action="RUN"
+            try:
+                requests=compile_generation_requests(project_id,shot_plan,media_plan,continuity,media_settings,ambient_style=ambient_style); validate_generation_requests(requests,media_plan,continuity)
+            except PlanningError as error:
+                request_path.unlink(missing_ok=True)
+                checkpoints.record("generation_requests",fingerprint=request_fp,status="FAILED",outputs=[],producer_version=request_producer)
+                _record_visual_planning_failure(paths, error)
+                raise
+            atomic_write_json(request_path,requests); checkpoints.record("generation_requests",fingerprint=request_fp,status="SUCCESS",outputs=["output/generation_requests.json"],producer_version=request_producer); request_action="RUN"
         review_path = paths.artifact_path("output/review_state.json")
         bound_hashes = {"timeline":timeline_sha,"continuity":continuity_sha,"shot_plan":shot_sha,"media_plan":media_sha}
         try: prior_review = read_json(review_path)
         except Exception: prior_review = {}
         prior_approval = prior_review.get("plan_approval", {}) if isinstance(prior_review, dict) else {}
         status = "APPROVED" if prior_approval.get("status") == "APPROVED" and prior_approval.get("bound_hashes") == bound_hashes else "VALIDATED"
-        atomic_write_json(review_path, {"schema_version":REVIEW_SCHEMA_VERSION,"project_id":project_id,"plan_approval":{"status":status,"bound_hashes":bound_hashes},"references":prior_review.get("references", {}),"assets":prior_review.get("assets", {}),"batch_confirmations":prior_review.get("batch_confirmations", [])})
+        atomic_write_json(review_path, {"schema_version":REVIEW_SCHEMA_VERSION,"project_id":project_id,"plan_approval":{"status":status,"bound_hashes":bound_hashes},"visual_planning":{"status":"READY","failure_class":None,"user_message":"Visual plan is ready","policy_version":shot_producer},"references":prior_review.get("references", {}),"assets":prior_review.get("assets", {}),"batch_confirmations":prior_review.get("batch_confirmations", [])})
     return shot_action, media_action, request_action
 
 def approve_shot_plan(runtime_root: Path | str, project_id: str) -> None:

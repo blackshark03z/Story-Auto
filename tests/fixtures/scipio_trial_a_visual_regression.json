@@ -1,0 +1,58 @@
+{
+  "evidence": {
+    "project_id": "prj_4f895eb1436c42c4ba5b908381b14fd1",
+    "content_sha256": "92bb76c744706367d560c37eec1e3303430034c0444496d76a33a87489b3e3f9",
+    "audio_sha256": "840385b68fc52b6a8c48e4a392be862daa03ae5653efb99da19fce49d3f413a8",
+    "alignment_sha256": "af4618dd8fd67fc8fc6e9f1927f6182b8da70b7e061f14443a9eab86ad78f814",
+    "duration_seconds": 467.975,
+    "alignment_segments": 123,
+    "previous_chapters": [
+      [0.0, 19.65],
+      [19.65, 57.25],
+      [57.25, 227.9],
+      [227.9, 414.1],
+      [414.1, 467.975]
+    ]
+  },
+  "timeline": {
+    "schema_version": "story-auto-story-timeline/1.0.0",
+    "project_id": "prj_4f895eb1436c42c4ba5b908381b14fd1",
+    "alignment_sha256": "af4618dd8fd67fc8fc6e9f1927f6182b8da70b7e061f14443a9eab86ad78f814",
+    "review_status": "VALIDATED",
+    "scenes": [
+      {"scene_id":"scn_0001","start":0.0,"end":19.65,"narration_segment_ids":["seg_0001"],"story_role":"exposition","summary":"Rome put Scipio on trial after he saved the Republic, fearing how dangerous he might become.","entity_ids":[]},
+      {"scene_id":"scn_0002","start":19.65,"end":57.25,"narration_segment_ids":["seg_0002"],"story_role":"backstory","summary":"Scipio stepped up to command in Spain despite his youth, establishing a pattern of unconventional success.","entity_ids":[]},
+      {"scene_id":"scn_0003","start":57.25,"end":95.15,"narration_segment_ids":["seg_0003"],"story_role":"rising action","summary":"Scipio secured Spain and proposed a bold, controversial plan to invade North Africa.","entity_ids":[]},
+      {"scene_id":"scn_0004","start":95.15,"end":130.0125,"narration_segment_ids":["seg_0004"],"story_role":"climax","summary":"Scipio defeated Hannibal at Zama, earning the name Africanus, but his immense success raised political concern.","entity_ids":[]},
+      {"scene_id":"scn_0005","start":130.0125,"end":179.725,"narration_segment_ids":["seg_0005"],"story_role":"thematic context","summary":"The Roman Republic feared individual dominance, making Scipio's reputation, divine favor, and charisma politically alarming.","entity_ids":[]},
+      {"scene_id":"scn_0006","start":179.725,"end":227.9,"narration_segment_ids":["seg_0006"],"story_role":"rising action","summary":"Scipio and his brother faced vague political charges and financial investigations after the war against Antiochus.","entity_ids":[]},
+      {"scene_id":"scn_0007","start":227.9,"end":278.9875,"narration_segment_ids":["seg_0007"],"story_role":"confrontation","summary":"Scipio dramatically dismissed the charges, tearing financial records and converting trials into public celebrations.","entity_ids":[]},
+      {"scene_id":"scn_0008","start":278.9875,"end":322.7,"narration_segment_ids":["seg_0008"],"story_role":"falling action","summary":"Scipio withdrew from Rome to Liternum in self-imposed exile and died embittered around 183 BCE.","entity_ids":[]},
+      {"scene_id":"scn_0009","start":322.7,"end":361.975,"narration_segment_ids":["seg_0009"],"story_role":"thematic analysis","summary":"Rome's distrust was a mechanism to protect the Republic, and Scipio accepted retirement instead of taking power.","entity_ids":[]},
+      {"scene_id":"scn_0010","start":361.975,"end":390.35,"narration_segment_ids":["seg_0010"],"story_role":"historical reflection","summary":"Later generals would march on Rome, but Scipio demonstrated early the tension between extraordinary service and republican norms.","entity_ids":[]},
+      {"scene_id":"scn_0011","start":390.35,"end":414.1,"narration_segment_ids":["seg_0011"],"story_role":"thematic synthesis","summary":"Scipio's independence and charisma saved Rome, but those same qualities made him impossible for the state to contain.","entity_ids":[]},
+      {"scene_id":"scn_0012","start":414.1,"end":467.975,"narration_segment_ids":["seg_0012"],"story_role":"conclusion","summary":"Scipio's bitter withdrawal preserved the Republic, but future generals would respond to political resistance with armies.","entity_ids":[]}
+    ]
+  },
+  "continuity": {
+    "schema_version": "story-auto-continuity-bible/1.0.0",
+    "project_id": "prj_4f895eb1436c42c4ba5b908381b14fd1",
+    "style": {},
+    "review_status": "VALIDATED",
+    "characters": [
+      {"entity_id":"char_scipio_africanus","name":"Scipio Africanus","facts":{},"visual_design":{},"constraints":["Appears young during initial command in Spain","Appears as a victorious general in Roman toga or commander armor","Carries himself with military authority, charisma, and Greek cultural influence"]},
+      {"entity_id":"char_hannibal_barca","name":"Hannibal Barca","facts":{},"visual_design":{},"constraints":["Carthaginian military commander","Formidable general in armor"]},
+      {"entity_id":"char_masinissa","name":"Masinissa","facts":{},"visual_design":{},"constraints":["Numidian prince and commander"]},
+      {"entity_id":"char_lucius_scipio","name":"Lucius Cornelius Scipio","facts":{},"visual_design":{},"constraints":["Brother of Scipio Africanus","Roman magistrate and commander"]}
+    ],
+    "locations": [
+      {"entity_id":"loc_rome_senate","name":"Roman Senate House and Forum","facts":{},"visual_design":{},"constraints":["Classical Republican Roman architecture","Marble columns and tiered benches"]},
+      {"entity_id":"loc_zama_battlefield","name":"Battlefield of Zama","facts":{},"visual_design":{},"constraints":["Open arid plain in North Africa"]},
+      {"entity_id":"loc_liternum_estate","name":"Liternum Estate","facts":{},"visual_design":{},"constraints":["Coastal villa in Campania","Secluded countryside retreat"]}
+    ],
+    "props": [
+      {"entity_id":"prop_account_book","name":"Financial Account Ledger","facts":{},"visual_design":{},"constraints":["Parchment or papyrus ledger","Torn apart in front of the Senate"]},
+      {"entity_id":"prop_triumph_wreath","name":"Triumphal Laurel Wreath","facts":{},"visual_design":{},"constraints":["Symbol of Roman triumphal victory"]}
+    ]
+  }
+}

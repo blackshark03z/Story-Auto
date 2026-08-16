@@ -1,8 +1,12 @@
 """Structured visual intent and production media quality controls."""
 
 from .policy import (
+    AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,
+    FLOW_IMAGE_PROMPT_HARD_LIMIT,
     DEFAULT_VISUAL_POLICY,
     VISUAL_POLICY_VERSION,
+    AmbientVisualBriefBudgetError,
+    compile_ambient_image_prompt,
     compile_image_prompt,
     compile_video_prompt,
     validate_visual_policy,
@@ -29,6 +33,10 @@ from .ambient import (
 __all__ = [
     "DEFAULT_VISUAL_POLICY",
     "VISUAL_POLICY_VERSION",
+    "FLOW_IMAGE_PROMPT_HARD_LIMIT",
+    "AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET",
+    "AmbientVisualBriefBudgetError",
+    "compile_ambient_image_prompt",
     "compile_image_prompt",
     "compile_video_prompt",
     "validate_visual_policy",
