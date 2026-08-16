@@ -35,8 +35,20 @@ Never reuse YouTube Auto project/runtime/browser roots.
 Select `kokoro_local` explicitly in the project TTS settings and configure its
 installed runtime path, voice, language, speed, device, and chunk size. The
 adapter uses the installation's direct Python environment in offline model-cache
-mode. Readiness is `LOCAL_RUNTIME_AVAILABLE`; no ElevenLabs/Typecast balance or
-credential is consulted. Existing projects retain their configured provider.
+mode. For durable recovery, configure `model_cache` as the canonical
+`models--hexgrad--Kokoro-82M` cache directory and pin `model_snapshot` to the
+required 40-character revision. New-project defaults preserve these two fields;
+`STORY_AUTO_KOKORO_MODEL_CACHE` and `STORY_AUTO_KOKORO_MODEL_SNAPSHOT` provide
+the same defaults when no project has established them.
+
+Kokoro is `Ready` only after a local, load-only probe initializes the configured
+model and selected voice through Kokoro's own Python interpreter. The probe does
+not synthesize narration or use a network and caches a successful result against
+the runtime/model/voice file identities. Missing runtime, model, voice, invalid
+configuration, and runtime-load failures are reported separately. Production
+uses this same readiness authority before TTS checkpoint mutation, Gemini
+planning, or Flow work; no ElevenLabs/Typecast balance or credential is
+consulted. Existing projects retain their configured provider.
 
 ## Local operator UI
 

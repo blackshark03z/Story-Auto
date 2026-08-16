@@ -26,6 +26,8 @@ class OperatorUiTests(unittest.TestCase):
                 _,script,_=call("/static/app.js"); self.assertNotIn(b"prompt(",script); self.assertIn(b"showModal()",script)
                 self.assertIn(b"requestPause",script); self.assertIn(b"focusWizardStep",script); self.assertIn(b"aria-invalid",script)
                 self.assertIn(b"data-error-action",script); self.assertIn(b'id="busyReason"',script)
+                self.assertIn(b"KOKORO_MODEL_NOT_FOUND",script); self.assertIn(b"Kokoro model files are missing",script)
+                self.assertIn(b"KOKORO_RUNTIME_LOAD_FAILED",script); self.assertIn(b"Kokoro readiness",script)
                 self.assertIn(b"const projectId = state.project",script)
                 self.assertIn(b"state.view === 'project' && state.project === projectId",script)
                 self.assertIn(b"Create again",script)

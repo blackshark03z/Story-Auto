@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -127,6 +128,18 @@ class OperatorApplicationTests(unittest.TestCase):
             self.assertNotIn("token",str(defaults).lower())
             self.assertNotIn("overrides",str(defaults).lower())
             self.assertNotIn("bgm_path",str(defaults).lower())
+
+    def test_paid_provider_settings_readiness_is_unchanged(self):
+        for provider in ("elevenlabs","typecast"):
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as root:
+                app=OperatorService(root)
+                app.create_project(project_id=f"prj_{provider}",content="# Provider\n\n## Narration\n\nA safe provider check.\n",
+                                   settings={"tts":{"provider":provider,"allow_cross_provider_fallback":False,
+                                                    provider:{"voice_id":"voice_fixture"}}})
+                with patch("story_auto.application.operator.KokoroLocalProvider.readiness",
+                           side_effect=AssertionError("Kokoro probe must not run")):
+                    voice=app.settings_overview()["providers"][0]
+                self.assertEqual(voice["status"],"Ready")
 
     def test_scene_progress_and_review_keep_request_purposes_distinct(self):
         with tempfile.TemporaryDirectory() as root:

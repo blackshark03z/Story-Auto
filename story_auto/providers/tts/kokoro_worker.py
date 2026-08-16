@@ -180,15 +180,19 @@ def run(request_path: Path, result_path: Path) -> None:
     cache = Path(request["cache_dir"])
     cache.mkdir(parents=True, exist_ok=True)
     try:
-        from kokoro import KPipeline
-        pipeline = KPipeline(lang_code=request["language"], repo_id=request["model_repo"], device=request["device"])
+        from kokoro import KModel, KPipeline
+        model = KModel(repo_id=request["model_repo"], config=request["config_path"],
+                       model=request["model_path"]).to(request["device"]).eval()
+        pipeline = KPipeline(lang_code=request["language"], repo_id=request["model_repo"],
+                             model=model, device=request["device"])
+        voice_path = request["voice_path"]
         try:
-            pipeline.load_voice(request["voice"])
+            pipeline.load_voice(voice_path)
         except Exception as error:
             raise WorkerFailure("KOKORO_VOICE_NOT_FOUND") from error
         chunks, reused = [], 0
         for chunk in request["chunks"]:
-            value, was_reused = _synthesize(pipeline, chunk, voice=request["voice"],
+            value, was_reused = _synthesize(pipeline, chunk, voice=voice_path,
                                              speed=float(request["speed"]), cache=cache)
             chunks.append(value)
             reused += int(was_reused)

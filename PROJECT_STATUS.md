@@ -31,6 +31,14 @@ The current accepted post-release development state includes:
   post-release candidate. It adds the Ambient Story capability and offline
   engineering demos without advancing the accepted remote baseline; real Quiet
   Verdict and Hidden Mastery production trials remain the next product gate.
+- **Goal 14** (`STORY-AUTO-GOAL-14-KOKORO-READINESS-AND-MODEL-RECOVERY`) is the
+  narrow corrective candidate discovered by the first Quiet Verdict trial.
+  Kokoro readiness now uses one offline load authority for Settings and
+  production, requires the configured model snapshot and selected voice, and
+  fails before Gemini or Flow when local TTS is unavailable. The trial project
+  remains preserved for a separate UI resume after corrective validation. The
+  observed imported-package title metadata carryover issue is explicitly
+  deferred to later UX corrective work.
 
 After Goal 13 offline closeout, normal operating mode is: run the two authorized
 Ambient production trials through the normal UI and open narrow corrective work
@@ -42,6 +50,8 @@ only for observed defects.
 - Formats: `hybrid_hook`, `full_video_ai`, and local-candidate `ambient_story`.
 - Ambient styles: `quiet_verdict`, `hidden_mastery`.
 - TTS: ElevenLabs + Typecast + explicitly selected Kokoro Local.
+- Kokoro Local `Ready` requires its configured runtime, exact local model
+  snapshot, selected voice, and load-only initialization probe to pass.
 - Planning LLM: Gemini 3.5 Flash baseline; 3.6 Flash benchmark candidate.
 - Visual provider: Google Flow for images/video.
 - Canonical alignment timing.

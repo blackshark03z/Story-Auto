@@ -10,6 +10,7 @@ import wave
 from pathlib import Path
 from unittest.mock import patch
 
+from story_auto.application import OperatorService
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.audio import AudioPipelineError, TTSRequest
 from story_auto.core.content import narration_hash
@@ -17,7 +18,8 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.pipeline import run_audio_stages
 from story_auto.providers.tts import provider_for
 from story_auto.providers.tts.kokoro_local import (KokoroLocalProvider, available_voices,
-                                                    discover_runtime, plan_kokoro_chunks)
+                                                    discover_runtime, plan_kokoro_chunks,
+                                                    probe_kokoro_readiness)
 from story_auto.providers.tts.kokoro_worker import _map_tokens
 
 
@@ -73,6 +75,19 @@ class FakeKokoroWorker:
         return subprocess.CompletedProcess(command,0,"","")
 
 
+class FakeKokoroProbe:
+    def __init__(self, *, ready: bool = True) -> None:
+        self.ready = ready
+        self.calls = 0
+
+    def __call__(self, command, **kwargs):
+        self.calls += 1
+        result_path = Path(command[command.index("--result") + 1])
+        atomic_write_json(result_path, {"schema_version":"story-auto-kokoro-probe-result/1.0.0",
+                                        "status":"READY" if self.ready else "RUNTIME_LOAD_FAILED"})
+        return subprocess.CompletedProcess(command,0 if self.ready else 1,"","")
+
+
 class KokoroLocalTests(unittest.TestCase):
     def _runtime(self, directory: str, *, voice: str = "am_michael") -> dict:
         root=Path(directory)/"kokoro"; python=root/".venv"/"Scripts"/"python.exe"
@@ -82,6 +97,7 @@ class KokoroLocalTests(unittest.TestCase):
         cache=Path(directory)/"hf"/"models--hexgrad--Kokoro-82M"; (cache/"refs").mkdir(parents=True)
         (cache/"refs"/"main").write_text(SNAPSHOT,encoding="utf-8")
         snapshot=cache/"snapshots"/SNAPSHOT; (snapshot/"voices").mkdir(parents=True)
+        (snapshot/"config.json").write_text('{"vocab":{}}',encoding="utf-8")
         (snapshot/"kokoro-v1_0.pth").write_bytes(b"model")
         (snapshot/"voices"/f"{voice}.pt").write_bytes(b"voice")
         return {"runtime_path":str(root),"model_cache":str(cache),"voice_id":voice,
@@ -105,13 +121,55 @@ class KokoroLocalTests(unittest.TestCase):
                 KokoroLocalProvider().fingerprint_settings(settings)
             self.assertEqual(voice.exception.failure_class,"KOKORO_VOICE_NOT_FOUND")
 
+    def test_readiness_distinguishes_model_voice_load_and_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings=self._runtime(directory)
+            ready=probe_kokoro_readiness(settings,runner=FakeKokoroProbe())
+            self.assertEqual((ready.ready,ready.state,ready.technical_code),(True,"READY",None))
+            load_failed=probe_kokoro_readiness(settings,runner=FakeKokoroProbe(ready=False))
+            self.assertEqual(load_failed.state,"RUNTIME_LOAD_FAILED")
+            (Path(settings["model_cache"])/"snapshots"/SNAPSHOT/"voices"/"am_michael.pt").unlink()
+            self.assertEqual(probe_kokoro_readiness(settings).state,"VOICE_NOT_FOUND")
+            (Path(settings["model_cache"])/"snapshots"/SNAPSHOT/"kokoro-v1_0.pth").unlink()
+            self.assertEqual(probe_kokoro_readiness(settings).state,"MODEL_NOT_FOUND")
+            self.assertEqual(probe_kokoro_readiness({"runtime_path":""}).state,"CONFIGURATION_INVALID")
+
+    def test_settings_and_production_share_missing_model_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings=self._runtime(directory)
+            (Path(settings["model_cache"])/"snapshots"/SNAPSHOT/"kokoro-v1_0.pth").unlink()
+            runtime=RuntimeLayout.from_root(Path(directory)/"runtime")
+            config=ProjectConfig("prj_kokoro_missing",settings={
+                "tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":settings},
+                "llm":{"provider":"gemini","model":"gemini-3.5-flash"},
+                "flow":{"project_identity":"must-not-run"},
+            })
+            paths=create_project(runtime,config,"## Narration\n\nA short local check.\n")
+            app=OperatorService(runtime.root)
+            voice_row=app.settings_overview()["providers"][0]
+            self.assertEqual((voice_row["status"],voice_row["detail"],voice_row["technical_code"]),
+                             ("Needs attention","Kokoro model files are missing","KOKORO_MODEL_NOT_FOUND"))
+            runner_calls=[]
+            def never_run(*args,**kwargs):
+                runner_calls.append(args)
+                raise AssertionError("synthesis or downstream provider invoked")
+            content_hash=sha256_file(paths.content_file)
+            adapter=KokoroLocalProvider(runner=never_run,readiness_runner=never_run)
+            with self.assertRaises(AudioPipelineError) as captured:
+                app.start_or_resume(config.project_id,planning_provider=never_run,audio_adapter=adapter)
+            self.assertEqual(captured.exception.failure_class,"KOKORO_MODEL_NOT_FOUND")
+            self.assertEqual(runner_calls,[])
+            self.assertEqual(sha256_file(paths.content_file),content_hash)
+            self.assertFalse(paths.artifact_path("output/voice.wav").exists())
+            self.assertFalse(paths.artifact_path("output/story_timeline.json").exists())
+
     def test_successful_fake_synthesis_alignment_and_canonical_publication(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings=self._runtime(directory); runtime=RuntimeLayout.from_root(Path(directory)/"runtime")
             config=ProjectConfig("prj_kokoro",settings={"tts":{"provider":"kokoro_local",
                 "allow_cross_provider_fallback":False,"kokoro_local":settings}})
             paths=create_project(runtime,config,"## Narration\n\nFirst sentence. Second sentence.\n")
-            adapter=KokoroLocalProvider(runner=FakeKokoroWorker())
+            adapter=KokoroLocalProvider(runner=FakeKokoroWorker(),readiness_runner=FakeKokoroProbe())
             with patch("story_auto.providers.credentials.provider_keys",side_effect=AssertionError("paid credential access")):
                 self.assertEqual(run_audio_stages(runtime.root,config.project_id,adapter=adapter),("RUN","RUN"))
             manifest=read_json(paths.artifact_path("output/audio_manifest.json"))
@@ -126,13 +184,13 @@ class KokoroLocalTests(unittest.TestCase):
             settings=self._runtime(directory); request=TTSRequest("Hello.",narration_hash("Hello."),
                 "kokoro_local","am_michael",settings)
             with self.assertRaises(AudioPipelineError) as captured:
-                KokoroLocalProvider(runner=FakeKokoroWorker(invalid_audio=True)).generate(request,Path(directory)/"voice.wav")
+                KokoroLocalProvider(runner=FakeKokoroWorker(invalid_audio=True),readiness_runner=FakeKokoroProbe()).generate(request,Path(directory)/"voice.wav")
             self.assertEqual(captured.exception.failure_class,"KOKORO_AUDIO_INVALID")
 
     def test_chunk_resume_and_fingerprint_are_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings=self._runtime(directory); runner=FakeKokoroWorker(fail_after_first=True)
-            provider=KokoroLocalProvider(runner=runner); narration="First sentence. Second sentence. Third sentence."
+            provider=KokoroLocalProvider(runner=runner,readiness_runner=FakeKokoroProbe()); narration="First sentence. Second sentence. Third sentence."
             request=TTSRequest(narration,narration_hash(narration),"kokoro_local","am_michael",settings)
             first=provider.fingerprint_settings(settings); second=provider.fingerprint_settings(dict(settings))
             self.assertEqual(first,second)

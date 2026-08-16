@@ -119,6 +119,12 @@ atomically publishes a validated `final.mp4` plus `final_manifest.json`.
 installed direct-Python Kokoro runtime through the common TTS contract, requires
 no cloud credential, publishes 24 kHz mono WAV plus model-derived token timing,
 and never silently replaces an existing ElevenLabs or Typecast selection.
+`Ready` means the configured runtime can load the exact local model snapshot and
+selected voice. Projects may pin the canonical Hugging Face cache directory and
+40-character snapshot revision with `model_cache` and `model_snapshot`; the
+load-only readiness probe stays offline and is cached after success. Missing
+runtime, model, voice, invalid configuration, and runtime-load failures remain
+distinct, actionable preflight states before synthesis or downstream work.
 Unchanged `resume`/`render` skips completed work; a missing scene rebuilds that
 scene and the downstream final render without submitting to a provider.
 

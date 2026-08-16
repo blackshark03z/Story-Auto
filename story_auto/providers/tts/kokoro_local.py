@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
 import wave
 from typing import Any, Callable
 
@@ -31,9 +32,50 @@ class KokoroRuntime:
     version: str
     model_cache: Path
     model_snapshot: str
+    config_path: Path
     model_path: Path
     voices_dir: Path
     device: str
+
+
+@dataclass(frozen=True)
+class KokoroReadiness:
+    state: str
+    user_message: str
+    technical_code: str | None
+    runtime: KokoroRuntime | None = None
+    voice_path: Path | None = None
+
+    @property
+    def ready(self) -> bool:
+        return self.state == "READY"
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "state": self.state,
+            "user_message": self.user_message,
+            "technical_code": self.technical_code,
+        }
+
+
+_READINESS_MESSAGES = {
+    "READY": "Kokoro is ready",
+    "RUNTIME_NOT_FOUND": "Kokoro runtime is not installed",
+    "MODEL_NOT_FOUND": "Kokoro model files are missing",
+    "VOICE_NOT_FOUND": "The selected Kokoro voice is missing",
+    "RUNTIME_LOAD_FAILED": "Kokoro could not load its local model",
+    "CONFIGURATION_INVALID": "Kokoro settings are invalid",
+}
+_READINESS_CODES = {
+    "RUNTIME_NOT_FOUND": "KOKORO_RUNTIME_NOT_FOUND",
+    "MODEL_NOT_FOUND": "KOKORO_MODEL_NOT_FOUND",
+    "VOICE_NOT_FOUND": "KOKORO_VOICE_NOT_FOUND",
+    "RUNTIME_LOAD_FAILED": "KOKORO_RUNTIME_LOAD_FAILED",
+    "CONFIGURATION_INVALID": "KOKORO_CONFIGURATION_INVALID",
+}
+_READINESS_CACHE: dict[tuple[Any, ...], KokoroReadiness] = {}
+_READINESS_LOCK = threading.Lock()
 
 
 def plan_kokoro_chunks(narration: str, max_characters: int = 1_200) -> tuple[str, ...]:
@@ -73,34 +115,139 @@ def _version(root: Path) -> str:
 
 
 def _default_model_cache() -> Path:
-    home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    return home / "hub" / "models--hexgrad--Kokoro-82M"
+    configured_hub = os.environ.get("HF_HUB_CACHE") or os.environ.get("HUGGINGFACE_HUB_CACHE")
+    hub = Path(configured_hub) if configured_hub else Path(
+        os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")
+    ) / "hub"
+    return hub / "models--hexgrad--Kokoro-82M"
 
 
 def discover_runtime(settings: dict[str, Any]) -> KokoroRuntime:
     raw = settings.get("runtime_path")
     if not isinstance(raw, str) or not raw.strip():
-        raise AudioPipelineError("KOKORO_RUNTIME_NOT_FOUND", provider="kokoro_local", stage="preflight")
+        raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
     root = Path(raw).resolve()
     python = root / ".venv" / "Scripts" / "python.exe"
     if not root.is_dir() or not python.is_file() or not (root / "kokoro" / "pipeline.py").is_file():
         raise AudioPipelineError("KOKORO_RUNTIME_NOT_FOUND", provider="kokoro_local", stage="preflight")
-    model_cache = Path(settings.get("model_cache", _default_model_cache())).resolve()
+    raw_cache = settings.get("model_cache", _default_model_cache())
+    if not isinstance(raw_cache, (str, os.PathLike)) or not str(raw_cache).strip():
+        raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+    model_cache = Path(raw_cache).resolve()
     try:
         snapshot = str(settings.get("model_snapshot") or (model_cache / "refs" / "main").read_text(encoding="utf-8")).strip()
     except OSError as error:
         raise AudioPipelineError("KOKORO_MODEL_NOT_FOUND", provider="kokoro_local", stage="preflight") from error
     if not re.fullmatch(r"[0-9a-f]{40}", snapshot):
-        raise AudioPipelineError("KOKORO_MODEL_NOT_FOUND", provider="kokoro_local", stage="preflight")
+        raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
     snapshot_root = model_cache / "snapshots" / snapshot
-    model_path, voices_dir = snapshot_root / "kokoro-v1_0.pth", snapshot_root / "voices"
-    if not model_path.is_file() or model_path.stat().st_size <= 0:
+    config_path, model_path, voices_dir = snapshot_root / "config.json", snapshot_root / "kokoro-v1_0.pth", snapshot_root / "voices"
+    if (not config_path.is_file() or config_path.stat().st_size <= 0
+            or not model_path.is_file() or model_path.stat().st_size <= 0):
         raise AudioPipelineError("KOKORO_MODEL_NOT_FOUND", provider="kokoro_local", stage="preflight")
     requested_device = str(settings.get("device", "cpu")).lower()
     if requested_device not in {"cpu", "auto"}:
-        raise AudioPipelineError("KOKORO_START_FAILED", provider="kokoro_local", stage="preflight",
-                                 detail="installed runtime supports cpu mode")
-    return KokoroRuntime(root, python, _version(root), model_cache, snapshot, model_path, voices_dir, "cpu")
+        raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+    return KokoroRuntime(root, python, _version(root), model_cache, snapshot, config_path, model_path, voices_dir, "cpu")
+
+
+def _readiness(state: str, *, runtime: KokoroRuntime | None = None,
+               voice_path: Path | None = None) -> KokoroReadiness:
+    return KokoroReadiness(state, _READINESS_MESSAGES[state], _READINESS_CODES.get(state), runtime, voice_path)
+
+
+def _state_for_failure(failure_class: str) -> str:
+    return {
+        "KOKORO_RUNTIME_NOT_FOUND": "RUNTIME_NOT_FOUND",
+        "KOKORO_MODEL_NOT_FOUND": "MODEL_NOT_FOUND",
+        "KOKORO_VOICE_NOT_FOUND": "VOICE_NOT_FOUND",
+        "KOKORO_CONFIGURATION_INVALID": "CONFIGURATION_INVALID",
+    }.get(failure_class, "RUNTIME_LOAD_FAILED")
+
+
+def _selected_voice(runtime: KokoroRuntime, settings: dict[str, Any]) -> Path:
+    voice = settings.get("voice_id")
+    if not isinstance(voice, str) or not voice.strip() or Path(voice).name != voice:
+        raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+    path = runtime.voices_dir / f"{voice}.pt"
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise AudioPipelineError("KOKORO_VOICE_NOT_FOUND", provider="kokoro_local", stage="preflight")
+    return path
+
+
+def _probe_identity(runtime: KokoroRuntime, voice_path: Path, settings: dict[str, Any]) -> tuple[Any, ...]:
+    def identity(path: Path) -> tuple[str, int, int]:
+        stat = path.stat()
+        return str(path), stat.st_size, stat.st_mtime_ns
+    return (identity(runtime.python), runtime.version, identity(runtime.config_path), identity(runtime.model_path),
+            identity(voice_path), runtime.device, str(settings.get("language", "b")))
+
+
+def probe_kokoro_readiness(settings: dict[str, Any], *, runner: Callable[..., subprocess.CompletedProcess] | None = None,
+                           use_cache: bool = True) -> KokoroReadiness:
+    """Load the exact configured model and voice without generating narration."""
+    try:
+        runtime = discover_runtime(settings)
+        voice_path = _selected_voice(runtime, settings)
+        language = str(settings.get("language", "b")).lower()
+        if language not in {"a", "b", "e", "f", "h", "i", "p", "j", "z"}:
+            raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+        speed = float(settings.get("speed", 1.0))
+        if not 0.5 <= speed <= 2.0:
+            raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+        chunk_characters = int(settings.get("chunk_characters", 1_200))
+        if chunk_characters < 1:
+            raise AudioPipelineError("KOKORO_CONFIGURATION_INVALID", provider="kokoro_local", stage="preflight")
+        key = _probe_identity(runtime, voice_path, settings)
+    except (AudioPipelineError, TypeError, ValueError) as error:
+        if not isinstance(error, AudioPipelineError):
+            return _readiness("CONFIGURATION_INVALID")
+        return _readiness(_state_for_failure(error.failure_class))
+
+    active_runner = runner or subprocess.run
+    if runner is None and use_cache:
+        with _READINESS_LOCK:
+            cached = _READINESS_CACHE.get(key)
+        if cached is not None:
+            return cached
+    with tempfile.TemporaryDirectory(prefix="story_auto_kokoro_probe_") as directory:
+        temporary = Path(directory)
+        request_path, result_path = temporary / "request.json", temporary / "result.json"
+        atomic_write_json(request_path, {
+            "schema_version": "story-auto-kokoro-probe-request/1.0.0",
+            "model_repo": MODEL_REPO,
+            "config_path": str(runtime.config_path),
+            "model_path": str(runtime.model_path),
+            "voice_path": str(voice_path),
+            "language": language,
+            "device": runtime.device,
+        })
+        environment = dict(os.environ)
+        environment.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
+                            "HF_HUB_CACHE": str(runtime.model_cache.parent)})
+        command = [str(runtime.python), str(Path(__file__).with_name("kokoro_probe.py").resolve()),
+                   "--request", str(request_path), "--result", str(result_path)]
+        try:
+            completed = active_runner(command, cwd=runtime.root, env=environment, capture_output=True,
+                                      text=True, check=False, timeout=float(settings.get("readiness_timeout_seconds", 180)))
+            result = read_json(result_path) if result_path.is_file() else {}
+            ready = completed.returncode == 0 and result.get("status") == "READY"
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            ready = False
+    value = (_readiness("READY", runtime=runtime, voice_path=voice_path) if ready
+             else _readiness("RUNTIME_LOAD_FAILED", runtime=runtime, voice_path=voice_path))
+    if runner is None and use_cache and value.ready:
+        with _READINESS_LOCK:
+            _READINESS_CACHE[key] = value
+    return value
+
+
+def require_kokoro_ready(settings: dict[str, Any], *, runner: Callable[..., subprocess.CompletedProcess] | None = None) -> KokoroReadiness:
+    value = probe_kokoro_readiness(settings, runner=runner)
+    if not value.ready:
+        raise AudioPipelineError(value.technical_code or "KOKORO_RUNTIME_LOAD_FAILED",
+                                 provider="kokoro_local", stage="preflight")
+    return value
 
 
 def available_voices(settings: dict[str, Any]) -> tuple[str, ...]:
@@ -149,15 +296,18 @@ class KokoroLocalProvider:
     name = "kokoro_local"
     provenance = "Local Kokoro direct-Python runtime; no cloud API or credential boundary."
 
-    def __init__(self, runner: Callable[..., subprocess.CompletedProcess] | None = None) -> None:
+    def __init__(self, runner: Callable[..., subprocess.CompletedProcess] | None = None,
+                 readiness_runner: Callable[..., subprocess.CompletedProcess] | None = None) -> None:
         self.runner = runner or subprocess.run
+        self.readiness_runner = readiness_runner
+
+    def readiness(self, settings: dict[str, Any]) -> KokoroReadiness:
+        return probe_kokoro_readiness(settings, runner=self.readiness_runner)
 
     def fingerprint_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        runtime = discover_runtime(settings)
-        voice = str(settings.get("voice_id", ""))
-        voice_path = runtime.voices_dir / f"{voice}.pt"
-        if not voice_path.is_file():
-            raise AudioPipelineError("KOKORO_VOICE_NOT_FOUND", provider=self.name, stage="preflight")
+        readiness = require_kokoro_ready(settings, runner=self.readiness_runner)
+        runtime, voice_path = readiness.runtime, readiness.voice_path
+        assert runtime is not None and voice_path is not None
         return {"adapter_version": ADAPTER_VERSION, "runtime_version": runtime.version,
                 "model_snapshot": runtime.model_snapshot, "model_bytes": runtime.model_path.stat().st_size,
                 "voice_sha256": sha256_file(voice_path), "device": runtime.device}
@@ -189,6 +339,8 @@ class KokoroLocalProvider:
             atomic_write_json(request_path, {"schema_version":"story-auto-kokoro-worker-request/1.0.0",
                 "model_repo":MODEL_REPO, "model_snapshot":runtime.model_snapshot, "language":language,
                 "voice":request.voice_id, "speed":speed, "device":runtime.device,
+                "config_path":str(runtime.config_path), "model_path":str(runtime.model_path),
+                "voice_path":str(runtime.voices_dir / f"{request.voice_id}.pt"),
                 "cache_dir":str(cache_dir.resolve()), "chunks":chunk_values})
             environment = dict(os.environ)
             environment.update({"HF_HUB_OFFLINE":"1", "TRANSFORMERS_OFFLINE":"1",
@@ -206,6 +358,7 @@ class KokoroLocalProvider:
             if completed.returncode != 0 or result.get("status") != "SUCCESS":
                 failure = result.get("failure_class", "KOKORO_SYNTHESIS_FAILED")
                 allowed = {"KOKORO_MODEL_NOT_FOUND", "KOKORO_VOICE_NOT_FOUND", "KOKORO_START_FAILED",
+                           "KOKORO_RUNTIME_LOAD_FAILED", "KOKORO_CONFIGURATION_INVALID",
                            "KOKORO_SYNTHESIS_FAILED", "KOKORO_TIMEOUT", "KOKORO_AUDIO_INVALID", "KOKORO_ALIGNMENT_FAILED"}
                 raise AudioPipelineError(failure if failure in allowed else "KOKORO_SYNTHESIS_FAILED",
                                          provider=self.name, stage="tts")

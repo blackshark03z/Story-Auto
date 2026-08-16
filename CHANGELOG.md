@@ -19,6 +19,10 @@
 
 ## Unreleased
 
+- Correct Kokoro Local readiness so Settings and production share one offline,
+  load-only runtime/model/voice probe; support explicit durable cache and
+  snapshot resolution; and expose actionable missing-model, missing-voice,
+  invalid-configuration, and runtime-load states before downstream work.
 - Add the post-release `ambient_story` format with durable Quiet Verdict and
   Hidden Mastery profiles, semantic low-count visual chapters, Flow IMAGE-only
   generation policy, deterministic bounded still presentation, style-aware

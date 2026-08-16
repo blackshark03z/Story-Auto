@@ -25,6 +25,7 @@ from story_auto.providers.flow import (
 )
 from story_auto.providers.flow.service import queue_regeneration, review_production_asset
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
+from story_auto.providers.tts.kokoro_local import KokoroLocalProvider
 
 
 class OperatorServiceError(RuntimeError):
@@ -123,6 +124,12 @@ def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any
             "language":str(kokoro.get("language","b")),
         }},
     }
+    model_cache=kokoro.get("model_cache") or os.environ.get("STORY_AUTO_KOKORO_MODEL_CACHE")
+    model_snapshot=kokoro.get("model_snapshot") or os.environ.get("STORY_AUTO_KOKORO_MODEL_SNAPSHOT")
+    if isinstance(model_cache,str) and model_cache.strip():
+        result["tts"]["kokoro_local"]["model_cache"]=model_cache
+    if isinstance(model_snapshot,str) and model_snapshot.strip():
+        result["tts"]["kokoro_local"]["model_snapshot"]=model_snapshot
     if isinstance(llm.get("max_attempts"),int): result["llm"]["max_attempts"]=llm["max_attempts"]
     safe_flow={key:str(flow[key]) for key in ("cdp_url","project_url","project_identity") if isinstance(flow.get(key),str)}
     if safe_flow: result["flow"]=safe_flow
@@ -360,16 +367,27 @@ class OperatorService:
         voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
         voices={"bm_george":"George","am_michael":"Michael","af_heart":"Heart"}
         creation_defaults=_creation_settings(latest_settings,voice_id)
+        kokoro_readiness=None
+        if provider=="kokoro_local":
+            kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
+            voice_row={"name":"Voice",
+                       "detail":f"{voices.get(voice_id,voice_id)} — local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
+                       "status":"Ready" if kokoro_readiness.ready else "Needs attention",
+                       "technical_code":kokoro_readiness.technical_code}
+        else:
+            voice_row={"name":"Voice","detail":f"{voices.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
+                       "status":"Ready" if provider else "Not configured"}
         return {
             "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
             "creation_defaults":creation_defaults,
             "providers":[
-                {"name":"Voice","detail":f"{voices.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos","status":"Ready" if provider else "Not configured"},
+                voice_row,
                 {"name":"Visual generation","detail":"Google Flow","status":"Sign-in required" if flow_auth else ("Ready" if flow else "Not configured")},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
-            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow.get("project_identity","Not configured"),"tts_provider":provider or "Not configured"},
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow.get("project_identity","Not configured"),"tts_provider":provider or "Not configured",
+                        "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
     def diagnostics(self, project_id: str) -> dict[str, Any]:
