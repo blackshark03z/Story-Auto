@@ -82,8 +82,8 @@ _ATTENTION = {
         "action_id": "review_project",
     },
     "GENERATION_RECONCILIATION_REQUIRED": {
-        "title": "Confirm a Flow result",
-        "message": "Story Auto could not confirm whether Flow created a visual. Check Flow and attach the recovered file before continuing.",
+        "title": "Flow generation needs reconciliation",
+        "message": "Waiting to confirm the last Flow generation before creating another visual.",
         "action": "Review recovery",
         "action_id": "review_project",
     },
@@ -341,10 +341,10 @@ class OperatorService:
                 elif status=="CREDIT_BLOCKED": message=f"{label} is waiting for provider credits. Add credits, then choose Create again."
                 elif status=="FAILED_PERMANENT": message=f"{label} needs a provider setup or capability correction. Fix it, then choose Create again."
                 elif status=="CANCELLED": message=f"{label} was cancelled. Choose Create again when you are ready."
-                elif status=="AMBIGUOUS": message=f"Story Auto could not confirm whether Flow created {label.lower()}. Check Flow; if the result exists, download it and use the recovered file."
+                elif status=="AMBIGUOUS": message=f"Story Auto is waiting to confirm the last Flow generation for {label.lower()} before creating another visual."
                 else: message=f"{label} could not be completed and can be retried."
                 recovery_action=("manual_asset" if status=="AMBIGUOUS" else "flow_sign_in_then_requeue" if status=="AUTH_REQUIRED" else "requeue" if status in {"FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","CREDIT_BLOCKED","CANCELLED","REJECTED"} else None)
-                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","REJECTED"},"recovery_action":recovery_action})
+                issues.append({"label":label,"scene":index if kind=="Scene" else None,"message":message,"status":status,"request_id":request.get("request_id"),"media_type":request.get("media_type"),"technical_code":item.get("failure_class"),"retryable":status in {"QC_PENDING","FAILED_RETRYABLE","FAILED_FATAL","FAILED_PERMANENT","AUTH_REQUIRED","CREDIT_BLOCKED","CANCELLED","REJECTED"},"recovery_action":recovery_action})
         pending=sum(1 for item in items if item.get("status") in problems)
         planning_state=(planning.get("review_state") or {}).get("visual_planning",{})
         planning_failed=planning_state.get("status")=="NEEDS_REGENERATION"

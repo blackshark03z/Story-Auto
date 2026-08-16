@@ -25,6 +25,14 @@ from .session import FlowSessionError
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
 FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
+UNRESOLVED_FLOW_FAILURES = {
+    "FLOW_TIMEOUT",
+    "FLOW_RESULT_AMBIGUOUS",
+    "FLOW_DISPATCH_UNCERTAIN",
+    "OUTPUT_ATTRIBUTION_UNCERTAIN",
+    "OUTPUT_ATTRIBUTION_AMBIGUOUS",
+}
+UNRESOLVED_FLOW_STATES = {"GENERATING", "AMBIGUOUS"}
 LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_FAILED",
     "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
@@ -49,12 +57,22 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
     composer = settings.get("composer_ready_state") if isinstance(settings.get("composer_ready_state"), dict) else None
     attempt.update({
         "activation_time": activation.get("activation_time"),
+        "activation_timestamp": activation.get("activation_time"),
         "interaction_method": activation.get("interaction_method"),
         "interaction_version": activation.get("interaction_version"),
         "composer_ready_state": composer,
         "dispatch_confirmation_state": settings.get("dispatch_confirmation_state"),
         "dispatch_confirmation_signal": settings.get("dispatch_confirmation_signal"),
         "provider_job_id": settings.get("provider_job_id"),
+        "pre_dispatch_baseline_fingerprint": settings.get("pre_dispatch_baseline_fingerprint"),
+        "baseline_provider_identities": settings.get("baseline_provider_identities"),
+        "attribution_state": settings.get("attribution_state"),
+        "attribution_method": settings.get("attribution_method"),
+        "attribution_method_version": settings.get("attribution_method_version"),
+        "attributed_provider_identity": settings.get("attributed_provider_identity"),
+        "candidate_delta_count": settings.get("candidate_delta_count"),
+        "candidate_identities": settings.get("candidate_identities"),
+        "attribution_confirmation_timestamp": settings.get("attribution_confirmation_timestamp"),
     })
 def _manifest(paths, project_id):
     path = paths.artifact_path("output/generation_manifest.json")
@@ -87,6 +105,7 @@ def _successful_raw_image(paths, entry):
     for attempt in reversed(entry.get("attempts", [])):
         if (attempt.get("status") != "SUCCEEDED"
                 or attempt.get("production_image_postprocess_required") is not True
+                or attempt.get("attribution_status") == "INVALIDATED"
                 or not isinstance(attempt.get("asset_path"), str)):
             continue
         try:
@@ -104,6 +123,8 @@ def _clean_rel(entry: dict, attempt: dict) -> str:
 
 def _process_raw_image(paths, entry: dict, attempt: dict, *, output_rel: str | None = None) -> dict:
     """Append one local processing record and bind selected bytes on success."""
+    if attempt.get("attribution_state") != "CONFIRMED" or attempt.get("attribution_status") == "INVALIDATED":
+        raise FlowImagePostprocessError("OUTPUT_ATTRIBUTION_UNCONFIRMED")
     source_rel = attempt["asset_path"]
     source_sha = attempt["asset_sha256"]
     output_rel = output_rel or _clean_rel(entry, attempt)
@@ -253,6 +274,42 @@ def reject_selected_asset(runtime_root: Path | str, project_id: str, request_id:
                                                               "asset_sha256": selected.get("sha256"), "reason": reason.strip()})
         entry.update({"status": "FAILED_RETRYABLE", "failure_class": "CREATIVE_REJECTED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def invalidate_asset_attribution(runtime_root: Path | str, project_id: str, request_id: str,
+                                 *, reason: str = "OUTPUT_ATTRIBUTION_INVALID") -> dict:
+    """Quarantine a wrong request mapping without deleting provider evidence."""
+    if reason != "OUTPUT_ATTRIBUTION_INVALID":
+        raise FlowError("ATTRIBUTION_INVALIDATION_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if not entry or not isinstance(selected, dict):
+            raise FlowError("ATTRIBUTION_INVALIDATION_INVALID")
+        attempt = next((item for item in entry.get("attempts", [])
+                        if item.get("attempt") == selected.get("attempt")), None)
+        if not isinstance(attempt, dict):
+            raise FlowError("ATTRIBUTION_INVALIDATION_INVALID")
+        event = {
+            "invalidated_at": _now(),
+            "reason": reason,
+            "provider_attempt": attempt.get("attempt"),
+            "raw_path": attempt.get("asset_path"),
+            "raw_sha256": attempt.get("asset_sha256"),
+            "selected_path": selected.get("path"),
+            "selected_sha256": selected.get("sha256"),
+        }
+        entry.setdefault("attribution_invalidations", []).append(event)
+        attempt.setdefault("attribution_events", []).append({
+            "at": event["invalidated_at"], "state": "INVALIDATED", "reason": reason,
+        })
+        attempt["attribution_status"] = "INVALIDATED"
+        entry.pop("selected_asset", None)
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": reason, "updated_at": _now()})
+        atomic_write_json(path, manifest)
+        return event
 
 
 def recover_interrupted_pre_dispatch_attempt(runtime_root: Path | str, project_id: str, request_id: str) -> None:
@@ -450,7 +507,8 @@ def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id:
         raw_label = "manual_recovery_raw" if production and entry["media_type"] == "IMAGE" else "manual_recovery"
         rel=f"assets/{entry['media_type'].lower()}/{request_id}/{raw_label}_{number:03d}{raw_suffix}"
         target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
-        attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"metadata":metadata,"completed_at":_now()}
+        confirmed_at = _now()
+        attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"attribution_state":"CONFIRMED","attribution_method":"operator_exact_provider_identity","attribution_method_version":"operator-recovery/1.0.0","attribution_confirmation_timestamp":confirmed_at,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"downloaded_raw_path":rel,"raw_sha256":metadata["sha256"],"metadata":metadata,"completed_at":confirmed_at}
         if production and entry["media_type"] == "IMAGE":
             attempt["production_image_postprocess_required"] = True
         entry["attempts"].append(attempt)
@@ -537,7 +595,11 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
         attempt = {"attempt": number, "status": "SUCCEEDED", "dispatch_origin": "prior_exact_flow_asset_repair",
                    "source_request_id": source_request_id, "source_asset_sha256": metadata["sha256"],
                    "source_lineage": source_lineage,
-                   "attribution_evidence": attribution.strip(), "asset_path": rel, "asset_sha256": metadata["sha256"],
+                   "attribution_evidence": attribution.strip(), "attribution_state": "CONFIRMED",
+                   "attribution_method": "exact_prior_confirmed_flow_asset",
+                   "attribution_method_version": "exact-reuse/1.0.0",
+                   "attribution_confirmation_timestamp": _now(),
+                   "asset_path": rel, "asset_sha256": metadata["sha256"],
                    "metadata": metadata, "completed_at": _now()}
         entry["attempts"].append(attempt)
         entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now(),
@@ -548,6 +610,207 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
         atomic_write_json(path, manifest)
         return entry["selected_asset"]
 
+
+def _unresolved_flow_entry(entry: dict | None) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("status") in UNRESOLVED_FLOW_STATES:
+        return True
+    if entry.get("failure_class") in UNRESOLVED_FLOW_FAILURES:
+        return entry.get("status") not in {"SUCCEEDED", "QC_PENDING", "NOT_DISPATCHED"}
+    attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
+    return isinstance(attempt, dict) and attempt.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
+
+
+def _first_unresolved(requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
+    for request in requests:
+        entry = entries.get(request.get("request_id"))
+        if _unresolved_flow_entry(entry):
+            return request, entry
+    return None
+
+
+def _provider_identity_history(manifest: dict, *, exclude_request_id: str | None = None,
+                               exclude_attempt: int | None = None) -> list[dict]:
+    """Collect provider identities already owned/quarantined by prior epochs."""
+    identities = {}
+    for entry in manifest.get("requests", []):
+        for attempt in entry.get("attempts", []):
+            if (entry.get("request_id") == exclude_request_id
+                    and attempt.get("attempt") == exclude_attempt):
+                continue
+            settings = attempt.get("provider_settings", {}) if isinstance(attempt.get("provider_settings"), dict) else {}
+            groups = [
+                attempt.get("baseline_provider_identities"), settings.get("baseline_provider_identities"),
+                attempt.get("candidate_identities"), settings.get("candidate_identities"),
+                settings.get("quarantined_foreign_identities"),
+            ]
+            attributed = attempt.get("attributed_provider_identity") or settings.get("attributed_provider_identity")
+            if isinstance(attributed, dict):
+                groups.append([attributed])
+            for group in groups:
+                if not isinstance(group, list):
+                    continue
+                for item in group:
+                    if not isinstance(item, dict):
+                        continue
+                    key = str(item.get("asset_id") or item.get("identity") or item.get("card_id") or "")
+                    if key:
+                        identities[key] = item
+    return list(identities.values())
+
+
+def _confirm_executor_attribution(attempt: dict, generator: Any) -> None:
+    """Require explicit live provenance; fixture adapters get an exact-return seam."""
+    settings = getattr(generator, "last_settings", None)
+    if settings is None:
+        confirmed_at = _now()
+        attempt.update({
+            "dispatch_confirmed": True,
+            "dispatch_confirmation_state": "CONFIRMED",
+            "dispatch_confirmation_signal": "executor_exact_result",
+            "attribution_state": "CONFIRMED",
+            "attribution_method": "executor_exact_destination",
+            "attribution_method_version": "executor-contract/1.0.0",
+            "attributed_provider_identity": {"identity": "executor:exact-destination"},
+            "candidate_delta_count": 1,
+            "candidate_identities": [{"identity": "executor:exact-destination"}],
+            "attribution_confirmation_timestamp": confirmed_at,
+        })
+    if attempt.get("attribution_state") != "CONFIRMED":
+        state = attempt.get("attribution_state")
+        failure = "OUTPUT_ATTRIBUTION_AMBIGUOUS" if state == "AMBIGUOUS" else "OUTPUT_ATTRIBUTION_UNCERTAIN"
+        raise FlowError(failure, "adapter returned bytes without confirmed request attribution")
+    attempt.setdefault("attribution_events", []).append({
+        "at": attempt.get("attribution_confirmation_timestamp") or _now(),
+        "state": "CONFIRMED",
+        "method": attempt.get("attribution_method"),
+        "provider_identity": attempt.get("attributed_provider_identity"),
+    })
+
+
+def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dict,
+                                attempt: dict, temporary: Path, source: Path) -> bool:
+    """Validate/download lineage before any selected_asset can be created."""
+    if attempt.get("attribution_state") != "CONFIRMED":
+        raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN")
+    if not source.is_file():
+        raise FlowError("ASSET_ACQUISITION_FAILED")
+    if source.resolve() != temporary.resolve():
+        shutil.copy2(source, temporary)
+    production = request.get("execution_tier") == "STANDARD_PRODUCTION"
+    metadata = validate_image(temporary) if request["media_type"] == "IMAGE" else validate_video(temporary)
+    number = attempt["attempt"]
+    raw_label = f"attempt_{number:03d}_raw" if production and request["media_type"] == "IMAGE" else f"attempt_{number:03d}"
+    final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/{raw_label}{temporary.suffix}"
+    final_path = paths.artifact_path(final_rel)
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(temporary), final_path)
+    attempt.update({
+        "status": "SUCCEEDED", "completed_at": _now(), "asset_path": final_rel,
+        "asset_sha256": metadata["sha256"], "downloaded_raw_path": final_rel,
+        "raw_sha256": metadata["sha256"], "metadata": metadata,
+    })
+    attempt.pop("failure_class", None)
+    attempt.pop("diagnostic", None)
+    if production and request["media_type"] == "IMAGE":
+        attempt["production_image_postprocess_required"] = True
+        try:
+            selected_asset = _process_raw_image(paths, entry, attempt)
+        except FlowImagePostprocessError:
+            selected_asset = None
+    else:
+        selected_asset = {
+            "path": final_rel, "sha256": metadata["sha256"], "attempt": number,
+            "metadata": metadata,
+            "production_qc": "PENDING" if production else "ENGINEERING_FIXTURE",
+        }
+        entry.update({
+            "status": "QC_PENDING" if production else "SUCCEEDED",
+            "failure_class": None, "selected_asset": selected_asset, "updated_at": _now(),
+        })
+    if selected_asset is not None and production:
+        duplicate = _find_duplicate_selection(paths, manifest, request, selected_asset["metadata"], entry)
+        if duplicate is not None:
+            entry.pop("selected_asset", None)
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_STALE_RESULT", "updated_at": _now()})
+            entry.setdefault("stale_result_events", []).append({
+                "detected_at": _now(), "candidate_path": selected_asset["path"],
+                "candidate_sha256": selected_asset["sha256"],
+                "matches_request_id": duplicate["request_id"],
+            })
+            selected_asset = None
+    return selected_asset is not None
+
+
+def _reconcile_unresolved(paths, manifest: dict, requests: list[dict], entries: dict[str, dict],
+                          executor: "FlowExecutor") -> tuple[bool, str | None, int]:
+    blocker = _first_unresolved(requests, entries)
+    if blocker is None:
+        return True, None, 0
+    request, entry = blocker
+    attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
+    if not isinstance(attempt, dict):
+        return False, request["request_id"], 0
+
+    # A crash before provider setup is the only restart case proven locally.
+    if (entry.get("status") == "GENERATING" and attempt.get("status") == "SUBMITTED"
+            and attempt.get("dispatch_confirmed") is False and attempt.get("provider_settings") is None):
+        event = {"at": _now(), "state": "PROVEN_PRE_DISPATCH_FAILURE",
+                 "evidence": {"input_dispatched": False, "reason": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP"}}
+        attempt.setdefault("reconciliation_events", []).append(event)
+        attempt.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
+                        "completed_at": event["at"]})
+        entry.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
+                      "updated_at": event["at"]})
+        return True, None, 1
+
+    temporary = paths.artifact_path(
+        f"assets/attempts/{request['request_id']}/attempt_{attempt.get('attempt', 1):03d}/reconciled_provider_result."
+        f"{'png' if request['media_type'] == 'IMAGE' else 'mp4'}"
+    )
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    request_context = dict(request)
+    request_context["_flow_provider_identity_history"] = _provider_identity_history(
+        manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt.get("attempt")
+    )
+    request_context["_flow_reference_paths"] = [
+        str(paths.artifact_path(entries[dependency]["selected_asset"]["path"]))
+        for dependency in request.get("depends_on", [])
+        if dependency in entries and isinstance(entries[dependency].get("selected_asset"), dict)
+    ]
+    result = executor.reconcile_attempt(request_context, attempt, temporary)
+    if not isinstance(result, dict):
+        return False, request["request_id"], 0
+    state = result.get("state")
+    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    event = {"at": _now(), "state": state, "prior_status": attempt.get("status"), "evidence": evidence}
+    attempt.setdefault("reconciliation_events", []).append(event)
+    entry.setdefault("reconciliation_events", []).append({
+        "at": event["at"], "attempt": attempt.get("attempt"), "state": state,
+    })
+    if state == "PROVEN_PRE_DISPATCH_FAILURE" and evidence.get("input_dispatched") is False:
+        attempt.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+                        "completed_at": event["at"]})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+                      "updated_at": event["at"]})
+        return True, None, 1
+    if state == "CONFIRMED_OUTPUT" and evidence.get("attribution_state") == "CONFIRMED":
+        attempt.update(evidence)
+        attempt["dispatch_confirmed"] = True
+        attempt.setdefault("attribution_events", []).append({
+            "at": evidence.get("attribution_confirmation_timestamp") or event["at"],
+            "state": "CONFIRMED", "method": evidence.get("attribution_method"),
+            "provider_identity": evidence.get("attributed_provider_identity"),
+        })
+        source = Path(result.get("path") or temporary)
+        _finalize_attributed_result(paths, manifest, entry, request, attempt, temporary, source)
+        return True, None, 1
+    if state == "CONFIRMED_DISPATCH":
+        attempt["dispatch_confirmed"] = True
+        entry.update({"status": "AMBIGUOUS", "failure_class": "OUTPUT_ATTRIBUTION_UNCERTAIN", "updated_at": event["at"]})
+    return False, request["request_id"], 1
+
 @dataclass
 class FlowExecutor:
     """A live adapter supplies generate(); it must acquire to the given temp file."""
@@ -557,6 +820,70 @@ class FlowExecutor:
     def run(self, request, refs, temporary: Path):
         self.capabilities.require(request["media_type"], bool(refs))
         return self.generate(request, refs, temporary)
+
+    def reconcile_attempt(self, request, attempt, temporary: Path):
+        reconcile = getattr(self.generate, "reconcile", None)
+        return reconcile(request, attempt, temporary) if callable(reconcile) else None
+
+
+def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
+                                      request_id: str, *, executor: FlowExecutor) -> dict:
+    """Inspect one unresolved attempt without activating Flow.
+
+    Only the earliest barrier may be resolved. A later unresolved attempt may
+    still receive an append-only REMAINS_AMBIGUOUS observation so preserved
+    production evidence can be audited without changing queue order.
+    """
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+        entries = {entry["request_id"]: entry for entry in manifest["requests"]}
+        request = next((item for item in requests if item.get("request_id") == request_id), None)
+        entry = entries.get(request_id)
+        if not request or not _unresolved_flow_entry(entry):
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        earliest = _first_unresolved(requests, entries)
+        if earliest and earliest[0]["request_id"] == request_id:
+            released, blocked_request_id, count = _reconcile_unresolved(
+                paths, manifest, requests, entries, executor
+            )
+            if count:
+                atomic_write_json(path, manifest)
+            return {"request_id": request_id, "released": released,
+                    "blocked_request_id": blocked_request_id, "reconciliations": count,
+                    "status": entry.get("status"), "failure_class": entry.get("failure_class")}
+
+        attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
+        if not isinstance(attempt, dict):
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        temporary = paths.artifact_path(
+            f"assets/attempts/{request_id}/attempt_{attempt.get('attempt', 1):03d}/reconciliation_inspection."
+            f"{'png' if request['media_type'] == 'IMAGE' else 'mp4'}"
+        )
+        request_context = dict(request)
+        request_context["_flow_provider_identity_history"] = _provider_identity_history(
+            manifest, exclude_request_id=request_id, exclude_attempt=attempt.get("attempt")
+        )
+        request_context["_flow_reference_paths"] = [
+            str(paths.artifact_path(entries[dependency]["selected_asset"]["path"]))
+            for dependency in request.get("depends_on", [])
+            if dependency in entries and isinstance(entries[dependency].get("selected_asset"), dict)
+        ]
+        result = executor.reconcile_attempt(request_context, attempt, temporary)
+        if not isinstance(result, dict) or result.get("state") != "REMAINS_AMBIGUOUS":
+            raise FlowError("GENERATION_RECONCILIATION_ORDER_BLOCKED")
+        event = {"at": _now(), "state": "REMAINS_AMBIGUOUS", "prior_status": attempt.get("status"),
+                 "evidence": result.get("evidence") if isinstance(result.get("evidence"), dict) else {}}
+        attempt.setdefault("reconciliation_events", []).append(event)
+        entry.setdefault("reconciliation_events", []).append({
+            "at": event["at"], "attempt": attempt.get("attempt"), "state": event["state"],
+        })
+        atomic_write_json(path, manifest)
+        return {"request_id": request_id, "released": False,
+                "blocked_request_id": earliest[0]["request_id"] if earliest else request_id,
+                "reconciliations": 1, "status": entry.get("status"),
+                "failure_class": entry.get("failure_class")}
 
 def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False,
                        request_ids: set[str] | None = None, production_batch: bool = False,
@@ -583,11 +910,30 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
-        paused = False
+        paused = False; blocked_request_id = None; reconciliation_count = 0
+        released, blocked_request_id, reconciled = _reconcile_unresolved(
+            paths, manifest, requests, entries, executor
+        )
+        reconciliation_count += reconciled
+        if reconciled:
+            atomic_write_json(path, manifest)
+            entries = {entry["request_id"]: entry for entry in manifest["requests"]}
+        if not released:
+            return {
+                "selected": len(selected), "new_submissions": 0, "paused": False,
+                "blocked": True, "blocked_request_id": blocked_request_id,
+                "attention": "FLOW_GENERATION_RECONCILIATION_REQUIRED",
+                "reconciliations": reconciliation_count,
+                "manifest": "output/generation_manifest.json",
+            }
         for request in selected:
             try: paused = read_json(control_path).get("pause_requested") is True
             except Exception: paused = False
             if paused: break
+            blocker = _first_unresolved(requests, entries)
+            if blocker is not None:
+                blocked_request_id = blocker[0]["request_id"]
+                break
             if request.get("media_type") == "IMAGE" and request.get("output_count", 1) != 1:
                 raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
             entry = _entry(manifest, request)
@@ -597,7 +943,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if _repair_local_image(paths, entry, request):
                 atomic_write_json(path, manifest); entries[request["request_id"]] = entry
                 continue
-            if entry.get("status") == "AMBIGUOUS": continue # reconcile provider-visible state before any new dispatch
+            if entry.get("status") == "AMBIGUOUS":
+                blocked_request_id = request["request_id"]
+                break
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
             if not _runnable(request, entries): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
@@ -618,48 +966,30 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
             try:
                 temp.parent.mkdir(parents=True, exist_ok=True)
-                result = executor.run(request, refs, temp); attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True)); _record_attempt_provider_state(attempt, executor.generate); source = Path(result or temp)
-                if not source.is_file(): raise FlowError("ASSET_ACQUISITION_FAILED")
-                if source.resolve() != temp.resolve(): shutil.copy2(source, temp)
-                production = request.get("execution_tier") == "STANDARD_PRODUCTION"
-                metadata = validate_image(temp) if request["media_type"] == "IMAGE" else validate_video(temp)
-                raw_label = f"attempt_{attempt_number:03d}_raw" if production and request["media_type"] == "IMAGE" else f"attempt_{attempt_number:03d}"
-                final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/{raw_label}{temp.suffix}"
-                final_path = paths.artifact_path(final_rel); final_path.parent.mkdir(parents=True, exist_ok=True); shutil.move(str(temp), final_path)
-                attempt.update({"status":"SUCCEEDED", "completed_at":_now(), "asset_path":final_rel,
-                                "asset_sha256":metadata["sha256"], "metadata":metadata})
-                if production and request["media_type"] == "IMAGE":
-                    attempt["production_image_postprocess_required"] = True
-                    try:
-                        selected_asset = _process_raw_image(paths, entry, attempt)
-                    except FlowImagePostprocessError:
-                        selected_asset = None
-                else:
-                    selected_asset = {"path":final_rel,"sha256":metadata["sha256"],"attempt":attempt_number,
-                                      "metadata":metadata,"production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}
-                    entry.update({"status":"QC_PENDING" if production else "SUCCEEDED", "failure_class":None,
-                                  "selected_asset":selected_asset, "updated_at":_now()})
-                # Compare like-for-like identities: clean image derivative to
-                # clean image derivative, and provider video bytes to video.
-                if selected_asset is not None and production:
-                    duplicate = _find_duplicate_selection(paths, manifest, request, selected_asset["metadata"], entry)
-                    if duplicate is not None:
-                        entry.pop("selected_asset", None)
-                        entry.update({"status":"FAILED_RETRYABLE", "failure_class":"FLOW_STALE_RESULT", "updated_at":_now()})
-                        entry.setdefault("stale_result_events", []).append({
-                            "detected_at": _now(), "candidate_path": selected_asset["path"],
-                            "candidate_sha256": selected_asset["sha256"],
-                            "matches_request_id": duplicate["request_id"],
-                        })
-                        selected_asset = None
-                if selected_asset is not None:
+                request_context = dict(request)
+                request_context["_flow_provider_identity_history"] = _provider_identity_history(
+                    manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt_number
+                )
+                request_context["_flow_reference_paths"] = list(refs)
+                result = executor.run(request_context, refs, temp)
+                attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True))
+                _record_attempt_provider_state(attempt, executor.generate)
+                _confirm_executor_attribution(attempt, executor.generate)
+                source = Path(result or temp)
+                if _finalize_attributed_result(paths, manifest, entry, request, attempt, temp, source):
                     submissions += 1
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 _record_attempt_provider_state(attempt, executor.generate)
-                state = "AMBIGUOUS" if error.failure_class in {"FLOW_TIMEOUT", "FLOW_RESULT_AMBIGUOUS", "FLOW_DISPATCH_UNCERTAIN"} else ("NOT_DISPATCHED" if error.failure_class in {"FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
+                state = "AMBIGUOUS" if error.failure_class in UNRESOLVED_FLOW_FAILURES else ("NOT_DISPATCHED" if error.failure_class in {"FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "OUTPUT_ATTRIBUTION_NOT_QUIESCENT"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
                 attempt.update({"status":state, "failure_class":error.failure_class, "diagnostic":str(error), "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})
             atomic_write_json(path, manifest); entries[request["request_id"]] = entry
-    return {"selected":len(selected), "new_submissions":submissions, "paused":paused, "manifest":"output/generation_manifest.json"}
+            if _unresolved_flow_entry(entry):
+                blocked_request_id = request["request_id"]
+                break
+    return {"selected":len(selected), "new_submissions":submissions, "paused":paused,
+            "blocked":blocked_request_id is not None, "blocked_request_id":blocked_request_id,
+            "attention":"FLOW_GENERATION_RECONCILIATION_REQUIRED" if blocked_request_id else None,
+            "reconciliations":reconciliation_count, "manifest":"output/generation_manifest.json"}

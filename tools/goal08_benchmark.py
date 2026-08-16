@@ -181,7 +181,7 @@ def accept_reconciled_flow_image(
     attempts[-1].update({
         "status": "SUCCEEDED_RECONCILED",
         "reconciled_at": datetime.now(timezone.utc).isoformat(),
-        "reconciliation": "operator_attributed_newest_exact_count_image_group",
+        "reconciliation": "operator_attributed_exact_asset_path",
         "asset_sha256": metadata["sha256"],
     })
     item.update({

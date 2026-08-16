@@ -231,6 +231,23 @@ Explicit production-batch execution may process repeated request kinds. It keeps
 the same request/attempt ledger and supports a per-invocation request boundary;
 successful and QC-pending identities are never resubmitted on resume.
 
+The Flow queue is serial at the manifest boundary. Any generating, dispatch-
+uncertain, attribution-uncertain, or attribution-ambiguous attempt is a global
+barrier for that project queue across batch, retry, resume, CLI, and UI entry
+paths. Resume reconciles the earliest unresolved attempt before any new
+activation; an unresolved result leaves the queue halted.
+
+Flow output identity is request-epoch provenance, not gallery order. After
+reference attachment and immediately before activation, the adapter requires a
+quiescent, consecutively stable provider surface and records its tile/asset
+identity fingerprint. After one activation, attribution considers only the
+provider delta from that baseline. One stable tile-to-asset lineage may be
+bound; multiple unseen candidates without a unique placeholder/job lineage are
+`OUTPUT_ATTRIBUTION_AMBIGUOUS`. Newest-card and timestamp-proximity fallbacks
+are not attribution evidence. Dispatch confirmation and asset attribution are
+separate states, and provider bytes cannot enter postprocessing or
+`selected_asset` until attribution is confirmed.
+
 ## Human review
 
 Review decisions live in a durable `review_state.json`, separate from plan artifacts and provider manifest. This prevents a regenerate/edit cycle from erasing the distinction between planned output, generated candidates, and operator choice.

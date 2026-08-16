@@ -20,6 +20,7 @@ from story_auto.providers.flow.service import (
     FlowExecutor,
     adopt_manual_recovery,
     execute_generation,
+    invalidate_asset_attribution,
     queue_regeneration,
     reconcile_local_assets,
     reuse_exact_flow_asset,
@@ -153,6 +154,22 @@ class FlowImagePostprocessTests(unittest.TestCase):
             self.assertEqual((attempt["status"], attempt["asset_sha256"]), ("SUCCEEDED", raw_sha))
             self.assertNotEqual(selected["sha256"], raw_sha)
             self.assertEqual(selected["source_sha256"], raw_sha)
+
+    def test_wrong_mapping_is_invalidated_without_deleting_raw_or_clean_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, [self._request()])
+            execute_generation(runtime.root, config.project_id, executor=self._executor([]), execute=True)
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            raw_path = paths.artifact_path(entry["attempts"][0]["asset_path"])
+            clean_path = paths.artifact_path(entry["selected_asset"]["path"])
+            raw_sha, clean_sha = sha256_file(raw_path), sha256_file(clean_path)
+            event = invalidate_asset_attribution(runtime.root, config.project_id, "ref")
+            repaired = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((sha256_file(raw_path), sha256_file(clean_path)), (raw_sha, clean_sha))
+            self.assertEqual((event["reason"], repaired["failure_class"]),
+                             ("OUTPUT_ATTRIBUTION_INVALID", "OUTPUT_ATTRIBUTION_INVALID"))
+            self.assertEqual(repaired["attempts"][0]["attribution_status"], "INVALIDATED")
+            self.assertNotIn("selected_asset", repaired)
 
     def test_reference_dependency_receives_clean_selected_derivative(self):
         with tempfile.TemporaryDirectory() as root:

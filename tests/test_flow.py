@@ -10,6 +10,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
+                                                adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 review_production_asset)
@@ -231,6 +232,106 @@ class FlowTests(unittest.TestCase):
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             self.assertEqual(len(calls),1)
 
+    def test_dispatch_uncertain_blocks_next_serial_request_and_survives_resume(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            requests={"requests":[{"request_id":ident,"fingerprint":ident+"hash","purpose":"SHOT","shot_id":ident,"media_type":"IMAGE","prompt":ident,"depends_on":[],"provider":"google_flow","output_count":1} for ident in ("a","b")]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            def uncertain(request, *_): calls.append(request["request_id"]); raise FlowError("FLOW_DISPATCH_UNCERTAIN")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),uncertain)
+            first=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            second=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            self.assertEqual(calls,["a"])
+            self.assertEqual((first["blocked"],first["blocked_request_id"]),(True,"a"))
+            self.assertEqual((second["new_submissions"],second["blocked_request_id"]),(0,"a"))
+
+    def test_attribution_uncertain_cannot_select_asset_or_activate_next_request(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            requests={"requests":[{"request_id":ident,"fingerprint":ident+"hash","purpose":"SHOT","shot_id":ident,"media_type":"IMAGE","prompt":ident,"depends_on":[],"provider":"google_flow","output_count":1} for ident in ("a","b")]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            class Unattributed:
+                def __init__(self): self.calls=[]; self.dispatch_confirmed=True; self.last_settings=None
+                def __call__(self,request,_refs,path):
+                    from PIL import Image
+                    self.calls.append(request["request_id"]); path.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"blue").save(path,"PNG")
+                    self.last_settings={"dispatch_confirmation_state":"CONFIRMED","dispatch_confirmation_signal":"provider_job_id","attribution_state":"UNCERTAIN","candidate_delta_count":1}
+                    return path
+            generate=Unattributed(); executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate)
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(generate.calls,["a"])
+            self.assertEqual((entry["status"],entry["failure_class"]),("AMBIGUOUS","OUTPUT_ATTRIBUTION_UNCERTAIN"))
+            self.assertNotIn("selected_asset",entry)
+            self.assertTrue(result["blocked"])
+
+    def test_attribution_ambiguous_blocks_batch_without_newest_selection(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            requests={"requests":[{"request_id":ident,"fingerprint":ident+"hash","purpose":"SHOT","shot_id":ident,"media_type":"IMAGE","prompt":ident,"depends_on":[],"provider":"google_flow","output_count":1} for ident in ("a","b")]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            def ambiguous(request,*_): calls.append(request["request_id"]); raise FlowError("OUTPUT_ATTRIBUTION_AMBIGUOUS")
+            result=execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),ambiguous),execute=True,production_batch=True)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(calls,["a"])
+            self.assertEqual((entry["failure_class"],entry.get("selected_asset")),("OUTPUT_ATTRIBUTION_AMBIGUOUS",None))
+            self.assertEqual((result["blocked"],result["blocked_request_id"]),(True,"a"))
+
+    def test_successful_reconciliation_releases_queue_once_without_extra_activation(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            requests={"requests":[{"request_id":ident,"fingerprint":ident+"hash","purpose":"SHOT","shot_id":ident,"media_type":"IMAGE","prompt":ident,"depends_on":[],"provider":"google_flow","output_count":1} for ident in ("a","b")]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"a","request_identity_sha256":"ahash","media_type":"IMAGE","status":"AMBIGUOUS","failure_class":"FLOW_DISPATCH_UNCERTAIN","attempts":[{"attempt":1,"status":"AMBIGUOUS","failure_class":"FLOW_DISPATCH_UNCERTAIN","dispatch_confirmed":False,"provider_settings":{"activation":{"input_dispatched":True}}}]}]})
+            class ReconciledGenerator:
+                def __init__(self): self.calls=[]; self.reconciles=0
+                def reconcile(self,_request,_attempt,_path):
+                    self.reconciles+=1
+                    return {"state":"PROVEN_PRE_DISPATCH_FAILURE","evidence":{"input_dispatched":False,"signal":"provider_rejected_before_dispatch"}}
+                def __call__(self,request,_refs,path):
+                    from PIL import Image
+                    self.calls.append(request["request_id"]); path.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),request["request_id"]=="a" and "blue" or "green").save(path,"PNG"); return path
+            generate=ReconciledGenerator(); result=execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate),execute=True,production_batch=True)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((generate.reconciles,generate.calls,result["new_submissions"]),(1,["a","b"],2))
+            self.assertEqual(len(entry["attempts"]),2)
+            self.assertEqual(entry["attempts"][0]["reconciliation_events"][0]["state"],"PROVEN_PRE_DISPATCH_FAILURE")
+            self.assertNotIn("failure_class",entry["attempts"][1])
+
+    def test_reconciliation_cannot_infer_pre_dispatch_failure_after_input_was_dispatched(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            requests={"requests":[{"request_id":ident,"fingerprint":ident+"hash","purpose":"SHOT","shot_id":ident,"media_type":"IMAGE","prompt":ident,"depends_on":[],"provider":"google_flow","output_count":1} for ident in ("a","b")]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"a","request_identity_sha256":"ahash","media_type":"IMAGE","status":"AMBIGUOUS","failure_class":"FLOW_DISPATCH_UNCERTAIN","attempts":[{"attempt":1,"status":"AMBIGUOUS","failure_class":"FLOW_DISPATCH_UNCERTAIN","dispatch_confirmed":False,"provider_settings":{"activation":{"input_dispatched":True}}}]}]})
+            class UnsafeInference:
+                def __init__(self): self.calls=[]; self.reconciles=0
+                def reconcile(self,_request,_attempt,_path):
+                    self.reconciles+=1
+                    return {"state":"PROVEN_PRE_DISPATCH_FAILURE","evidence":{"input_dispatched":True,"prompt_retained":True,"candidate_delta_count":0}}
+                def __call__(self,request,_refs,_path): self.calls.append(request["request_id"])
+            generate=UnsafeInference()
+            result=execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate),execute=True,production_batch=True)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((generate.reconciles,generate.calls),(1,[]))
+            self.assertEqual((result["blocked"],result["blocked_request_id"]),(True,"a"))
+            self.assertEqual((entry["status"],entry["failure_class"]),("AMBIGUOUS","FLOW_DISPATCH_UNCERTAIN"))
+            self.assertEqual(entry["attempts"][0]["reconciliation_events"][0]["evidence"]["input_dispatched"],True)
+
+    def test_manual_recovery_resolves_barrier_before_later_activation(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            requests=read_json(paths.artifact_path("output/generation_requests.json"))
+            requests["requests"][1]["depends_on"]=[]
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","request_identity_sha256":"refhash","media_type":"IMAGE","status":"AMBIGUOUS","failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS","attempts":[{"attempt":1,"status":"AMBIGUOUS","failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS"}]}]})
+            from PIL import Image
+            recovered=Path(root)/"recovered.png"; Image.new("RGB",(1280,720),"navy").save(recovered,"PNG")
+            adopt_manual_recovery(runtime.root,cfg.project_id,"ref",recovered,settings={"provider_asset_id":"exact"},attribution="operator selected exact provider asset identity")
+            def generate(request,_refs,path): calls.append(request["request_id"]); Image.new("RGB",(1280,720),"green").save(path,"PNG"); return path
+            execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate),execute=True,request_ids={"shot"},production_batch=True)
+            self.assertEqual(calls,["shot"])
+
     def test_attempt_provenance_is_append_only_across_safe_retry(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
@@ -240,7 +341,7 @@ class FlowTests(unittest.TestCase):
                     self.calls+=1
                     state="PRE_DISPATCH_FAILURE" if self.calls==1 else "CONFIRMED"
                     self.dispatch_confirmed=self.calls>1
-                    self.last_settings={"activation":{"activation_time":f"time-{self.calls}","interaction_method":"CDP_TRUSTED_POINTER","interaction_version":2},"composer_ready_state":{"prompt_committed":True,"reference_state":{"committed":True},"generate_enabled":True},"dispatch_confirmation_state":state,"dispatch_confirmation_signal":"input_not_dispatched" if self.calls==1 else "new_attributable_output","provider_job_id":None}
+                    self.last_settings={"activation":{"activation_time":f"time-{self.calls}","interaction_method":"CDP_TRUSTED_POINTER","interaction_version":2},"composer_ready_state":{"prompt_committed":True,"reference_state":{"committed":True},"generate_enabled":True},"dispatch_confirmation_state":state,"dispatch_confirmation_signal":"input_not_dispatched" if self.calls==1 else "new_attributable_output","provider_job_id":None,"attribution_state":"NOT_ATTEMPTED" if self.calls==1 else "CONFIRMED","attribution_method":"fixture_provider_lineage" if self.calls>1 else None,"attribution_method_version":"fixture/1","attributed_provider_identity":{"identity":"fixture:output"} if self.calls>1 else None,"candidate_delta_count":1 if self.calls>1 else 0,"candidate_identities":[{"identity":"fixture:output"}] if self.calls>1 else [],"attribution_confirmation_timestamp":f"time-{self.calls}" if self.calls>1 else None}
                     if self.calls==1: raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
                     from PIL import Image
                     destination.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"blue").save(destination,"PNG"); return destination

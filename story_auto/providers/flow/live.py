@@ -10,6 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from story_auto.core.artifacts import atomic_write_bytes, sha256_file
+from .attribution import (
+    ATTRIBUTION_METHOD_VERSION,
+    RequestAttributionTracker,
+    evidence_identity,
+    provider_identity,
+    records_for_type,
+    surface_fingerprint,
+)
 from .cdp import CdpPage
 from .page import FlowComposer
 from .service import FlowError
@@ -23,10 +31,13 @@ _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contentedit
 _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);parsed.hash='';key=parsed.href}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0})}}return out})()"""
+_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]'));for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){records.push({card_id,asset_id:null,media_type:null,state:'PENDING',url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
 def records_for_media(records, media_type: str):
+    if any("media_type" in item for item in records):
+        return [item for item in records if item.get("media_type") == media_type]
     allowed = {"IMG"} if media_type == "IMAGE" else {"VIDEO", "SOURCE"}
     return [item for item in records if item.get("kind") in allowed and (media_type != "IMAGE" or int(item.get("width", 0)) >= 512)]
 
@@ -38,6 +49,42 @@ def _dhash_bytes(data: bytes) -> str:
     for row in range(16):
         for column in range(16): bits=(bits<<1)|(values[row*17+column]>values[row*17+column+1])
     return f"{bits:064x}"
+
+
+def _merge_surface_records(*groups: list[dict]) -> list[dict]:
+    merged = {}
+    for group in groups:
+        for record in group:
+            identity = provider_identity(record)
+            if identity:
+                merged[identity] = record
+    return list(merged.values())
+
+
+def _stable_surface(dom, media_type: str, *, seed: list[dict] | None = None,
+                    timeout_seconds: float = 12.0, required_stable_polls: int = 3,
+                    poll_seconds: float = .5) -> tuple[list[dict], int]:
+    """Return a quiescent provider surface using state, not a blind sleep."""
+    deadline = time.monotonic() + timeout_seconds
+    union = list(seed or [])
+    last_fingerprint = None
+    stable = 0
+    while time.monotonic() < deadline:
+        surface = dom.provider_surface()
+        records = surface.get("records", []) if isinstance(surface, dict) else []
+        union = _merge_surface_records(union, records)
+        typed = records_for_type(records, media_type)
+        pending = [record for record in typed if record.get("state") != "READY"]
+        fingerprint = surface_fingerprint(typed)
+        if not pending and not int((surface or {}).get("global_pending_count", 0)):
+            stable = stable + 1 if fingerprint == last_fingerprint else 1
+            if stable >= required_stable_polls:
+                return union, stable
+        else:
+            stable = 0
+        last_fingerprint = fingerprint
+        time.sleep(poll_seconds)
+    raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT", "Flow has unresolved provider-visible state")
 
 
 class _Editor:
@@ -254,9 +301,7 @@ class FlowBrowserDom:
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
     def media_candidate_records(self): return self.page.evaluate(_CANDIDATE_RECORDS_JS) or []
-    def newest_exact_image_group(self, expected_count: int):
-        groups=self.page.evaluate("""(()=>{const expected=%d;const valid=e=>{const u=e.currentSrc||e.src||e.getAttribute('src');return e.tagName==='IMG'&&e.naturalWidth>=512&&typeof u==='string'&&u&&!u.startsWith('data:')};const images=Array.from(document.querySelectorAll('img')).filter(valid),out=[];for(const image of images){let p=image.parentElement,group=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('img')).filter(valid);if(xs.length===expected){group=xs.map(e=>e.currentSrc||e.src||e.getAttribute('src'));break}if(xs.length>expected)break;p=p.parentElement}if(group&&!out.some(x=>JSON.stringify(x)===JSON.stringify(group)))out.push(group)}return out})()""" % expected_count) or []
-        return groups[0] if groups and isinstance(groups[0],list) and len(groups[0])==expected_count else None
+    def provider_surface(self): return self.page.evaluate(_PROVIDER_SURFACE_JS) or {"records": [], "global_pending_count": 0}
     def video_candidates(self): return self.page.evaluate("""(()=>Array.from(document.querySelectorAll('video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()""") or []
 
 
@@ -290,167 +335,346 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 480): self.runtime,self.timeout_seconds,self.last_settings,self.dispatch_confirmed,self.dispatch_confirmation_state=runtime,timeout_seconds,None,False,"NOT_ATTEMPTED"
+    def __init__(self, runtime, *, timeout_seconds: int = 480):
+        self.runtime = runtime
+        self.timeout_seconds = timeout_seconds
+        self.last_settings = None
+        self.dispatch_confirmed = False
+        self.dispatch_confirmation_state = "NOT_ATTEMPTED"
+
+    @staticmethod
+    def _fetch_bytes(page, url: str) -> bytes:
+        payload = page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(url))
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
+            raise FlowError("ASSET_ACQUISITION_FAILED")
+        return base64.b64decode(payload["data"], validate=True)
+
+    def _record_observation(self, observation) -> None:
+        self.last_settings.update({
+            "attribution_method": observation.method,
+            "attribution_method_version": ATTRIBUTION_METHOD_VERSION,
+            "attribution_state": observation.state,
+            "provider_lineage_card_id": observation.lineage_card_id,
+            "candidate_delta_count": observation.candidate_delta_count,
+            "candidate_identities": observation.candidate_identities,
+            "foreign_candidate_identities": observation.foreign_candidate_identities,
+            "attribution_stable_polls": observation.stable_polls,
+        })
+
+    def _reference_echoes(self, page, records: list[dict], observation,
+                          reference_hashes: list[str]) -> list[dict]:
+        """Identify known input echoes only; never use pixels to select output."""
+        if not reference_hashes:
+            return []
+        candidate_ids = {
+            item.get("identity") for item in observation.candidate_identities
+            if isinstance(item, dict) and item.get("identity")
+        }
+        echoes = []
+        for record in records:
+            if provider_identity(record) not in candidate_ids or not record.get("url"):
+                continue
+            try:
+                candidate_hash = _dhash_bytes(self._fetch_bytes(page, record["url"]))
+            except Exception:
+                continue
+            if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
+                   for reference_hash in reference_hashes):
+                echoes.append(record)
+        return echoes
+
     def __call__(self, request, references, destination: Path):
-        # The generator is reused across a batch. Dispatch evidence is local
-        # to one request and must never leak from a prior attempt.
+        # The generator is reused across a batch. Dispatch and attribution
+        # evidence are request-local and must never leak from a prior attempt.
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
         self.last_settings = None
-        page=CdpPage.open(self.runtime)
+        page = CdpPage.open(self.runtime)
         try:
-            dom=FlowBrowserDom(page)
-            # Anything visible before the attempt's reload is necessarily
-            # historical. Preserve those keys in the attribution baseline;
-            # the virtualized grid often hides them during composer reload and
-            # reveals them again only after generation starts.
-            historical_by_key = {}
-            historical_deadline = time.monotonic() + 8.0
-            while time.monotonic() < historical_deadline:
-                for item in dom.media_candidate_records():
-                    historical_by_key[item["key"]] = item
-                time.sleep(.5)
-            historical_records = list(historical_by_key.values())
-            dom.reset_composer(); resolved=resolve_settings(request); self.last_settings=dom.apply_settings(resolved)
-            if request["media_type"] == "IMAGE" and not (self.last_settings.get("requested_output_count") == self.last_settings.get("actual_output_count") == 1):
+            dom = FlowBrowserDom(page)
+            identity_history = request.get("_flow_provider_identity_history", [])
+            historical_records, _ = _stable_surface(
+                dom, request["media_type"],
+                seed=identity_history if isinstance(identity_history, list) else None,
+            )
+            dom.reset_composer()
+            resolved = resolve_settings(request)
+            self.last_settings = dom.apply_settings(resolved)
+            if request["media_type"] == "IMAGE" and not (
+                    self.last_settings.get("requested_output_count") ==
+                    self.last_settings.get("actual_output_count") == 1):
                 raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
-            before = {item["key"] for item in historical_records}
-            before_output = {item["key"] for item in records_for_media(historical_records, request["media_type"])}
+            baseline_records = list(historical_records)
+
             def baseline():
-                nonlocal before, before_output
-                # Reference attachment and Flow's virtualized grid can lazily
-                # reveal or hide historical media. Accumulate the union for a
-                # full observation window so a resurfacing old URL cannot
-                # masquerade as post-dispatch output.
-                deadline = time.monotonic() + 6.0
-                while time.monotonic() < deadline:
-                    records = dom.media_candidate_records()
-                    keys = {item["key"] for item in records}
-                    before.update(keys)
-                    before_output.update(item["key"] for item in records_for_media(records, request["media_type"]))
-                    time.sleep(.5)
-                self.last_settings["baseline_candidate_count"] = len(before)
-                self.last_settings["baseline_media_candidate_count"] = len(before_output)
-            source_references = [Path(x) for x in references if x]
+                nonlocal baseline_records
+                baseline_records, stable_polls = _stable_surface(
+                    dom, request["media_type"], seed=baseline_records
+                )
+                typed = records_for_type(baseline_records, request["media_type"])
+                self.last_settings.update({
+                    "pre_dispatch_baseline_fingerprint": surface_fingerprint(typed),
+                    "baseline_provider_identities": [evidence_identity(item) for item in typed],
+                    "baseline_stable_polls": stable_polls,
+                    "baseline_state": "QUIESCENT",
+                })
+
+            source_references = [Path(item) for item in references if item]
             if len(source_references) > 1:
-                omitted=source_references[1:]
-                self.last_settings["reference_capacity_limit"]=1
-                self.last_settings["omitted_reference_hashes"]=[sha256_file(item) for item in omitted]
-                source_references=source_references[:1]
-            self.last_settings["attached_reference_hashes"]=[sha256_file(item) for item in source_references]
+                omitted = source_references[1:]
+                self.last_settings["reference_capacity_limit"] = 1
+                self.last_settings["omitted_reference_hashes"] = [sha256_file(item) for item in omitted]
+                source_references = source_references[:1]
+            self.last_settings["attached_reference_hashes"] = [sha256_file(item) for item in source_references]
             with tempfile.TemporaryDirectory(prefix="story-auto-flow-refs-") as staging_directory:
                 staged_references = []
                 for source in source_references:
-                    source_hash=sha256_file(source)
+                    source_hash = sha256_file(source)
                     staged = Path(staging_directory) / f"ref_{source_hash[:16]}.png"
                     from PIL import Image, PngImagePlugin
-                    metadata=PngImagePlugin.PngInfo(); metadata.add_text("StoryAutoReferenceSha256",source_hash)
-                    with Image.open(source) as image: image.convert("RGB").save(staged,"PNG",pnginfo=metadata)
+                    metadata = PngImagePlugin.PngInfo()
+                    metadata.add_text("StoryAutoReferenceSha256", source_hash)
+                    with Image.open(source) as image:
+                        image.convert("RGB").save(staged, "PNG", pnginfo=metadata)
                     staged_references.append(str(staged))
-                    self.last_settings.setdefault("staged_reference_uploads",[]).append({"source_sha256":source_hash,"upload_sha256":sha256_file(staged)})
+                    self.last_settings.setdefault("staged_reference_uploads", []).append({
+                        "source_sha256": source_hash,
+                        "upload_sha256": sha256_file(staged),
+                    })
                 try:
-                    submit = FlowComposer(dom).submit(request["prompt"], references=staged_references,
-                                                      media_type=request["media_type"], before_dispatch=baseline,
-                                                      mode_already_configured=True)
+                    submit = FlowComposer(dom).submit(
+                        request["prompt"], references=staged_references,
+                        media_type=request["media_type"], before_dispatch=baseline,
+                        mode_already_configured=True,
+                    )
                 except (FlowError, FlowSessionError) as error:
                     composer = getattr(dom, "last_composer_ready_state", None)
                     activation = getattr(dom, "last_activation_receipt", None)
-                    if isinstance(composer, dict): self.last_settings["composer_ready_state"] = composer
-                    if isinstance(activation, dict): self.last_settings["activation"] = activation
-                    state = "UNCERTAIN" if error.failure_class == "FLOW_DISPATCH_UNCERTAIN" else "PRE_DISPATCH_FAILURE"
+                    if isinstance(composer, dict):
+                        self.last_settings["composer_ready_state"] = composer
+                    if isinstance(activation, dict):
+                        self.last_settings["activation"] = activation
+                    uncertain = error.failure_class == "FLOW_DISPATCH_UNCERTAIN"
+                    state = "UNCERTAIN" if uncertain else "PRE_DISPATCH_FAILURE"
                     self.dispatch_confirmation_state = state
-                    self.last_settings.update({"dispatch_confirmation_state":state,
-                                               "dispatch_confirmation_signal":"activation_transport_uncertain" if state == "UNCERTAIN" else "input_not_dispatched",
-                                               "provider_job_id":None})
+                    self.last_settings.update({
+                        "dispatch_confirmation_state": state,
+                        "dispatch_confirmation_signal": "activation_transport_uncertain" if uncertain else "input_not_dispatched",
+                        "provider_job_id": None,
+                        "attribution_state": "NOT_ATTEMPTED",
+                    })
                     raise
+
             self.last_settings.update(submit)
             activation = submit["activation"]
-            tracker = DispatchEvidenceTracker()
-            tracker.observe(input_dispatched=bool(activation.get("input_dispatched")),
-                            trusted_click_seen=bool(activation.get("trusted_click_seen")))
-            self.dispatch_confirmation_state = tracker.state
-            self.last_settings.update({"dispatch_confirmation_state":tracker.state,
-                                       "dispatch_confirmation_signal":tracker.signal,
-                                       "provider_job_id":None})
+            dispatch = DispatchEvidenceTracker()
+            dispatch.observe(
+                input_dispatched=bool(activation.get("input_dispatched")),
+                trusted_click_seen=bool(activation.get("trusted_click_seen")),
+            )
+            attribution = RequestAttributionTracker(
+                baseline_records, media_type=request["media_type"],
+                expected_count=resolved.output_count,
+            )
+            self.last_settings.update({
+                "dispatch_confirmation_state": dispatch.state,
+                "dispatch_confirmation_signal": dispatch.signal,
+                "provider_job_id": None,
+                "attribution_state": "PENDING",
+            })
             reference_hashes = []
             if request["media_type"] == "IMAGE":
                 for reference in references:
-                    try: reference_hashes.append(validate_image(Path(reference))["dhash256"])
-                    except Exception: pass
-            deadline=time.monotonic()+self.timeout_seconds
-            while time.monotonic()<deadline:
+                    try:
+                        reference_hashes.append(validate_image(Path(reference))["dhash256"])
+                    except Exception:
+                        pass
+
+            deadline = time.monotonic() + self.timeout_seconds
+            while time.monotonic() < deadline:
                 states = page.evaluate(_EDITOR_JS) or []
-                prompt_transition = len(states) == 0 or all(item.get("text", "") != request["prompt"] for item in states)
+                prompt_transition = len(states) == 0 or all(
+                    item.get("text", "") != request["prompt"] for item in states
+                )
                 if prompt_transition:
                     self.last_settings["composer_transition_seen"] = True
-                    tracker.observe(input_dispatched=bool(activation.get("input_dispatched")),
-                                    trusted_click_seen=bool(activation.get("trusted_click_seen")),
-                                    prompt_transition=True)
-                pool = dom.media_candidate_records()
-                pool = records_for_media(pool, request["media_type"])
-                added=[item for item in pool if item["key"] not in before_output]
-                self.last_settings["last_observed_media_candidate_count"] = len(pool)
-                self.last_settings["last_added_candidate_count"] = len(added)
-                if len(added)>resolved.output_count and request["media_type"] == "IMAGE":
-                    group=dom.newest_exact_image_group(resolved.output_count)
-                    if group and all(url not in before_output for url in group):
-                        added=[{"key":url,"url":url,"kind":"IMG"} for url in group]
-                        self.last_settings["attribution_method"]="newest_exact_count_group_after_confirmed_dispatch"
-                if len(added)==resolved.output_count:
-                    self.last_settings["observed_output_count"] = len(added)
-                    self.last_settings["selected_candidate_index"] = 0
-                    payload=page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(added[0]["url"]))
-                    if not isinstance(payload,dict) or not isinstance(payload.get("data"),str): raise FlowError("ASSET_ACQUISITION_FAILED")
-                    atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True))
+                    dispatch.observe(
+                        input_dispatched=bool(activation.get("input_dispatched")),
+                        trusted_click_seen=bool(activation.get("trusted_click_seen")),
+                        prompt_transition=True,
+                    )
+                surface = dom.provider_surface()
+                current = surface.get("records", []) if isinstance(surface, dict) else []
+                observation = attribution.observe(
+                    current, provider_busy=bool(int((surface or {}).get("global_pending_count", 0)))
+                )
+                self._record_observation(observation)
+                if observation.lineage_card_id and dispatch.state != "CONFIRMED":
+                    dispatch.observe(input_dispatched=True, attributable_job=True)
+                self.dispatch_confirmed = dispatch.state == "CONFIRMED"
+                self.dispatch_confirmation_state = dispatch.state
+                self.last_settings.update({
+                    "dispatch_confirmation_state": dispatch.state,
+                    "dispatch_confirmation_signal": dispatch.signal,
+                    "dispatch_ack_method": dispatch.signal,
+                })
+                if observation.state == "AMBIGUOUS":
+                    echoes = self._reference_echoes(page, current, observation, reference_hashes)
+                    if echoes:
+                        baseline_records = _merge_surface_records(baseline_records, echoes)
+                        self.last_settings.setdefault("quarantined_foreign_identities", []).extend(
+                            evidence_identity(item) for item in echoes
+                        )
+                        attribution = RequestAttributionTracker(
+                            baseline_records, media_type=request["media_type"],
+                            expected_count=resolved.output_count,
+                        )
+                        time.sleep(.5)
+                        continue
+                    self.last_settings["attribution_state"] = "AMBIGUOUS"
+                    raise FlowError(
+                        "OUTPUT_ATTRIBUTION_AMBIGUOUS",
+                        "multiple unseen provider candidates had no unique request lineage",
+                    )
+                if observation.state == "CONFIRMED" and observation.candidate:
+                    candidate = observation.candidate
+                    data = self._fetch_bytes(page, candidate["url"])
                     if request["media_type"] == "IMAGE" and reference_hashes:
-                        candidate_hash = validate_image(destination)["dhash256"]
+                        candidate_hash = _dhash_bytes(data)
                         if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
                                for reference_hash in reference_hashes):
-                            before_output.add(added[0]["key"])
-                            self.last_settings["filtered_reference_echo_count"] = self.last_settings.get("filtered_reference_echo_count", 0) + 1
-                            time.sleep(2); continue
-                    tracker.observe(input_dispatched=True, attributable_output=True)
+                            quarantined = evidence_identity(candidate)
+                            self.last_settings.setdefault("quarantined_foreign_identities", []).append(quarantined)
+                            baseline_records = _merge_surface_records(baseline_records, [candidate])
+                            attribution = RequestAttributionTracker(
+                                baseline_records, media_type=request["media_type"],
+                                expected_count=resolved.output_count,
+                            )
+                            time.sleep(.5)
+                            continue
+                    dispatch.observe(input_dispatched=True, attributable_output=True)
                     self.dispatch_confirmed = True
-                    self.dispatch_confirmation_state = tracker.state
-                    self.last_settings.update({"dispatch_confirmation_state":tracker.state,
-                                               "dispatch_confirmation_signal":tracker.signal,
-                                               "dispatch_ack_method":tracker.signal})
+                    self.dispatch_confirmation_state = dispatch.state
+                    self.last_settings.update({
+                        "dispatch_confirmation_state": dispatch.state,
+                        "dispatch_confirmation_signal": dispatch.signal,
+                        "dispatch_ack_method": dispatch.signal,
+                        "attribution_state": "CONFIRMED",
+                        "attributed_provider_identity": evidence_identity(candidate),
+                        "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    atomic_write_bytes(destination, data)
                     return destination
-                if len(added)>resolved.output_count:
-                    # Lazy-loaded historical media can appear after the
-                    # dispatch baseline. Wait for the newest exact-count group
-                    # instead of binding an arbitrary added candidate.
-                    time.sleep(2); continue
-                time.sleep(2)
-            self.dispatch_confirmation_state = tracker.state
-            self.last_settings.update({"dispatch_confirmation_state":tracker.state,
-                                       "dispatch_confirmation_signal":tracker.signal})
-            if tracker.state == "PRE_DISPATCH_FAILURE":
+                time.sleep(.5)
+
+            self.dispatch_confirmation_state = dispatch.state
+            self.last_settings.update({
+                "dispatch_confirmation_state": dispatch.state,
+                "dispatch_confirmation_signal": dispatch.signal,
+            })
+            if dispatch.state == "PRE_DISPATCH_FAILURE":
                 raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "no Generate input was dispatched")
+            if dispatch.state == "CONFIRMED":
+                self.last_settings["attribution_state"] = "UNCERTAIN"
+                raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN", "dispatch was confirmed but no unique stable output lineage completed")
             raise FlowError("FLOW_DISPATCH_UNCERTAIN", "activation occurred but no attributable Flow job or output was proven")
-        finally: page.close()
+        finally:
+            page.close()
+
+    def reconcile(self, request, attempt: dict, destination: Path) -> dict:
+        """Inspect a prior request baseline without another activation."""
+        settings = attempt.get("provider_settings", {}) if isinstance(attempt, dict) else {}
+        baseline = settings.get("baseline_provider_identities") if isinstance(settings, dict) else None
+        history = request.get("_flow_provider_identity_history", [])
+        if isinstance(history, list):
+            baseline = _merge_surface_records(baseline if isinstance(baseline, list) else [], history)
+        if not isinstance(baseline, list) or not baseline:
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"}}
+        page = CdpPage.open(self.runtime)
+        try:
+            dom = FlowBrowserDom(page)
+            tracker = RequestAttributionTracker(
+                baseline, media_type=request["media_type"],
+                expected_count=int(request.get("output_count", 1)),
+            )
+            reference_hashes = []
+            if request["media_type"] == "IMAGE":
+                for reference in request.get("_flow_reference_paths", []):
+                    try:
+                        reference_hashes.append(validate_image(Path(reference))["dhash256"])
+                    except Exception:
+                        pass
+            deadline = time.monotonic() + 12.0
+            last = None
+            while time.monotonic() < deadline:
+                surface = dom.provider_surface()
+                records = surface.get("records", []) if isinstance(surface, dict) else []
+                busy = bool(int((surface or {}).get("global_pending_count", 0)))
+                last = tracker.observe(
+                    records, provider_busy=busy
+                )
+                if last.state == "AMBIGUOUS":
+                    echoes = self._reference_echoes(page, records, last, reference_hashes)
+                    if echoes:
+                        baseline = _merge_surface_records(baseline, echoes)
+                        tracker = RequestAttributionTracker(
+                            baseline, media_type=request["media_type"],
+                            expected_count=int(request.get("output_count", 1)),
+                        )
+                        time.sleep(.5)
+                        continue
+                    return {"state": "REMAINS_AMBIGUOUS", "evidence": {
+                        "reason": "OUTPUT_ATTRIBUTION_AMBIGUOUS",
+                        "candidate_delta_count": last.candidate_delta_count,
+                        "candidate_identities": last.candidate_identities,
+                    }}
+                if last.state == "CONFIRMED" and last.candidate:
+                    data = self._fetch_bytes(page, last.candidate["url"])
+                    atomic_write_bytes(destination, data)
+                    evidence = {
+                        "attribution_state": "CONFIRMED",
+                        "attribution_method": last.method,
+                        "attribution_method_version": ATTRIBUTION_METHOD_VERSION,
+                        "attributed_provider_identity": evidence_identity(last.candidate),
+                        "candidate_delta_count": last.candidate_delta_count,
+                        "candidate_identities": last.candidate_identities,
+                        "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
+                        "pre_dispatch_baseline_fingerprint": settings.get("pre_dispatch_baseline_fingerprint"),
+                        "baseline_provider_identities": [evidence_identity(item) for item in baseline],
+                        "dispatch_confirmation_state": "CONFIRMED",
+                        "dispatch_confirmation_signal": "reconciled_provider_tile_lineage",
+                    }
+                    return {"state": "CONFIRMED_OUTPUT", "path": str(destination), "evidence": evidence}
+                if last.lineage_card_id and last.state == "WAITING":
+                    return {"state": "CONFIRMED_DISPATCH", "evidence": {
+                        "provider_lineage_card_id": last.lineage_card_id,
+                        "candidate_delta_count": last.candidate_delta_count,
+                        "candidate_identities": last.candidate_identities,
+                    }}
+                time.sleep(.5)
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {
+                "reason": "NO_UNIQUE_PROVIDER_DELTA",
+                "candidate_delta_count": last.candidate_delta_count if last else 0,
+                "candidate_identities": last.candidate_identities if last else [],
+            }}
+        finally:
+            page.close()
 
 
-def download_latest_image_group_candidate(runtime, destination: Path, *, expected_count: int) -> Path:
-    """Acquire one candidate from the newest exact-count Flow image group.
-
-    This is reconciliation only: it never enters a prompt or presses Generate.
-    The caller remains responsible for binding human/operator attribution to the
-    ambiguous dispatched attempt before adopting the bytes.
-    """
-    if expected_count < 1:
-        raise FlowError("FLOW_RESULT_AMBIGUOUS", "invalid expected output count")
+def download_provider_asset_candidate(runtime, destination: Path, *, provider_asset_id: str) -> Path:
+    """Download one operator-specified provider asset identity without dispatch."""
+    if not isinstance(provider_asset_id, str) or not provider_asset_id.strip():
+        raise FlowError("FLOW_RESULT_AMBIGUOUS", "exact provider asset identity is required")
     page = CdpPage.open(runtime)
     try:
-        groups = page.evaluate("""(()=>{const expected=%d;const valid=e=>{const u=e.currentSrc||e.src||e.getAttribute('src');return e.tagName==='IMG'&&e.naturalWidth>=512&&typeof u==='string'&&u&&!u.startsWith('data:')};const images=Array.from(document.querySelectorAll('img')).filter(valid),out=[];for(const image of images){let p=image.parentElement,group=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('img')).filter(valid);if(xs.length===expected){group=xs.map(e=>e.currentSrc||e.src||e.getAttribute('src'));break}if(xs.length>expected)break;p=p.parentElement}if(group&&!out.some(x=>JSON.stringify(x)===JSON.stringify(group)))out.push(group)}return out})()""" % expected_count) or []
-        # Flow prepends the newest result group to the project media grid.
-        if not groups or not isinstance(groups[0], list) or len(groups[0]) != expected_count:
-            raise FlowError("FLOW_RESULT_AMBIGUOUS", "no newest exact-count image group")
-        candidate = groups[0][0]
-        payload = page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)throw Error('fetch');const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return {data:btoa(s),type:r.headers.get('content-type')||''}})()""" % __import__('json').dumps(candidate))
-        if not isinstance(payload, dict) or not isinstance(payload.get("data"), str):
-            raise FlowError("ASSET_ACQUISITION_FAILED")
-        atomic_write_bytes(destination, base64.b64decode(payload["data"], validate=True))
+        surface = FlowBrowserDom(page).provider_surface()
+        matches = [
+            record for record in surface.get("records", [])
+            if record.get("asset_id") == provider_asset_id and record.get("state") == "READY"
+        ]
+        if len(matches) != 1:
+            raise FlowError("FLOW_RESULT_AMBIGUOUS", "provider asset identity did not resolve uniquely")
+        atomic_write_bytes(destination, LiveFlowGenerator._fetch_bytes(page, matches[0]["url"]))
         return destination
     finally:
         page.close()

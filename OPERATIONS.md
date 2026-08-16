@@ -103,7 +103,13 @@ Large batches are operator-confirmed. Full-video batch generation is always conf
 
 - Planning/checkpoint state is project-local and atomic.
 - Provider attempts are manifest-backed and not overwritten.
-- Resume reconciles ambiguous provider outcomes before re-submit.
+- Resume reconciles the earliest unresolved Flow dispatch/output attribution
+  before any new activation. If provider-visible evidence remains ambiguous,
+  the entire serial project queue stays halted; do not click Generate again.
+- A Flow activation requires a stable pre-dispatch tile/asset baseline.
+  Dispatch confirmation does not confirm an asset. Only one stable,
+  request-specific provider delta may be downloaded and selected; multiple
+  unseen candidates require reconciliation, never newest-card selection.
 - Composition writes to temporary outputs and atomically publishes only validated final artifacts where practical.
 
 Render recovery expectations are executable behavior:
