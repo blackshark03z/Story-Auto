@@ -31,6 +31,8 @@ UNRESOLVED_FLOW_FAILURES = {
     "FLOW_TIMEOUT",
     "FLOW_RESULT_AMBIGUOUS",
     "FLOW_DISPATCH_UNCERTAIN",
+    "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED",
+    "FLOW_POLL_EVIDENCE_INVALID",
     "OUTPUT_ATTRIBUTION_UNCERTAIN",
     "OUTPUT_ATTRIBUTION_AMBIGUOUS",
 }
@@ -106,6 +108,13 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "attribution_confirmation_timestamp": settings.get("attribution_confirmation_timestamp"),
         "poll_evidence_version": settings.get("poll_evidence_version"),
         "provider_surface_extractor_version": settings.get("provider_surface_extractor_version"),
+        "provider_poll_evidence": settings.get("provider_poll_evidence"),
+        "provider_poll_max_observations": settings.get("provider_poll_max_observations"),
+        "provider_poll_max_identities_per_observation": settings.get("provider_poll_max_identities_per_observation"),
+        "provider_poll_max_candidates_per_observation": settings.get("provider_poll_max_candidates_per_observation"),
+        "provider_poll_max_quarantined_per_observation": settings.get("provider_poll_max_quarantined_per_observation"),
+        "provider_poll_max_serialized_bytes": settings.get("provider_poll_max_serialized_bytes"),
+        "provider_poll_evidence_complete": settings.get("provider_poll_evidence_complete"),
         "provider_poll_observation_count": settings.get("provider_poll_observation_count"),
         "provider_poll_timeline_sha256": settings.get("provider_poll_timeline_sha256"),
         "provider_poll_timeline_complete": settings.get("provider_poll_timeline_complete"),
@@ -1319,6 +1328,18 @@ def _provider_identity_history(manifest: dict, *, exclude_request_id: str | None
 def _confirm_executor_attribution(attempt: dict, generator: Any) -> None:
     """Require explicit live provenance; fixture adapters get an exact-return seam."""
     settings = getattr(generator, "last_settings", None)
+    if isinstance(settings, dict) and isinstance(settings.get("provider_poll_evidence"), dict):
+        # Import lazily to avoid the module-level service/live dependency cycle.
+        from .live import ProviderPollEvidenceTimeline
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(settings["provider_poll_evidence"])
+        if not verified.get("evidence_complete"):
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED")
+        observations = verified.get("observations", [])
+        final_observation = observations[-1] if observations else {}
+        if (not isinstance(final_observation, dict)
+                or settings.get("attribution_state") != final_observation.get("attribution_evidence_state")
+                or settings.get("dispatch_confirmation_state") != final_observation.get("dispatch_evidence_state")):
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "live attribution state is not bound to verified evidence")
     if settings is None:
         confirmed_at = _now()
         attempt.update({

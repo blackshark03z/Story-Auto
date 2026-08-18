@@ -256,6 +256,42 @@ artifacts and the immutable `.buildos` generation/evidence chain.
 - Severity/priority: `CRITICAL / P0`.
 - Status: `CONTROL_WORKED_GOAL20_RECOVERY_CANDIDATE_ADDED`.
 
+## Case 12 — a written hash chain is not an integrity control until verified
+
+- Origin: Goal 20 external R3 review of commit
+  `f406748fc9c79825327ec3a7fdd47627b0fcdcc8`.
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified symptom: poll observations carried per-record and timeline SHA-256
+  values, but no canonical reader verified the persisted chain before a
+  reconciliation or recovery could reuse its evidence.
+- Root cause status: verified by external R3 review.
+- Control added: the writer and reader now share one canonical serialization
+  and verifier; payload mutation, sequence change, middle deletion, reorder,
+  duplication, broken previous link, and incorrect timeline head fail closed.
+- Reusable recommendation: every declared integrity invariant must name its
+  implementation, verifier/enforcement call site, and regression proof.
+- Severity/priority: `CRITICAL / P0`.
+- Status: `GOAL20_R3_CORRECTIVE_CANDIDATE_AWAITING_EXTERNAL_R3`.
+
+## Case 13 — bounding poll count alone does not bound evidence storage
+
+- Origin: Goal 20 external R3 review of commit
+  `f406748fc9c79825327ec3a7fdd47627b0fcdcc8`.
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified symptom: `MAX_POLL_OBSERVATIONS` limited timeline length, while
+  per-poll identity/candidate collections and total serialized bytes remained
+  unbounded.
+- Root cause status: verified by external R3 review.
+- Control added: explicit provider-identity, candidate, quarantine, and total
+  byte limits. An excess writes only a bounded count/limit/full-set-hash
+  summary, marks evidence incomplete, and fails closed before dispatch or
+  attribution confirmation.
+- Reusable recommendation: R3 review must distinguish declared invariant,
+  implementation, verifier/enforcement, and regression proof; collection and
+  byte bounds need all four.
+- Severity/priority: `CRITICAL / P0`.
+- Status: `GOAL20_R3_CORRECTIVE_CANDIDATE_AWAITING_EXTERNAL_R3`.
+
 ## Upgrade backlog summary
 
 1. `P0`: retain R3 positive-control independence and add structured
@@ -266,4 +302,6 @@ artifacts and the immutable `.buildos` generation/evidence chain.
 4. `P1`: standardize production handoff glossary and resume safety levels.
 5. `P2`: expose canonical package identity in normal status and document
    independent-review route discovery.
-
+6. `P0`: require a canonical verifier for every persisted integrity chain.
+7. `P0`: evaluate count, per-observation collection, and serialized-byte bounds
+   together for production evidence contracts.

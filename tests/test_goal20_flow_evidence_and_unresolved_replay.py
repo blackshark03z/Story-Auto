@@ -28,6 +28,99 @@ from story_auto.providers.flow.session import FlowCapabilities
 
 
 class Goal20PollEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def _complete_snapshot() -> dict:
+        timeline = ProviderPollEvidenceTimeline(max_observations=8)
+        for phase in ("BASELINE", "POST_DISPATCH", "FINAL"):
+            timeline.append({"phase": phase, "current_identity_set": [{"identity": f"asset:{phase}"}]})
+        timeline.finish("COMPLETE")
+        return timeline.snapshot()
+
+    def test_persisted_hash_chain_verifier_rejects_each_required_corruption(self):
+        mutations = {
+            "modified_payload": lambda value: value["observations"][1].update({"phase": "MUTATED"}),
+            "changed_sequence": lambda value: value["observations"][1].update({"poll_sequence": 99}),
+            "deleted_middle": lambda value: value["observations"].pop(1),
+            "reordered": lambda value: value["observations"].__setitem__(slice(0, 2), [value["observations"][1], value["observations"][0]]),
+            "duplicated": lambda value: value["observations"].append(copy.deepcopy(value["observations"][1])),
+            "broken_previous_hash": lambda value: value["observations"][2].update({"previous_observation_sha256": "0" * 64}),
+            "incorrect_timeline_head": lambda value: value.update({"timeline_sha256": "0" * 64}),
+            "incorrect_terminal_head": lambda value: value.update({"terminal_state": "MUTATED"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                corrupted = copy.deepcopy(self._complete_snapshot())
+                mutate(corrupted)
+                with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_INVALID"):
+                    ProviderPollEvidenceTimeline.verify_snapshot(corrupted)
+
+    def test_normal_thirty_identity_surface_is_bounded_and_verifiable(self):
+        identities = [{"identity": f"asset:{index:03d}"} for index in range(30)]
+        timeline = ProviderPollEvidenceTimeline()
+        timeline.append({
+            "phase": "BASELINE", "baseline_identity_set": identities,
+            "current_identity_set": identities, "identity_delta": [],
+            "candidate_identities": [], "quarantined_identities": [],
+        })
+        timeline.finish("COMPLETE")
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(timeline.snapshot())
+        self.assertTrue(verified["evidence_complete"])
+
+    def test_collection_and_byte_overflow_persist_bounded_incomplete_summary(self):
+        cases = {
+            "provider": ("current_identity_set", [{"identity": f"asset:{index}"} for index in range(3)],
+                         {"max_provider_identities": 2}, 2),
+            "candidate": ("candidate_identities", [{"identity": f"asset:{index}"} for index in range(3)],
+                          {"max_candidate_identities": 2}, 2),
+            "quarantine": ("quarantined_identities", [{"identity": f"asset:{index}"} for index in range(3)],
+                           {"max_quarantined_identities": 2}, 2),
+            "bytes": ("current_identity_set", [{"identity": "asset:" + ("x" * 240) + str(index)} for index in range(30)],
+                      {"max_provider_identities": 64, "max_serialized_bytes": 9000}, 9000),
+        }
+        for name, (field, values, limits, expected_limit) in cases.items():
+            with self.subTest(name=name):
+                timeline = ProviderPollEvidenceTimeline(max_observations=8, **limits)
+                with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED"):
+                    timeline.append({"phase": "POST_DISPATCH", field: values})
+                snapshot = timeline.snapshot()
+                self.assertFalse(snapshot["evidence_complete"])
+                self.assertEqual(len(snapshot["observations"]), 1)
+                summary = snapshot["observations"][0]["overflow"][0]
+                self.assertLessEqual(len(snapshot["observations"][0]["overflow"]), 7)
+                self.assertEqual(summary["configured_limit"], expected_limit)
+                ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+
+    def test_overflow_cannot_confirm_dispatch_or_attribution(self):
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        generator._poll_timeline = ProviderPollEvidenceTimeline(max_provider_identities=2)
+        generator.last_settings = {}
+        records = [
+            {"card_id": f"card-{index}", "asset_id": f"asset-{index}", "media_type": "IMAGE", "state": "READY"}
+            for index in range(3)
+        ]
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        observation = tracker.observe(records)
+        dispatch = DispatchEvidenceTracker()
+        with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED"):
+            generator._record_poll(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=records,
+                surface={"records": records, "global_pending_count": 0},
+                stable_polls=observation.stable_polls, observation=observation,
+                dispatch=dispatch, activation={"input_dispatched": True},
+            )
+        self.assertNotEqual(dispatch.state, "CONFIRMED")
+        self.assertFalse(generator._poll_timeline.snapshot()["evidence_complete"])
+
+    def test_reconciliation_rejects_invalid_persisted_evidence_before_browser_access(self):
+        corrupted = self._complete_snapshot()
+        corrupted["observations"][0]["phase"] = "MUTATED"
+        result = LiveFlowGenerator(None).reconcile(
+            {"media_type": "IMAGE", "output_count": 1},
+            {"provider_settings": {"provider_poll_evidence": corrupted}},
+            Path("unused.png"),
+        )
+        self.assertEqual(result, {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}})
+
     def test_quiescent_baseline_records_the_terminal_stable_poll(self):
         records = [{"card_id": "old-card", "asset_id": "old-asset", "media_type": "IMAGE", "state": "READY"}]
 
@@ -337,6 +430,73 @@ class Goal20UnresolvedReplayTests(unittest.TestCase):
             with self.assertRaisesRegex(FlowError, "UNRESOLVED_REPLAY_RECOVERY_INVALID"):
                 execute_generation(runtime.root, config.project_id, executor=executor, execute=True, request_ids=set())
             self.assertEqual(calls, [])
+
+    def test_overflow_failure_cannot_create_selected_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"][0].update({"status": "PENDING", "failure_class": None, "attempts": []})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            timeline = ProviderPollEvidenceTimeline(max_provider_identities=2)
+            with self.assertRaises(FlowError):
+                timeline.append({"phase": "POST_DISPATCH", "current_identity_set": [
+                    {"identity": "asset:one"}, {"identity": "asset:two"}, {"identity": "asset:three"},
+                ]})
+
+            class OverflowGenerator:
+                dispatch_confirmed = False
+                last_settings = {
+                    "provider_poll_evidence": timeline.snapshot(),
+                    "provider_poll_evidence_complete": False,
+                    "attribution_state": "UNCERTAIN",
+                }
+                def __call__(self, *_args):
+                    raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED")
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), OverflowGenerator()),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertTrue(result["blocked"])
+            self.assertEqual(entry["status"], "AMBIGUOUS")
+            self.assertNotIn("selected_asset", entry)
+
+    def test_invalid_persisted_evidence_cannot_finalize_selected_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"][0].update({"status": "PENDING", "failure_class": None, "attempts": []})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            timeline = ProviderPollEvidenceTimeline()
+            timeline.append({"phase": "POST_DISPATCH"})
+            timeline.finish("CONFIRMED_OUTPUT")
+            corrupted = timeline.snapshot()
+            corrupted["observations"][0]["phase"] = "MUTATED"
+
+            class InvalidEvidenceGenerator:
+                dispatch_confirmed = True
+                last_settings = {
+                    "provider_poll_evidence": corrupted,
+                    "provider_poll_evidence_complete": True,
+                    "attribution_state": "CONFIRMED",
+                    "attribution_method": "fixture",
+                    "attributed_provider_identity": {"identity": "fixture:output"},
+                }
+                def __call__(self, _request, _refs, destination):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+                    return destination
+
+            execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), InvalidEvidenceGenerator()),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(entry["status"], "AMBIGUOUS")
+            self.assertNotIn("selected_asset", entry)
 
 
 if __name__ == "__main__":

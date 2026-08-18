@@ -39,8 +39,17 @@ _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
 PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.0.0"
-POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.0.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.1.0"
 MAX_POLL_OBSERVATIONS = 2048
+MAX_PROVIDER_IDENTITIES_PER_POLL = 256
+MAX_CANDIDATE_IDENTITIES_PER_POLL = 64
+MAX_QUARANTINED_IDENTITIES_PER_POLL = 64
+MAX_POLL_EVIDENCE_BYTES = 16 * 1024 * 1024
+POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES = 4096
+_PROVIDER_IDENTITY_FIELDS = {
+    "baseline_identity_set", "current_identity_set", "identity_delta",
+    "job_card_identities_observed", "output_asset_identities_observed",
+}
 
 def records_for_media(records, media_type: str):
     if any("media_type" in item for item in records):
@@ -83,20 +92,59 @@ def _identity_projection(records: list[dict], media_type: str) -> list[dict]:
 
 
 class ProviderPollEvidenceTimeline:
-    """Bounded, hash-chained poll evidence persisted after every observation."""
+    """Bounded, hash-chained poll evidence persisted after every observation.
 
-    def __init__(self, path: Path | None = None, *, max_observations: int = MAX_POLL_OBSERVATIONS):
-        if max_observations < 1:
-            raise ValueError("poll evidence bound must be positive")
+    The same canonical JSON hash is used by the writer and verifier.  A bounded
+    overflow observation is durable evidence of incompleteness; it never leaves
+    a partially truncated observation eligible for a decision.
+    """
+
+    def __init__(self, path: Path | None = None, *,
+                 max_observations: int = MAX_POLL_OBSERVATIONS,
+                 max_provider_identities: int = MAX_PROVIDER_IDENTITIES_PER_POLL,
+                 max_candidate_identities: int = MAX_CANDIDATE_IDENTITIES_PER_POLL,
+                 max_quarantined_identities: int = MAX_QUARANTINED_IDENTITIES_PER_POLL,
+                 max_serialized_bytes: int = MAX_POLL_EVIDENCE_BYTES):
+        if (max_observations < 1 or max_provider_identities < 1
+                or max_candidate_identities < 1 or max_quarantined_identities < 1
+                or max_serialized_bytes <= POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES):
+            raise ValueError("poll evidence bounds must be positive and retain overflow reserve")
         self.path = path
         self.max_observations = max_observations
+        self.max_provider_identities = max_provider_identities
+        self.max_candidate_identities = max_candidate_identities
+        self.max_quarantined_identities = max_quarantined_identities
+        self.max_serialized_bytes = max_serialized_bytes
         self.observations: list[dict] = []
         self.complete = False
+        self.evidence_complete = True
         self.terminal_state: str | None = None
 
     def append(self, value: dict) -> dict:
         if self.complete or len(self.observations) >= self.max_observations:
             raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "provider poll evidence bound reached")
+        overflow = self._collection_overflow(value)
+        observation = self._observation(value if not overflow else self._overflow_observation(value, overflow))
+        if not overflow and self._serialized_size_for(observation) > (
+                self.max_serialized_bytes - POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES):
+            overflow = [{
+                "field": "serialized_timeline_bytes",
+                "observed_count": self._serialized_size_for(observation),
+                "configured_limit": self.max_serialized_bytes,
+                "full_set_sha256": _json_sha256(observation),
+            }]
+            observation = self._observation(self._overflow_observation(value, overflow))
+        if self._serialized_size_for(observation) > self.max_serialized_bytes:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "bounded overflow summary cannot fit")
+        if overflow:
+            self.evidence_complete = False
+        self.observations.append(observation)
+        self._persist()
+        if overflow:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "provider poll evidence is incomplete")
+        return observation
+
+    def _observation(self, value: dict) -> dict:
         observation = dict(value)
         observation.update({
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -108,26 +156,167 @@ class ProviderPollEvidenceTimeline:
             ),
         })
         observation["observation_sha256"] = _json_sha256(observation)
-        self.observations.append(observation)
-        self._persist()
         return observation
+
+    def _collection_overflow(self, value: dict) -> list[dict]:
+        limits = {
+            **{field: self.max_provider_identities for field in _PROVIDER_IDENTITY_FIELDS},
+            "candidate_identities": self.max_candidate_identities,
+            "quarantined_identities": self.max_quarantined_identities,
+        }
+        overflow = []
+        for field, limit in limits.items():
+            values = value.get(field, [])
+            if isinstance(values, list) and len(values) > limit:
+                overflow.append({
+                    "field": field,
+                    "observed_count": len(values),
+                    "configured_limit": limit,
+                    "full_set_sha256": _json_sha256(values),
+                })
+        return overflow
+
+    def _overflow_observation(self, value: dict, overflow: list[dict]) -> dict:
+        # Keep only scalar decision context.  Full collections are intentionally
+        # not truncated into something that could look complete.
+        safe = {
+            key: value.get(key) for key in (
+                "phase", "provider_surface_fingerprint", "baseline_surface_fingerprint",
+                "candidate_classification", "stable_poll_count", "provider_busy",
+                "dispatch_evidence_state", "dispatch_evidence_signal",
+                "dispatch_signal_state", "durable_dispatch_identity",
+                "attribution_evidence_state", "lineage_card_id", "input_dispatched",
+            )
+        }
+        safe.update({"evidence_complete": False, "overflow": overflow})
+        return safe
+
+    def _serialized_size_for(self, observation: dict) -> int:
+        snapshot = self.snapshot(observations=[*self.observations, observation])
+        return len(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
     def finish(self, terminal_state: str) -> None:
         self.complete = True
         self.terminal_state = str(terminal_state)
+        if self._serialized_size_for_existing() > self.max_serialized_bytes:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "terminal poll evidence bound reached")
         self._persist()
 
-    def snapshot(self) -> dict:
-        return {
+    def _serialized_size_for_existing(self) -> int:
+        return len(json.dumps(self.snapshot(), ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+
+    def snapshot(self, *, observations: list[dict] | None = None) -> dict:
+        snapshot = {
             "schema_version": POLL_EVIDENCE_VERSION,
             "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
             "max_observations": self.max_observations,
-            "observation_count": len(self.observations),
+            "max_provider_identities_per_poll": self.max_provider_identities,
+            "max_candidate_identities_per_poll": self.max_candidate_identities,
+            "max_quarantined_identities_per_poll": self.max_quarantined_identities,
+            "max_serialized_bytes": self.max_serialized_bytes,
+            "observation_count": len(self.observations if observations is None else observations),
             "complete": self.complete,
+            "evidence_complete": self.evidence_complete,
             "terminal_state": self.terminal_state,
-            "timeline_sha256": _json_sha256(self.observations),
-            "observations": list(self.observations),
+            "timeline_sha256": _json_sha256(self.observations if observations is None else observations),
+            "observations": list(self.observations if observations is None else observations),
         }
+        snapshot["evidence_head_sha256"] = self._head_sha256(snapshot)
+        return snapshot
+
+    @staticmethod
+    def _head_sha256(snapshot: dict) -> str:
+        return _json_sha256({
+            key: snapshot.get(key) for key in (
+                "schema_version", "parser_extractor_version", "max_observations",
+                "max_provider_identities_per_poll", "max_candidate_identities_per_poll",
+                "max_quarantined_identities_per_poll", "max_serialized_bytes",
+                "observation_count", "complete", "evidence_complete", "terminal_state",
+                "timeline_sha256",
+            )
+        })
+
+    @classmethod
+    def verify_snapshot(cls, snapshot: dict) -> dict:
+        """Fail closed unless a persisted timeline is exact and internally coherent."""
+        try:
+            if not isinstance(snapshot, dict) or snapshot.get("schema_version") != POLL_EVIDENCE_VERSION:
+                raise ValueError("schema")
+            if snapshot.get("parser_extractor_version") != PROVIDER_SURFACE_EXTRACTOR_VERSION:
+                raise ValueError("extractor")
+            observations = snapshot.get("observations")
+            if not isinstance(observations, list):
+                raise ValueError("observations")
+            limits = {
+                "max_observations": snapshot.get("max_observations"),
+                "max_provider_identities_per_poll": snapshot.get("max_provider_identities_per_poll"),
+                "max_candidate_identities_per_poll": snapshot.get("max_candidate_identities_per_poll"),
+                "max_quarantined_identities_per_poll": snapshot.get("max_quarantined_identities_per_poll"),
+                "max_serialized_bytes": snapshot.get("max_serialized_bytes"),
+            }
+            if any(not isinstance(value, int) or value < 1 for value in limits.values()):
+                raise ValueError("limits")
+            if (limits["max_observations"] > MAX_POLL_OBSERVATIONS
+                    or limits["max_provider_identities_per_poll"] > MAX_PROVIDER_IDENTITIES_PER_POLL
+                    or limits["max_candidate_identities_per_poll"] > MAX_CANDIDATE_IDENTITIES_PER_POLL
+                    or limits["max_quarantined_identities_per_poll"] > MAX_QUARANTINED_IDENTITIES_PER_POLL
+                    or limits["max_serialized_bytes"] > MAX_POLL_EVIDENCE_BYTES
+                    or limits["max_serialized_bytes"] <= POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES):
+                raise ValueError("limits_outside_supported_range")
+            if len(observations) != snapshot.get("observation_count") or len(observations) > limits["max_observations"]:
+                raise ValueError("count")
+            if not isinstance(snapshot.get("complete"), bool) or not isinstance(snapshot.get("evidence_complete"), bool):
+                raise ValueError("completion")
+            if snapshot.get("timeline_sha256") != _json_sha256(observations):
+                raise ValueError("timeline_hash")
+            if snapshot.get("evidence_head_sha256") != cls._head_sha256(snapshot):
+                raise ValueError("head_hash")
+            previous = None
+            incomplete_seen = False
+            for index, observation in enumerate(observations, start=1):
+                if not isinstance(observation, dict): raise ValueError("observation")
+                stored_hash = observation.get("observation_sha256")
+                unsigned = dict(observation); unsigned.pop("observation_sha256", None)
+                if (not isinstance(stored_hash, str) or _json_sha256(unsigned) != stored_hash
+                        or observation.get("poll_sequence") != index
+                        or observation.get("poll_evidence_version") != POLL_EVIDENCE_VERSION
+                        or observation.get("parser_extractor_version") != PROVIDER_SURFACE_EXTRACTOR_VERSION
+                        or observation.get("previous_observation_sha256") != previous):
+                    raise ValueError("chain")
+                if observation.get("evidence_complete") is False:
+                    overflow = observation.get("overflow")
+                    if not isinstance(overflow, list) or not overflow or len(overflow) > 7:
+                        raise ValueError("overflow")
+                    for summary in overflow:
+                        if (not isinstance(summary, dict)
+                                or not isinstance(summary.get("field"), str)
+                                or not isinstance(summary.get("observed_count"), int)
+                                or summary["observed_count"] < 0
+                                or not isinstance(summary.get("configured_limit"), int)
+                                or summary["configured_limit"] < 1
+                                or not isinstance(summary.get("full_set_sha256"), str)
+                                or len(summary["full_set_sha256"]) != 64):
+                            raise ValueError("overflow_summary")
+                    incomplete_seen = True
+                else:
+                    for field in _PROVIDER_IDENTITY_FIELDS:
+                        if isinstance(observation.get(field), list) and len(observation[field]) > limits["max_provider_identities_per_poll"]:
+                            raise ValueError("provider_bound")
+                    if isinstance(observation.get("candidate_identities"), list) and len(observation["candidate_identities"]) > limits["max_candidate_identities_per_poll"]:
+                        raise ValueError("candidate_bound")
+                    if isinstance(observation.get("quarantined_identities"), list) and len(observation["quarantined_identities"]) > limits["max_quarantined_identities_per_poll"]:
+                        raise ValueError("quarantine_bound")
+                previous = stored_hash
+            if incomplete_seen == snapshot["evidence_complete"]:
+                raise ValueError("completeness")
+            serialized = len(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+            if serialized > limits["max_serialized_bytes"]:
+                raise ValueError("serialized_bound")
+            return snapshot
+        except FlowError:
+            raise
+        except Exception as error:
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "persisted poll evidence failed verification") from error
 
     def _persist(self) -> None:
         if self.path is not None:
@@ -472,9 +661,17 @@ class LiveFlowGenerator:
         if not isinstance(self.last_settings, dict):
             self.last_settings = {}
         snapshot = self._poll_timeline.snapshot()
+        ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
         self.last_settings.update({
+            "provider_poll_evidence": snapshot,
             "poll_evidence_version": POLL_EVIDENCE_VERSION,
             "provider_surface_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "provider_poll_max_observations": snapshot["max_observations"],
+            "provider_poll_max_identities_per_observation": snapshot["max_provider_identities_per_poll"],
+            "provider_poll_max_candidates_per_observation": snapshot["max_candidate_identities_per_poll"],
+            "provider_poll_max_quarantined_per_observation": snapshot["max_quarantined_identities_per_poll"],
+            "provider_poll_max_serialized_bytes": snapshot["max_serialized_bytes"],
+            "provider_poll_evidence_complete": snapshot["evidence_complete"],
             "provider_poll_observation_count": snapshot["observation_count"],
             "provider_poll_timeline_sha256": snapshot["timeline_sha256"],
             "provider_poll_timeline_complete": snapshot["complete"],
@@ -492,6 +689,11 @@ class LiveFlowGenerator:
             key: self.last_settings.get(key)
             for key in (
                 "poll_evidence_version", "provider_surface_extractor_version",
+                "provider_poll_evidence", "provider_poll_max_observations",
+                "provider_poll_max_identities_per_observation",
+                "provider_poll_max_candidates_per_observation",
+                "provider_poll_max_quarantined_per_observation",
+                "provider_poll_max_serialized_bytes", "provider_poll_evidence_complete",
                 "provider_poll_observation_count", "provider_poll_timeline_sha256",
                 "provider_poll_timeline_complete", "provider_poll_terminal_state",
                 "provider_poll_timeline",
@@ -553,6 +755,9 @@ class LiveFlowGenerator:
             "input_dispatched": bool((activation or {}).get("input_dispatched")),
         }
         persisted = self._poll_timeline.append(value)
+        # A dispatch transition may use this poll only after the exact persisted
+        # snapshot verifies under the writer's canonical hash contract.
+        ProviderPollEvidenceTimeline.verify_snapshot(self._poll_timeline.snapshot())
         if dispatch is not None and dispatch.state != "CONFIRMED":
             if durable_output_identity:
                 dispatch.observe(
@@ -573,6 +778,16 @@ class LiveFlowGenerator:
                 )
         self._sync_poll_evidence()
         return persisted
+
+    @staticmethod
+    def _verify_persisted_poll_evidence(settings: dict) -> dict:
+        snapshot = settings.get("provider_poll_evidence")
+        if not isinstance(snapshot, dict):
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "persisted poll evidence is unavailable")
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+        if not verified.get("evidence_complete"):
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "persisted poll evidence is incomplete")
+        return verified
 
     def _record_observation(self, observation) -> None:
         self.last_settings.update({
@@ -873,7 +1088,19 @@ class LiveFlowGenerator:
     def reconcile(self, request, attempt: dict, destination: Path) -> dict:
         """Inspect a prior request baseline without another activation."""
         settings = attempt.get("provider_settings", {}) if isinstance(attempt, dict) else {}
-        baseline = settings.get("baseline_provider_identities") if isinstance(settings, dict) else None
+        if not isinstance(settings, dict):
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
+        try:
+            verified_evidence = self._verify_persisted_poll_evidence(settings)
+        except FlowError as error:
+            # Never reuse a baseline, durable dispatch identity, or attribution
+            # detail from evidence that cannot verify exactly as persisted.
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
+        baseline_observations = [
+            observation for observation in verified_evidence["observations"]
+            if observation.get("phase") == "PRE_DISPATCH_BASELINE"
+        ]
+        baseline = baseline_observations[-1].get("current_identity_set") if baseline_observations else None
         history = request.get("_flow_provider_identity_history", [])
         if isinstance(history, list):
             baseline = _merge_surface_records(baseline if isinstance(baseline, list) else [], history)
@@ -882,7 +1109,13 @@ class LiveFlowGenerator:
         self._reset_poll_evidence(destination.parent / "reconciliation_poll_evidence.json")
         dispatch = DispatchEvidenceTracker()
         activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {"input_dispatched": True}
-        prior_durable_identity = settings.get("durable_dispatch_identity") or attempt.get("provider_job_id")
+        verified_identities = [
+            observation.get("durable_dispatch_identity")
+            for observation in verified_evidence["observations"]
+            if isinstance(observation.get("durable_dispatch_identity"), str)
+            and observation.get("durable_dispatch_identity")
+        ]
+        prior_durable_identity = verified_identities[-1] if verified_identities else None
         if attempt.get("dispatch_confirmed") is True and isinstance(prior_durable_identity, str) and prior_durable_identity:
             dispatch.observe(
                 input_dispatched=True, attributable_job=True,
