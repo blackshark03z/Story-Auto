@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 import hashlib
 import json
 import shutil
@@ -37,6 +37,17 @@ UNRESOLVED_FLOW_FAILURES = {
 UNRESOLVED_FLOW_STATES = {"GENERATING", "AMBIGUOUS"}
 SUPERSEDED_AMBIGUOUS_STATUS = "SUPERSEDED_AMBIGUOUS"
 LEGACY_EVIDENCE_GAP_REASON = "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"
+# This is a deliberately narrow, immutable classification of the one preserved
+# pre-Goal-17 Trial A epoch whose provider baseline was never captured.  It is
+# not inferred from timestamps, gallery order, or an error string.  New
+# requests, including any that reproduce the old error shape, are excluded.
+LEGACY_EPOCH_CLASSIFICATIONS = {
+    ("prj_4f895eb1436c42c4ba5b908381b14fd1", "req_28728acbcab5522b8685"): {
+        "kind": "PRE_GOAL17_FLOW_BASELINE_EVIDENCE_GAP",
+        "authority": "OPERATIONS.md#preserved-trial-a-resume-gate",
+    },
+}
+SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-legacy-supersession-transaction/1.0.0"
 LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_FAILED",
     "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
@@ -104,26 +115,40 @@ def _valid_selected(paths, entry):
     except Exception: return False
 
 
-def _legacy_ambiguous_supersession_eligible(entry: dict | None) -> bool:
+def _json_sha256(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                    separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _legacy_epoch_classification(project_id: str, request_id: str) -> dict | None:
+    value = LEGACY_EPOCH_CLASSIFICATIONS.get((project_id, request_id))
+    return dict(value) if isinstance(value, dict) else None
+
+
+def _legacy_ambiguous_supersession_eligible(project_id: str, request_id: str, entry: dict | None) -> dict | None:
     """Allow a new epoch only for the audited legacy evidence-gap shape.
 
     A normal modern AMBIGUOUS Flow request remains a hard queue barrier.  This
     exception deliberately requires the exact legacy reconciliation conclusion
     that cannot be repaired by another provider inspection.
     """
-    if not isinstance(entry, dict): return False
-    if entry.get("status") != "AMBIGUOUS" or entry.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return False
-    if entry.get("selected_asset") is not None: return False
+    classification = _legacy_epoch_classification(project_id, request_id)
+    if classification is None: return None
+    if not isinstance(entry, dict): return None
+    if entry.get("status") != "AMBIGUOUS" or entry.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return None
+    if entry.get("selected_asset") is not None: return None
     attempts = entry.get("attempts") if isinstance(entry.get("attempts"), list) else []
-    if not attempts: return False
+    if not attempts: return None
     last = attempts[-1]
-    if not isinstance(last, dict) or last.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return False
-    if last.get("dispatch_confirmed") is not False or last.get("provider_job_id") is not None: return False
+    if not isinstance(last, dict) or last.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return None
+    if last.get("dispatch_confirmed") is not False or last.get("provider_job_id") is not None: return None
     events = last.get("reconciliation_events") if isinstance(last.get("reconciliation_events"), list) else []
-    if not events: return False
+    if not events: return None
     latest = events[-1] if isinstance(events[-1], dict) else {}
     evidence = latest.get("evidence") if isinstance(latest.get("evidence"), dict) else {}
-    return latest.get("state") == "REMAINS_AMBIGUOUS" and evidence.get("reason") == LEGACY_EVIDENCE_GAP_REASON
+    if latest.get("state") != "REMAINS_AMBIGUOUS" or evidence.get("reason") != LEGACY_EVIDENCE_GAP_REASON:
+        return None
+    return classification
 
 
 def _replacement_identity(request: dict, *, nonce: str, epoch: int) -> tuple[str, str]:
@@ -153,8 +178,123 @@ def _migrate_request_references(value: Any, old_request_id: str, replacement_req
     return changed
 
 
+def _supersession_directory(paths) -> Path:
+    return paths.artifact_path("output/legacy_supersession_transactions")
+
+
+def _transaction_paths(paths, transaction_id: str) -> tuple[Path, Path]:
+    directory = _supersession_directory(paths)
+    return directory / f"{transaction_id}.prepared.json", directory / f"{transaction_id}.committed.json"
+
+
+def _prepared_transactions(paths, project_id: str) -> list[tuple[Path, dict]]:
+    directory = _supersession_directory(paths)
+    if not directory.is_dir(): return []
+    values = []
+    for path in sorted(directory.glob("*.prepared.json")):
+        try: value = read_json(path)
+        except Exception as error: raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID") from error
+        if not isinstance(value, dict) or value.get("schema_version") != SUPERSESSION_TRANSACTION_SCHEMA:
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        if value.get("project_id") != project_id:
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        values.append((path, value))
+    return values
+
+
+def _transaction_target(transaction: dict, name: str) -> dict | None:
+    value = (transaction.get("targets") or {}).get(name)
+    if value is None: return None
+    if not isinstance(value, dict) or not isinstance(value.get("value"), dict):
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    if value.get("sha256") != _json_sha256(value["value"]):
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    return value
+
+
+def _superseded_entry_valid(entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
+    if entry.get("status") != SUPERSEDED_AMBIGUOUS_STATUS or entry.get("selected_asset") is not None:
+        return False
+    replacement_id = entry.get("replacement_request_id")
+    events = entry.get("supersession_events")
+    if not isinstance(replacement_id, str) or not replacement_id or not isinstance(events, list) or not events:
+        return False
+    event = events[-1] if isinstance(events[-1], dict) else None
+    if not isinstance(event, dict) or event.get("event") != SUPERSEDED_AMBIGUOUS_STATUS:
+        return False
+    if event.get("replacement_request_id") != replacement_id or event.get("prior_dispatch_state") != "UNKNOWN":
+        return False
+    if event.get("prior_attribution_state") != "UNRESOLVED" or event.get("historical_dispatch_unknown_acknowledged") is not True:
+        return False
+    if not isinstance(event.get("legacy_epoch_classification"), dict): return False
+    if event.get("attempts_sha256") != _json_sha256(entry.get("attempts")):
+        return False
+    if event.get("reconciliation_events_sha256") != _json_sha256(entry.get("reconciliation_events")):
+        return False
+    replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
+    replacement_entry = entries.get(replacement_id)
+    return (isinstance(replacement, dict) and replacement.get("replaces_request_id") == entry.get("request_id")
+            and isinstance(replacement_entry, dict) and replacement_entry.get("replaces_request_id") == entry.get("request_id"))
+
+
+def _first_invalid_superseded(entries: dict[str, dict], requests: list[dict]) -> tuple[dict, dict] | None:
+    for entry in entries.values():
+        if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS and not _superseded_entry_valid(entry, requests, entries):
+            return {"request_id": entry.get("request_id")}, entry
+    return None
+
+
+def _publish_supersession_transaction(paths, transaction: dict,
+                                      *, fault_injector: Callable[[str], None] | None = None) -> None:
+    transaction_id = transaction.get("transaction_id")
+    if not isinstance(transaction_id, str) or not transaction_id:
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    prepared_path, committed_path = _transaction_paths(paths, transaction_id)
+    if not prepared_path.is_file():
+        if fault_injector: fault_injector("prepared")
+        atomic_write_json(prepared_path, transaction)
+    elif read_json(prepared_path) != transaction:
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    for name in ("media_plan", "generation_requests", "generation_manifest"):
+        target = _transaction_target(transaction, name)
+        if target is None: continue
+        if fault_injector: fault_injector(name)
+        atomic_write_json(paths.artifact_path(target["path"]), target["value"])
+    receipt = {"schema_version": SUPERSESSION_TRANSACTION_SCHEMA, "state": "COMMITTED",
+               "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+    if not committed_path.is_file():
+        if fault_injector: fault_injector("committed")
+        atomic_write_json(committed_path, receipt)
+    elif read_json(committed_path) != receipt:
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+
+
+def _recover_pending_supersessions(paths, project_id: str) -> dict[str, dict]:
+    recovered: dict[str, dict] = {}
+    for _prepared_path, transaction in _prepared_transactions(paths, project_id):
+        transaction_id = transaction.get("transaction_id")
+        if not isinstance(transaction_id, str): raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        _prepared, committed_path = _transaction_paths(paths, transaction_id)
+        if not committed_path.is_file():
+            _publish_supersession_transaction(paths, transaction)
+        elif read_json(committed_path).get("prepared_sha256") != _json_sha256(transaction):
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        old_request_id = transaction.get("old_request_id")
+        replacement_request_id = transaction.get("replacement_request_id")
+        if not isinstance(old_request_id, str) or not isinstance(replacement_request_id, str):
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        recovered[old_request_id] = {"replacement_request_id": replacement_request_id,
+                                     "transaction_id": transaction_id}
+    return recovered
+
+
+def _target(path: str, value: dict) -> dict:
+    return {"path": path, "value": value, "sha256": _json_sha256(value)}
+
+
 def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, request_id: str, *,
-                                reason: str, acknowledge_historical_dispatch_unknown: bool) -> dict:
+                                reason: str, acknowledge_historical_dispatch_unknown: bool,
+                                _fault_injector: Callable[[str], None] | None = None) -> dict:
     """Abandon one unrecoverable legacy Flow epoch without asserting provider truth.
 
     The old manifest record and its attempts/reconciliations remain immutable;
@@ -165,6 +305,7 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
     if acknowledge_historical_dispatch_unknown is not True: raise FlowError("LEGACY_SUPERSESSION_UNKNOWN_ACK_REQUIRED")
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
+        recovered = _recover_pending_supersessions(paths, project_id)
         manifest_path, manifest = _manifest(paths, project_id)
         requests_path = paths.artifact_path("output/generation_requests.json")
         try: requests_data = read_json(requests_path)
@@ -173,10 +314,17 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
         if not isinstance(requests, list): raise FlowError("LEGACY_SUPERSESSION_INVALID")
         old_request = next((item for item in requests if item.get("request_id") == request_id), None)
         old_entry = next((item for item in manifest.get("requests", []) if item.get("request_id") == request_id), None)
-        if not isinstance(old_request, dict) or not _legacy_ambiguous_supersession_eligible(old_entry):
+        if not isinstance(old_request, dict):
+            completed = recovered.get(request_id)
+            if isinstance(old_entry, dict) and completed and _superseded_entry_valid(old_entry, requests, {item.get("request_id"): item for item in manifest.get("requests", [])}):
+                return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
+                        "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS, "idempotent": True}
+            raise FlowError("LEGACY_SUPERSESSION_ALREADY_SUPERSEDED")
+        classification = _legacy_ambiguous_supersession_eligible(project_id, request_id, old_entry)
+        if classification is None:
             raise FlowError("LEGACY_SUPERSESSION_NOT_ELIGIBLE")
-        old_attempts = old_entry.get("attempts")
-        old_reconciliations = old_entry.get("reconciliation_events")
+        old_attempts_sha256 = _json_sha256(old_entry.get("attempts"))
+        old_reconciliations_sha256 = _json_sha256(old_entry.get("reconciliation_events"))
         nonce = uuid.uuid4().hex
         epoch = int(old_request.get("replacement_epoch", 0)) + 1
         replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
@@ -191,13 +339,13 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
         _migrate_request_references(requests_data, request_id, replacement_id)
         media_plan_path = paths.artifact_path("output/media_plan.json")
         media_plan = read_json(media_plan_path) if media_plan_path.is_file() else None
-        if isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, replacement_id):
-            atomic_write_json(media_plan_path, media_plan)
+        media_plan_changed = isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, replacement_id)
         event = {"at": _now(), "event": SUPERSEDED_AMBIGUOUS_STATUS, "operator_reason": reason.strip(),
                  "old_request_id": request_id, "old_status": old_entry.get("status"),
                  "old_failure_class": old_entry.get("failure_class"), "prior_dispatch_state": "UNKNOWN",
                  "prior_attribution_state": "UNRESOLVED", "replacement_request_id": replacement_id,
-                 "historical_dispatch_unknown_acknowledged": True}
+                 "historical_dispatch_unknown_acknowledged": True, "legacy_epoch_classification": classification,
+                 "attempts_sha256": old_attempts_sha256, "reconciliation_events_sha256": old_reconciliations_sha256}
         old_entry.setdefault("supersession_events", []).append(event)
         old_entry.update({"status": SUPERSEDED_AMBIGUOUS_STATUS,
                           "failure_class": "LEGACY_SUPERSEDED_AMBIGUOUS",
@@ -210,10 +358,19 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
                                      "prompt_sha256": hashlib.sha256(replacement["prompt"].encode("utf-8")).hexdigest(),
                                      "reference_asset_hashes": [], "attempts": [], "status": "PENDING", "created_at": event["at"],
                                      "replaces_request_id": request_id, "replacement_epoch": epoch, "epoch_nonce": nonce})
-        if old_entry.get("attempts") != old_attempts or old_entry.get("reconciliation_events") != old_reconciliations:
+        if (_json_sha256(old_entry.get("attempts")) != old_attempts_sha256
+                or _json_sha256(old_entry.get("reconciliation_events")) != old_reconciliations_sha256):
             raise FlowError("LEGACY_SUPERSESSION_APPEND_ONLY_VIOLATION")
-        atomic_write_json(requests_path, requests_data)
-        atomic_write_json(manifest_path, manifest)
+        transaction_id = "supersession-" + _json_sha256({"project_id": project_id, "old_request_id": request_id,
+                                                          "replacement_request_id": replacement_id})[:24]
+        targets = {"generation_requests": _target("output/generation_requests.json", requests_data),
+                   "generation_manifest": _target("output/generation_manifest.json", manifest)}
+        if media_plan_changed: targets["media_plan"] = _target("output/media_plan.json", media_plan)
+        transaction = {"schema_version": SUPERSESSION_TRANSACTION_SCHEMA, "state": "PREPARED",
+                       "transaction_id": transaction_id, "project_id": project_id,
+                       "old_request_id": request_id, "replacement_request_id": replacement_id,
+                       "targets": targets}
+        _publish_supersession_transaction(paths, transaction, fault_injector=_fault_injector)
         return {"old_request_id": request_id, "replacement_request_id": replacement_id,
                 "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS}
 
@@ -775,6 +932,9 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
 
 
 def _first_unresolved(requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
+    malformed = _first_invalid_superseded(entries, requests)
+    if malformed is not None:
+        return malformed
     for request in requests:
         entry = entries.get(request.get("request_id"))
         if _unresolved_flow_entry(entry):
@@ -1060,9 +1220,17 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     with ProjectLock(paths.runtime, project_id):
+        _recover_pending_supersessions(paths, project_id)
+        requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
+        malformed = _first_invalid_superseded(entries, requests)
+        if malformed is not None:
+            return {"selected": len(selected), "new_submissions": 0, "paused": False,
+                    "blocked": True, "blocked_request_id": malformed[0]["request_id"],
+                    "attention": "FLOW_GENERATION_RECONCILIATION_REQUIRED", "reconciliations": 0,
+                    "manifest": "output/generation_manifest.json"}
         released, blocked_request_id, reconciled = _reconcile_unresolved(
             paths, manifest, requests, entries, executor
         )
