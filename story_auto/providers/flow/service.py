@@ -46,8 +46,18 @@ LEGACY_EPOCH_CLASSIFICATIONS = {
         "kind": "PRE_GOAL17_FLOW_BASELINE_EVIDENCE_GAP",
         "authority": "OPERATIONS.md#preserved-trial-a-resume-gate",
     },
+    ("prj_4f895eb1436c42c4ba5b908381b14fd1", "req_6b755dde5a6e7b5c3295"): {
+        "kind": "PRE_GOAL17_FLOW_BASELINE_EVIDENCE_GAP",
+        "authority": "OPERATIONS.md#preserved-trial-a-resume-gate",
+    },
 }
 SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-legacy-supersession-transaction/1.0.0"
+SUPERSESSION_TARGET_PATHS = {
+    "media_plan": "output/media_plan.json",
+    "generation_requests": "output/generation_requests.json",
+    "generation_manifest": "output/generation_manifest.json",
+}
+REQUIRED_SUPERSESSION_TARGETS = {"generation_requests", "generation_manifest"}
 LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_FAILED",
     "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
@@ -198,22 +208,38 @@ def _prepared_transactions(paths, project_id: str) -> list[tuple[Path, dict]]:
             raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
         if value.get("project_id") != project_id:
             raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        _validate_transaction_targets(value)
         values.append((path, value))
     return values
 
 
+def _validate_transaction_targets(transaction: dict) -> None:
+    targets = transaction.get("targets")
+    if not isinstance(targets, dict):
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    names = set(targets)
+    if not REQUIRED_SUPERSESSION_TARGETS.issubset(names) or not names.issubset(SUPERSESSION_TARGET_PATHS):
+        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    for name, value in targets.items():
+        if not isinstance(value, dict) or value.get("path") != SUPERSESSION_TARGET_PATHS[name]:
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        if not isinstance(value.get("value"), dict) or value.get("sha256") != _json_sha256(value["value"]):
+            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+
+
 def _transaction_target(transaction: dict, name: str) -> dict | None:
-    value = (transaction.get("targets") or {}).get(name)
+    _validate_transaction_targets(transaction)
+    value = transaction["targets"].get(name)
     if value is None: return None
-    if not isinstance(value, dict) or not isinstance(value.get("value"), dict):
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
-    if value.get("sha256") != _json_sha256(value["value"]):
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
     return value
 
 
-def _superseded_entry_valid(entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
+def _superseded_entry_valid(project_id: str, entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
     if entry.get("status") != SUPERSEDED_AMBIGUOUS_STATUS or entry.get("selected_asset") is not None:
+        return False
+    request_id = entry.get("request_id")
+    canonical_classification = _legacy_epoch_classification(project_id, request_id) if isinstance(request_id, str) else None
+    if canonical_classification is None:
         return False
     replacement_id = entry.get("replacement_request_id")
     events = entry.get("supersession_events")
@@ -224,9 +250,11 @@ def _superseded_entry_valid(entry: dict, requests: list[dict], entries: dict[str
         return False
     if event.get("replacement_request_id") != replacement_id or event.get("prior_dispatch_state") != "UNKNOWN":
         return False
+    if event.get("old_request_id") != request_id:
+        return False
     if event.get("prior_attribution_state") != "UNRESOLVED" or event.get("historical_dispatch_unknown_acknowledged") is not True:
         return False
-    if not isinstance(event.get("legacy_epoch_classification"), dict): return False
+    if event.get("legacy_epoch_classification") != canonical_classification: return False
     if event.get("attempts_sha256") != _json_sha256(entry.get("attempts")):
         return False
     if event.get("reconciliation_events_sha256") != _json_sha256(entry.get("reconciliation_events")):
@@ -237,9 +265,9 @@ def _superseded_entry_valid(entry: dict, requests: list[dict], entries: dict[str
             and isinstance(replacement_entry, dict) and replacement_entry.get("replaces_request_id") == entry.get("request_id"))
 
 
-def _first_invalid_superseded(entries: dict[str, dict], requests: list[dict]) -> tuple[dict, dict] | None:
+def _first_invalid_superseded(project_id: str, entries: dict[str, dict], requests: list[dict]) -> tuple[dict, dict] | None:
     for entry in entries.values():
-        if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS and not _superseded_entry_valid(entry, requests, entries):
+        if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS and not _superseded_entry_valid(project_id, entry, requests, entries):
             return {"request_id": entry.get("request_id")}, entry
     return None
 
@@ -249,6 +277,7 @@ def _publish_supersession_transaction(paths, transaction: dict,
     transaction_id = transaction.get("transaction_id")
     if not isinstance(transaction_id, str) or not transaction_id:
         raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+    _validate_transaction_targets(transaction)
     prepared_path, committed_path = _transaction_paths(paths, transaction_id)
     if not prepared_path.is_file():
         if fault_injector: fault_injector("prepared")
@@ -316,7 +345,7 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
         old_entry = next((item for item in manifest.get("requests", []) if item.get("request_id") == request_id), None)
         if not isinstance(old_request, dict):
             completed = recovered.get(request_id)
-            if isinstance(old_entry, dict) and completed and _superseded_entry_valid(old_entry, requests, {item.get("request_id"): item for item in manifest.get("requests", [])}):
+            if isinstance(old_entry, dict) and completed and _superseded_entry_valid(project_id, old_entry, requests, {item.get("request_id"): item for item in manifest.get("requests", [])}):
                 return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
                         "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS, "idempotent": True}
             raise FlowError("LEGACY_SUPERSESSION_ALREADY_SUPERSEDED")
@@ -931,8 +960,8 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
     return isinstance(attempt, dict) and attempt.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
 
 
-def _first_unresolved(requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
-    malformed = _first_invalid_superseded(entries, requests)
+def _first_unresolved(project_id: str, requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
+    malformed = _first_invalid_superseded(project_id, entries, requests)
     if malformed is not None:
         return malformed
     for request in requests:
@@ -1055,9 +1084,9 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
     return selected_asset is not None
 
 
-def _reconcile_unresolved(paths, manifest: dict, requests: list[dict], entries: dict[str, dict],
+def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list[dict], entries: dict[str, dict],
                           executor: "FlowExecutor") -> tuple[bool, str | None, int]:
-    blocker = _first_unresolved(requests, entries)
+    blocker = _first_unresolved(project_id, requests, entries)
     if blocker is None:
         return True, None, 0
     request, entry = blocker
@@ -1155,10 +1184,10 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
         entry = entries.get(request_id)
         if not request or not _unresolved_flow_entry(entry):
             raise FlowError("GENERATION_RECONCILIATION_INVALID")
-        earliest = _first_unresolved(requests, entries)
+        earliest = _first_unresolved(project_id, requests, entries)
         if earliest and earliest[0]["request_id"] == request_id:
             released, blocked_request_id, count = _reconcile_unresolved(
-                paths, manifest, requests, entries, executor
+                paths, project_id, manifest, requests, entries, executor
             )
             if count:
                 atomic_write_json(path, manifest)
@@ -1205,34 +1234,33 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     review = read_json(paths.artifact_path("output/review_state.json"))
     if review.get("plan_approval", {}).get("status") != "APPROVED": raise FlowError("PLAN_APPROVAL_REQUIRED")
-    requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
-    selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
-    if any(r.get("media_type") == "VIDEO" and not isinstance(r.get("motion_risk_analysis"), dict) for r in selected):
-        raise FlowError("MOTION_PLAN_REQUIRED", "every VIDEO request requires motion-risk analysis")
-    if max_requests is not None:
-        if max_requests < 1: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "max_requests must be positive")
-        selected = selected[:max_requests]
-    if not production_batch and len(selected) > 4: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits at most four selected requests")
-    kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
-    if (not production_batch and any(kinds.count(kind) > 1 for kind in kinds)) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
-        raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
     storage=config.settings.get("storage",{})
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     with ProjectLock(paths.runtime, project_id):
         _recover_pending_supersessions(paths, project_id)
         requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+        selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
+        if any(r.get("media_type") == "VIDEO" and not isinstance(r.get("motion_risk_analysis"), dict) for r in selected):
+            raise FlowError("MOTION_PLAN_REQUIRED", "every VIDEO request requires motion-risk analysis")
+        if max_requests is not None:
+            if max_requests < 1: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "max_requests must be positive")
+            selected = selected[:max_requests]
+        if not production_batch and len(selected) > 4: raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits at most four selected requests")
+        kinds = [(r.get("purpose"), r.get("media_type")) for r in selected]
+        if (not production_batch and any(kinds.count(kind) > 1 for kind in kinds)) or any(kind not in {("REFERENCE", "IMAGE"), ("SHOT", "IMAGE"), ("SHOT", "VIDEO"), ("THUMBNAIL", "IMAGE")} for kind in kinds):
+            raise FlowError("GENERATION_GUARDRAIL_BLOCKED", "bounded execution permits one reference image, shot image, shot video, and thumbnail")
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
-        malformed = _first_invalid_superseded(entries, requests)
+        malformed = _first_invalid_superseded(project_id, entries, requests)
         if malformed is not None:
             return {"selected": len(selected), "new_submissions": 0, "paused": False,
                     "blocked": True, "blocked_request_id": malformed[0]["request_id"],
                     "attention": "FLOW_GENERATION_RECONCILIATION_REQUIRED", "reconciliations": 0,
                     "manifest": "output/generation_manifest.json"}
         released, blocked_request_id, reconciled = _reconcile_unresolved(
-            paths, manifest, requests, entries, executor
+            paths, project_id, manifest, requests, entries, executor
         )
         reconciliation_count += reconciled
         if reconciled:
@@ -1250,7 +1278,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             try: paused = read_json(control_path).get("pause_requested") is True
             except Exception: paused = False
             if paused: break
-            blocker = _first_unresolved(requests, entries)
+            blocker = _first_unresolved(project_id, requests, entries)
             if blocker is not None:
                 blocked_request_id = blocker[0]["request_id"]
                 break

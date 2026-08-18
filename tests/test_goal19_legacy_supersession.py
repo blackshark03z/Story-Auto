@@ -111,6 +111,14 @@ class Goal19LegacySupersessionTests(unittest.TestCase):
             with self.assertRaisesRegex(FlowError, "LEGACY_SUPERSESSION_NOT_ELIGIBLE"):
                 self._supersede(runtime, config, "fresh_request")
 
+    def test_second_audited_legacy_epoch_is_explicitly_eligible(self):
+        second_request_id = "req_6b755dde5a6e7b5c3295"
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, _ = self._project(root, request_id=second_request_id)
+            result = self._supersede(runtime, config, second_request_id)
+            self.assertEqual(result["old_request_id"], second_request_id)
+            self.assertEqual(result["provider_submissions"], 0)
+
     def test_successful_supersession_is_idempotent_without_second_epoch_or_event(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root)
@@ -144,6 +152,50 @@ class Goal19LegacySupersessionTests(unittest.TestCase):
                 self.assertEqual(len(list(directory.glob("*.prepared.json"))), 1)
                 self.assertEqual(len(list(directory.glob("*.committed.json"))), 1)
 
+    def test_recovery_reselects_current_graph_and_never_executes_superseded_request(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            with self.assertRaises(OSError):
+                self._supersede(runtime, config, _fault_injector=lambda point: (_ for _ in ()).throw(OSError("partial")) if point == "generation_requests" else None)
+            transaction = read_json(next(paths.artifact_path("output/legacy_supersession_transactions").glob("*.prepared.json")))
+            replacement_id = transaction["replacement_request_id"]
+            calls = []
+            def generate(request, _refs, destination):
+                calls.append(request["request_id"])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+                return destination
+            executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), generate)
+            stale = execute_generation(runtime.root, config.project_id, executor=executor, execute=True,
+                                       request_ids={LEGACY_REQUEST_ID}, max_requests=1)
+            self.assertEqual((stale["selected"], stale["new_submissions"], calls), (0, 0, []))
+            current = execute_generation(runtime.root, config.project_id, executor=executor, execute=True,
+                                         request_ids={replacement_id}, max_requests=1)
+            self.assertEqual((current["selected"], current["new_submissions"], calls), (1, 1, [replacement_id]))
+            self.assertNotIn(LEGACY_REQUEST_ID, calls)
+
+    def test_transaction_target_corruption_fails_closed(self):
+        corruptions = {
+            "unexpected_name": lambda tx: tx["targets"].update({"unexpected": {"path": "output/unexpected.json", "value": {}, "sha256": "x"}}),
+            "wrong_expected_path": lambda tx: tx["targets"]["generation_requests"].update({"path": "output/wrong.json"}),
+            "malformed_value_hash": lambda tx: tx["targets"]["generation_manifest"].update({"value": [], "sha256": "bad"}),
+            "extra_target_path": lambda tx: tx["targets"].update({"extra_path": {"path": "output/extra.json", "value": {}, "sha256": "x"}}),
+        }
+        for name, corrupt in corruptions.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                runtime, config, paths = self._project(root)
+                with self.assertRaises(OSError):
+                    self._supersede(runtime, config, _fault_injector=lambda point: (_ for _ in ()).throw(OSError("partial")) if point == "committed" else None)
+                prepared = next(paths.artifact_path("output/legacy_supersession_transactions").glob("*.prepared.json"))
+                transaction = read_json(prepared)
+                corrupt(transaction)
+                atomic_write_json(prepared, transaction)
+                calls = []
+                executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), lambda *_: calls.append("provider"))
+                with self.assertRaisesRegex(FlowError, "LEGACY_SUPERSESSION_RECOVERY_INVALID"):
+                    execute_generation(runtime.root, config.project_id, executor=executor, execute=True, request_ids=set())
+                self.assertEqual(calls, [])
+
     def test_malformed_superseded_status_remains_a_queue_barrier(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root)
@@ -155,6 +207,32 @@ class Goal19LegacySupersessionTests(unittest.TestCase):
             executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), lambda *_: calls.append("provider"))
             blocked = execute_generation(runtime.root, config.project_id, executor=executor, execute=True, request_ids={replacement_id})
             self.assertEqual((blocked["blocked"], blocked["blocked_request_id"], calls), (True, LEGACY_REQUEST_ID, []))
+
+    def test_wrong_or_noncanonical_legacy_classification_remains_a_queue_barrier(self):
+        for name in ("wrong_classification", "unclassified_request"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                runtime, config, paths = self._project(root)
+                replacement_id = self._supersede(runtime, config)["replacement_request_id"]
+                manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+                if name == "wrong_classification":
+                    manifest["requests"][0]["supersession_events"][-1]["legacy_epoch_classification"] = {"kind": "FABRICATED"}
+                else:
+                    self._replace_superseded_identity(paths, manifest, "unclassified_request")
+                atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+                calls = []
+                executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), lambda *_: calls.append("provider"))
+                blocked = execute_generation(runtime.root, config.project_id, executor=executor, execute=True, request_ids={replacement_id})
+                self.assertEqual((blocked["blocked"], blocked["blocked_request_id"], calls), (True, manifest["requests"][0]["request_id"], []))
+
+    @staticmethod
+    def _replace_superseded_identity(paths, manifest, request_id):
+        old, replacement = manifest["requests"]
+        old["request_id"] = request_id
+        old["supersession_events"][-1]["old_request_id"] = request_id
+        replacement["replaces_request_id"] = request_id
+        requests = read_json(paths.artifact_path("output/generation_requests.json"))
+        requests["requests"][0]["replaces_request_id"] = request_id
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests)
 
     def test_superseded_epoch_releases_only_replacement_and_fresh_ambiguity_stays_blocking(self):
         with tempfile.TemporaryDirectory() as root:
