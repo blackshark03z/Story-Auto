@@ -41,6 +41,23 @@ dispatch. Resource preflights happen before paid acquisition or FFmpeg work.
 
 No infinite retry loops. One initial attempt plus bounded automatic correction/retry is the normal default; further retries are an explicit new operator action or changed request.
 
+## Flow execution and provenance contract
+
+Treat the Flow manifest as a serial project queue, not a gallery-order work
+list. A generating, dispatch-uncertain, attribution-uncertain, or
+attribution-ambiguous attempt is a barrier across CLI, UI, batch, retry, and
+resume. Before any next activation, reconcile the earliest unresolved attempt;
+an unresolved result halts the queue.
+
+Dispatch confirmation proves only that the provider accepted/started a request;
+it does not prove which asset belongs to it. Record a stable pre-dispatch
+provider surface and attribute only the stable request-specific output delta.
+Exclude stale/foreign outputs. If more than one unlineaged candidate appears,
+retain `OUTPUT_ATTRIBUTION_AMBIGUOUS`; never infer ownership from newest-card
+order or timestamp proximity. Only confirmed attribution may enter
+postprocessing or create `selected_asset`; attempts and reconciliation evidence
+remain append-only.
+
 ## Credentials
 
 Never commit secrets. Reuse/adapt the proven secure configuration/key-fallback patterns from YouTube Auto where useful, but give Story Auto its own namespace/store. Browser login is user-managed; do not automate passwords or bypass provider controls.

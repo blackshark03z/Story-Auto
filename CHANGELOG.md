@@ -19,6 +19,13 @@
 
 ## Unreleased
 
+- Record Goal 16 dispatch-confirmation recovery and Goal 17 Flow queue barrier
+  and request-epoch asset attribution. A dispatch acknowledgement is not asset
+  attribution; stale/foreign output, newest-card ordering, and timestamps are
+  excluded as ownership proof. The executor reconciles the earliest unresolved
+  attempt before every next activation, and `selected_asset` requires confirmed
+  attribution. Preserve Trial A's unresolved/invalidated manifest evidence;
+  do not start Trial B or create a new release version.
 - Correct Ambient Story planning after Trial A: identify narrative states
   before compatible visual-anchor merging; make preferred asset budgets soft
   with bounded hard maxima; separate visual briefs from narration summaries;

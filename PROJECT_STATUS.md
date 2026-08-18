@@ -2,7 +2,7 @@
 
 ## Current accepted state
 
-**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOALS_13_14_15_LOCAL_CANDIDATES**
+**V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOALS_13_14_15_16_17_LOCAL_CANDIDATES**
 
 Frozen product design: Story Auto V1, 2026-08-12.
 
@@ -46,10 +46,47 @@ The current accepted post-release development state includes:
   cannot claim a visual match before selected generated evidence exists. Trial
   A's content, Kokoro narration, and alignment remain the resume authority;
   Trial B has not begun.
+- **Goal 16** (`STORY-AUTO-GOAL-16-FLOW-IMAGE-DISPATCH-ACK-RECOVERY`) is the
+  narrow Flow corrective candidate that separates a trusted Flow dispatch
+  confirmation from a generic UI acknowledgement and preserves an uncertain
+  attempt rather than blindly submitting again.
+- **Goal 17** (`STORY-AUTO-GOAL-17-FLOW-QUEUE-BARRIER-AND-ASSET-ATTRIBUTION`),
+  source implementation anchor `74b1ff6dfdb33811daa4abb731888452a0e70628`,
+  adds the project-wide serial Flow queue barrier and request-epoch output
+  attribution. A confirmed dispatch is not a confirmed asset: a
+  `selected_asset` is permitted only after one stable, request-specific
+  provider lineage is confirmed. Stale/foreign output, gallery recency, and
+  timestamp proximity are not ownership evidence; competing candidates remain
+  ambiguous. Goal 17 acceptance preserved Trial A and did not execute Trial B.
 
-After Goal 13 offline closeout, normal operating mode is: run the two authorized
-Ambient production trials through the normal UI and open narrow corrective work
-only for observed defects.
+The current source implementation anchor is Goal 17; resolve live `HEAD` for
+the documentation-sync commit rather than treating this current-state record as
+a self-pinning Git authority.
+
+## Trial A and next-techlead handoff
+
+Trial A remains the preserved Quiet Verdict project
+`prj_4f895eb1436c42c4ba5b908381b14fd1`; it is not a replacement-project or
+fresh-batch candidate. Its current manifest has 14 IMAGE requests. The first
+unresolved request, `req_28728acbcab5522b8685`, is `AMBIGUOUS` with
+`FLOW_DISPATCH_UNCERTAIN`: its first attempt was reconciled as
+`NOT_DISPATCHED`, while its second reconciliation remains `AMBIGUOUS`.
+`req_6b755dde5a6e7b5c3295` has the same unresolved dispatch state.
+`req_3591b82710f9c1c59acf` is `FAILED_RETRYABLE` with
+`OUTPUT_ATTRIBUTION_INVALID`: its formerly successful, dispatch-confirmed
+attempt has invalidated attribution and no selected asset. These states are
+preserved evidence, not a license to resubmit or to select an
+available-looking gallery item; the listed unresolved requests have no
+`selected_asset`.
+
+The safe next action is for the next techlead to resume this existing project
+only through the Goal 17 reconciliation/barrier path. It must reconcile the
+earliest unresolved attempt before any Flow activation. If that reconciliation
+does not prove a safe resolution, the serial project queue remains halted; do
+not click Generate, select newest output, use timestamps as ownership evidence,
+or begin Trial B. Only a confirmed request-specific attribution (or the
+supported manual recovery/retry outcome after reconciliation) can release the
+barrier for the next activation.
 
 ## Accepted feature inventory
 
@@ -120,6 +157,16 @@ only for observed defects.
   atomic local image/video asset selection. Offline fixtures prove selector
   ambiguity rejection, auth/project capability results, resume reuse, invalid
   selected-asset invalidation, and no blind post-timeout resubmission.
+- Flow execution is now a serial manifest queue: any generating,
+  dispatch-uncertain, attribution-uncertain, or attribution-ambiguous attempt
+  blocks every later Flow activation across CLI, UI, batch, retry, and resume.
+  Reconciliation runs on the earliest unresolved attempt first. A stable
+  pre-dispatch provider baseline plus a request-specific provider delta is
+  required for attribution; stale or foreign output is excluded, multiple
+  unlineaged candidates remain ambiguous, and no newest/timestamp heuristic
+  can create ownership. Dispatch confirmation and asset attribution are
+  independently recorded, and postprocess/`selected_asset` require confirmed
+  attribution.
 - Live Flow image/video execution, reference attachment, local acquisition,
   append-only attempt provenance, ambiguous-result reconciliation, and unchanged
   provider resume are accepted with real Story Auto assets.

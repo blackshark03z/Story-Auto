@@ -2,13 +2,17 @@
 
 Stable release baseline: **Story Auto v1.0.0 Stable** at
 `6dc3188a16bd1ae4f84906f891083ec6c0651154` (`v1.0.0`). The accepted
-post-release development state includes Goal 10 UX/UI simplification and Goal
-11 Flow image mark postprocessing plus Goal 12 state synchronization; none is a
-new release version. Goal 13 is a local candidate pending real production trials.
+post-release development state includes Goal 10 UX/UI simplification, Goal 11
+Flow image mark postprocessing, Goal 12 state synchronization, and local
+Goals 13–17 corrective candidates; none is a new release version. Goal 17 is
+the current implementation anchor for Flow queue/reconciliation behavior.
 
-After Goal 13 offline closeout, next mode is normal product use: run Trial A
-(`ambient_story + quiet_verdict`) and Trial B (`ambient_story + hidden_mastery`)
-through the normal UI, observe real defects, then open narrow corrective work.
+The next production action is not a normal new batch: resume preserved Trial A
+(`ambient_story + quiet_verdict`) only through the Goal 17 reconciliation and
+serial queue-barrier path. Reconcile its earliest unresolved attempt before any
+Flow activation; unresolved/ambiguous attribution halts the queue. Trial B
+(`ambient_story + hidden_mastery`) remains unstarted and blocked behind that
+safe Trial A resolution.
 
 ## Phase 0 — Design + Build OS baseline — ACCEPTED
 
@@ -100,8 +104,12 @@ use defect-driven corrective goals after normal production trials.
 - [x] Semantic visual chapters with low image budgets and no AI video.
 - [x] Deterministic bounded image presentation through the common compositor.
 - [x] Offline Quiet Verdict and Hidden Mastery engineering demos.
-- [ ] Trial A: real Quiet Verdict production.
-- [ ] Trial B: real Hidden Mastery production.
+- [~] Trial A: preserved Quiet Verdict project with completed narration and
+  alignment; resume only through Goal 17 reconciliation/barrier, never by
+  direct resubmission or newest-output selection.
+- [ ] Trial B: real Hidden Mastery production, not started; blocked until Trial
+  A's earliest unresolved Flow attempt is safely reconciled and the barrier is
+  released.
 
 ## Deferred
 

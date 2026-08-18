@@ -4,11 +4,12 @@ Current stable release: **Story Auto v1.0.0 Stable**. See
 [`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) and the machine-readable
 [`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
 
-The current accepted post-release development state includes Goal 10’s
-creator-first UI and Goal 11’s Flow IMAGE mark postprocessing. This is not a
-new release version: `v1.0.0` remains the stable release baseline. Next use is
-a real production trial through the normal UI; observed defects should become
-narrow corrective work with regression coverage.
+The current post-release implementation includes Goal 10’s creator-first UI,
+Goal 11’s Flow IMAGE mark postprocessing, and Goals 16–17’s Flow dispatch and
+asset-attribution recovery. This is not a new release version: `v1.0.0` remains
+the stable release baseline. The preserved Trial A project may resume only
+through the reconciliation/serial-barrier path described below; Trial B has not
+started.
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
@@ -142,6 +143,24 @@ as immutable evidence and a deterministic locally cleaned, lineage-validated
 derivative becomes `selected_asset`; a remaining visible provider mark fails
 QC. Flow VIDEO remains unchanged: its visible provider mark is the accepted V1
 limitation.
+
+### Flow activation and resume safety
+
+Flow dispatch confirmation and asset attribution are separate facts. Before one
+activation, the adapter records a stable provider tile/asset baseline; afterward
+it may attribute only the stable, request-specific delta. Stale or foreign
+provider output is excluded. Multiple candidates without one trustworthy
+tile/job lineage are ambiguous, and neither newest-card order nor timestamps
+can choose an owner. Provider bytes cannot reach postprocessing or
+`selected_asset` until attribution is confirmed.
+
+The executor treats generating, dispatch-uncertain, attribution-uncertain, and
+attribution-ambiguous attempts as a serial queue barrier across UI, CLI, batch,
+retry, and resume. Resume first reconciles the earliest unresolved attempt; if
+it cannot resolve the request safely, it makes no new Flow activation. For the
+preserved Trial A project, use this path only—never a replacement project,
+blind re-submit, or gallery-item guess.
+
 Long `full_video_ai` shots are partitioned into stable provider-duration request
 parts and every part must resolve to video before rendering. `NATURAL_SOFT` is an
 optional restrained finishing profile with no blur or artificial sharpening.

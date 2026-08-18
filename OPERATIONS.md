@@ -109,7 +109,9 @@ Large batches are operator-confirmed. Full-video batch generation is always conf
 - A Flow activation requires a stable pre-dispatch tile/asset baseline.
   Dispatch confirmation does not confirm an asset. Only one stable,
   request-specific provider delta may be downloaded and selected; multiple
-  unseen candidates require reconciliation, never newest-card selection.
+  unseen candidates require reconciliation, never newest-card or timestamp
+  selection. Stale/foreign provider output is excluded; postprocessing and
+  `selected_asset` require confirmed attribution.
 - Composition writes to temporary outputs and atomically publishes only validated final artifacts where practical.
 
 Render recovery expectations are executable behavior:
@@ -119,6 +121,21 @@ Render recovery expectations are executable behavior:
 - invalid selected provider asset -> mark only that request retryable, preserve all
   attempts, reconcile/regenerate it, then rebuild render descendants;
 - unchanged complete project -> no provider submissions and all stages SKIP.
+
+### Preserved Trial A resume gate
+
+The preserved Quiet Verdict Trial A project is
+`prj_4f895eb1436c42c4ba5b908381b14fd1`. Its earliest unresolved Flow request is
+`req_28728acbcab5522b8685` (`FLOW_DISPATCH_UNCERTAIN`); a later request also
+remains dispatch-uncertain and a separate request is
+`OUTPUT_ATTRIBUTION_INVALID`. The first request's initial attempt is already
+recorded `NOT_DISPATCHED`, but its second reconciliation remains ambiguous; the
+invalidated request has no selected asset. These records and their raw/clean
+evidence remain append-only. Resume only through the normal
+reconciliation/barrier path, which must reconcile the earliest unresolved
+attempt before any activation. If it remains unresolved or ambiguous, stop
+with the queue halted. Do not re-submit, adopt a gallery output, or start Trial
+B.
 
 ## Hybrid production evidence
 
