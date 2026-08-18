@@ -5,11 +5,12 @@ Current stable release: **Story Auto v1.0.0 Stable**. See
 [`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
 
 The current post-release implementation includes Goal 10’s creator-first UI,
-Goal 11’s Flow IMAGE mark postprocessing, and Goals 16–17’s Flow dispatch and
-asset-attribution recovery. This is not a new release version: `v1.0.0` remains
-the stable release baseline. The preserved Trial A project may resume only
-through the reconciliation/serial-barrier path described below; Trial B has not
-started.
+Goal 11’s Flow IMAGE mark postprocessing, Goals 16–17’s Flow dispatch and
+asset-attribution recovery, Goal 19’s legacy-only recovery transaction, and a
+Goal 20 local R3 candidate for immutable poll evidence and explicit unresolved
+replay. This is not a new release version: `v1.0.0` remains the stable release
+baseline. Trial A is blocked at a fresh unresolved request; Goal 20 must receive
+independent R3 approval before any runtime recovery, and Trial B has not started.
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
@@ -153,6 +154,13 @@ provider output is excluded. Multiple candidates without one trustworthy
 tile/job lineage are ambiguous, and neither newest-card order nor timestamps
 can choose an owner. Provider bytes cannot reach postprocessing or
 `selected_asset` until attribution is confirmed.
+
+Every provider-surface poll is retained in a bounded, sanitized, hash-chained
+timeline. A transient job transition without a serialized stable provider
+identity cannot confirm dispatch. If provider truth remains irreducible, the
+only fresh-epoch path is a distinct manual recovery that acknowledges possible
+prior and replacement cost, preserves the old unresolved attempt, and itself
+makes zero provider calls.
 
 The executor treats generating, dispatch-uncertain, attribution-uncertain, and
 attribution-ambiguous attempts as a serial queue barrier across UI, CLI, batch,

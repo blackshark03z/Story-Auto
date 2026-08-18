@@ -58,6 +58,23 @@ order or timestamp proximity. Only confirmed attribution may enter
 postprocessing or create `selected_asset`; attempts and reconciliation evidence
 remain append-only.
 
+Provider polling evidence is a bounded append-only timeline, not a mutable
+last-poll snapshot. Persist each sanitized poll with its extractor version,
+sequence/time, hash chain, provider-surface fingerprint, baseline/current
+identity sets and delta, card/asset IDs, candidates, quarantine reasons,
+stability, dispatch/attribution states, and available lineage. Never persist
+signed URLs, secrets, or raw DOM. A transient request-local job signal is
+`SIGNAL_OBSERVED`; only a serialized stable job/card identity or a stable exact
+output can create durable dispatch confirmation.
+
+An irreducible fresh unresolved attempt may be abandoned only through the
+explicit unresolved replay operation. It requires a reason plus separate
+acknowledgements for possible prior cost, unresolved output ownership, and
+possible replacement cost. The operation makes zero provider calls, preserves
+old attempts and unresolved attribution, and publishes a linked PENDING epoch
+through deterministic PREPARED/COMMITTED recovery before request selection.
+It is never an automatic retry and never reuses legacy supersession semantics.
+
 ## Credentials
 
 Never commit secrets. Reuse/adapt the proven secure configuration/key-fallback patterns from YouTube Auto where useful, but give Story Auto its own namespace/store. Browser login is user-managed; do not automate passwords or bypass provider controls.

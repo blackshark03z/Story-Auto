@@ -112,6 +112,12 @@ Large batches are operator-confirmed. Full-video batch generation is always conf
   unseen candidates require reconciliation, never newest-card or timestamp
   selection. Stale/foreign provider output is excluded; postprocessing and
   `selected_asset` require confirmed attribution.
+- Every live provider-surface poll writes a bounded, URL-free, hash-chained
+  observation timeline containing extractor version, surface fingerprint,
+  baseline/current identities and delta, candidate/quarantine classification,
+  stable count, dispatch state, attribution state, and available lineage IDs.
+  A transient job/card transition is only `SIGNAL_OBSERVED`; dispatch becomes
+  confirmed from job/card evidence only after a stable identity is serialized.
 - Composition writes to temporary outputs and atomically publishes only validated final artifacts where practical.
 
 Render recovery expectations are executable behavior:
@@ -125,17 +131,25 @@ Render recovery expectations are executable behavior:
 ### Preserved Trial A resume gate
 
 The preserved Quiet Verdict Trial A project is
-`prj_4f895eb1436c42c4ba5b908381b14fd1`. Its earliest unresolved Flow request is
-`req_28728acbcab5522b8685` (`FLOW_DISPATCH_UNCERTAIN`); a later request also
-remains dispatch-uncertain and a separate request is
-`OUTPUT_ATTRIBUTION_INVALID`. The first request's initial attempt is already
-recorded `NOT_DISPATCHED`, but its second reconciliation remains ambiguous; the
-invalidated request has no selected asset. These records and their raw/clean
-evidence remain append-only. Resume only through the normal
-reconciliation/barrier path, which must reconcile the earliest unresolved
-attempt before any activation. If it remains unresolved or ambiguous, stop
-with the queue halted. Do not re-submit, adopt a gallery output, or start Trial
-B.
+`prj_4f895eb1436c42c4ba5b908381b14fd1`. Goal 19 ended in a terminal production
+block at fresh request `req_8842b45b5666c9677562`: one provider attempt,
+`AMBIGUOUS / OUTPUT_ATTRIBUTION_UNCERTAIN`, dispatch recorded confirmed, output
+ownership unresolved, no selected asset, and five later requests untouched.
+The wrong/reference candidate remains quarantined. Goal 20 implementation and
+offline validation must leave these bytes unchanged.
+
+Until independent R3 approval of the exact Goal 20 commit, do not reconcile,
+call Flow, invoke unresolved replay, run later Trial A requests, or start Trial
+B. The new `OperatorService.replay_unresolved_request` is a separate manual
+recovery contract, never an automatic resume step. It requires a reason and all
+three acknowledgements: prior dispatch/cost may have occurred, prior output
+ownership remains unresolved, and the fresh request may consume another
+provider credit. It performs zero provider calls, uses a recoverable
+PREPARED/COMMITTED transaction, preserves the old attempts, and creates one
+linked PENDING request epoch.
+
+The durable Build OS/workflow field record is
+[`docs/reference/BUILD_OS_WORKFLOW_CASE_STUDY_GOALS_19_20.md`](docs/reference/BUILD_OS_WORKFLOW_CASE_STUDY_GOALS_19_20.md).
 
 ## Hybrid production evidence
 

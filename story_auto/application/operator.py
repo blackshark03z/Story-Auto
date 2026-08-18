@@ -23,8 +23,8 @@ from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
 )
-from story_auto.providers.flow.service import (queue_regeneration, review_production_asset,
-                                               supersede_ambiguous_request)
+from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
+                                               review_production_asset, supersede_ambiguous_request)
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider
 
@@ -448,6 +448,21 @@ class OperatorService:
                                     acknowledge_historical_dispatch_unknown: bool) -> dict[str, Any]:
         return supersede_ambiguous_request(self.runtime.root,project_id,request_id,reason=reason,
                                            acknowledge_historical_dispatch_unknown=acknowledge_historical_dispatch_unknown)
+
+    def replay_unresolved_request(
+            self, project_id: str, request_id: str, *, reason: str,
+            acknowledge_previous_dispatch_or_cost_may_have_occurred: bool,
+            acknowledge_previous_output_ownership_unresolved: bool,
+            acknowledge_replacement_may_consume_provider_credit: bool) -> dict[str, Any]:
+        return replay_unresolved_request(
+            self.runtime.root, project_id, request_id, reason=reason,
+            acknowledge_previous_dispatch_or_cost_may_have_occurred=
+                acknowledge_previous_dispatch_or_cost_may_have_occurred,
+            acknowledge_previous_output_ownership_unresolved=
+                acknowledge_previous_output_ownership_unresolved,
+            acknowledge_replacement_may_consume_provider_credit=
+                acknowledge_replacement_may_consume_provider_credit,
+        )
 
     def edit_prompt(self, project_id: str, request_id: str, prompt: str) -> dict[str, Any]:
         if not isinstance(prompt,str) or not prompt.strip(): raise OperatorServiceError("prompt is required")

@@ -120,7 +120,12 @@ class FlowTests(unittest.TestCase):
     def test_attributable_provider_signal_confirms_exactly_once(self):
         tracker=DispatchEvidenceTracker()
         tracker.observe(input_dispatched=True,trusted_click_seen=True)
-        self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,legacy_ack_present=False),"CONFIRMED")
+        self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,legacy_ack_present=False),"UNCERTAIN")
+        self.assertEqual(tracker.signal_state,"SIGNAL_OBSERVED")
+        self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,
+                                         durable_job_identity="card:provider-card-1",
+                                         durable_evidence_serialized=True,
+                                         evidence_poll_sequence=3),"CONFIRMED")
         tracker.observe(input_dispatched=True,attributable_output=True,legacy_ack_present=False)
         self.assertEqual(tracker.confirmation_count,1)
 

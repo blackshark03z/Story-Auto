@@ -36,6 +36,7 @@ UNRESOLVED_FLOW_FAILURES = {
 }
 UNRESOLVED_FLOW_STATES = {"GENERATING", "AMBIGUOUS"}
 SUPERSEDED_AMBIGUOUS_STATUS = "SUPERSEDED_AMBIGUOUS"
+ABANDONED_UNRESOLVED_STATUS = "ABANDONED_UNRESOLVED"
 LEGACY_EVIDENCE_GAP_REASON = "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"
 # This is a deliberately narrow, immutable classification of the one preserved
 # pre-Goal-17 Trial A epoch whose provider baseline was never captured.  It is
@@ -52,6 +53,7 @@ LEGACY_EPOCH_CLASSIFICATIONS = {
     },
 }
 SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-legacy-supersession-transaction/1.0.0"
+UNRESOLVED_REPLAY_TRANSACTION_SCHEMA = "story-auto-unresolved-replay-transaction/1.0.0"
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
     "generation_requests": "output/generation_requests.json",
@@ -88,7 +90,11 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "composer_ready_state": composer,
         "dispatch_confirmation_state": settings.get("dispatch_confirmation_state"),
         "dispatch_confirmation_signal": settings.get("dispatch_confirmation_signal"),
+        "dispatch_signal_state": settings.get("dispatch_signal_state"),
+        "durable_dispatch_identity": settings.get("durable_dispatch_identity"),
+        "dispatch_evidence_poll_sequence": settings.get("dispatch_evidence_poll_sequence"),
         "provider_job_id": settings.get("provider_job_id"),
+        "provider_lineage_card_id": settings.get("provider_lineage_card_id"),
         "pre_dispatch_baseline_fingerprint": settings.get("pre_dispatch_baseline_fingerprint"),
         "baseline_provider_identities": settings.get("baseline_provider_identities"),
         "attribution_state": settings.get("attribution_state"),
@@ -98,6 +104,13 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "candidate_delta_count": settings.get("candidate_delta_count"),
         "candidate_identities": settings.get("candidate_identities"),
         "attribution_confirmation_timestamp": settings.get("attribution_confirmation_timestamp"),
+        "poll_evidence_version": settings.get("poll_evidence_version"),
+        "provider_surface_extractor_version": settings.get("provider_surface_extractor_version"),
+        "provider_poll_observation_count": settings.get("provider_poll_observation_count"),
+        "provider_poll_timeline_sha256": settings.get("provider_poll_timeline_sha256"),
+        "provider_poll_timeline_complete": settings.get("provider_poll_timeline_complete"),
+        "provider_poll_terminal_state": settings.get("provider_poll_terminal_state"),
+        "provider_poll_timeline": settings.get("provider_poll_timeline"),
     })
 def _manifest(paths, project_id):
     path = paths.artifact_path("output/generation_manifest.json")
@@ -192,43 +205,80 @@ def _supersession_directory(paths) -> Path:
     return paths.artifact_path("output/legacy_supersession_transactions")
 
 
-def _transaction_paths(paths, transaction_id: str) -> tuple[Path, Path]:
-    directory = _supersession_directory(paths)
+def _unresolved_replay_directory(paths) -> Path:
+    return paths.artifact_path("output/unresolved_replay_transactions")
+
+
+def _transaction_error(schema_version: str) -> str:
+    if schema_version == SUPERSESSION_TRANSACTION_SCHEMA:
+        return "LEGACY_SUPERSESSION_RECOVERY_INVALID"
+    if schema_version == UNRESOLVED_REPLAY_TRANSACTION_SCHEMA:
+        return "UNRESOLVED_REPLAY_RECOVERY_INVALID"
+    return "FLOW_REPLACEMENT_RECOVERY_INVALID"
+
+
+def _transaction_spec(paths, schema_version: str) -> tuple[Path, str]:
+    if schema_version == SUPERSESSION_TRANSACTION_SCHEMA:
+        return _supersession_directory(paths), "LEGACY_SUPERSESSION_RECOVERY_INVALID"
+    if schema_version == UNRESOLVED_REPLAY_TRANSACTION_SCHEMA:
+        return _unresolved_replay_directory(paths), "UNRESOLVED_REPLAY_RECOVERY_INVALID"
+    raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
+
+
+def _transaction_paths(paths, transaction_id: str, *,
+                       schema_version: str = SUPERSESSION_TRANSACTION_SCHEMA) -> tuple[Path, Path]:
+    directory, _ = _transaction_spec(paths, schema_version)
     return directory / f"{transaction_id}.prepared.json", directory / f"{transaction_id}.committed.json"
 
 
-def _prepared_transactions(paths, project_id: str) -> list[tuple[Path, dict]]:
-    directory = _supersession_directory(paths)
+def _prepared_transactions(paths, project_id: str, *,
+                           schema_version: str = SUPERSESSION_TRANSACTION_SCHEMA) -> list[tuple[Path, dict]]:
+    directory, error_code = _transaction_spec(paths, schema_version)
     if not directory.is_dir(): return []
     values = []
     for path in sorted(directory.glob("*.prepared.json")):
         try: value = read_json(path)
-        except Exception as error: raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID") from error
-        if not isinstance(value, dict) or value.get("schema_version") != SUPERSESSION_TRANSACTION_SCHEMA:
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        except Exception as error: raise FlowError(error_code) from error
+        if (not isinstance(value, dict)
+                or value.get("schema_version") != schema_version
+                or value.get("state") != "PREPARED"):
+            raise FlowError(error_code)
         if value.get("project_id") != project_id:
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
-        _validate_transaction_targets(value)
+            raise FlowError(error_code)
+        transaction_id = value.get("transaction_id")
+        old_request_id = value.get("old_request_id")
+        replacement_request_id = value.get("replacement_request_id")
+        if (not isinstance(transaction_id, str) or not transaction_id
+                or path.name != f"{transaction_id}.prepared.json"
+                or not isinstance(old_request_id, str) or not old_request_id
+                or not isinstance(replacement_request_id, str) or not replacement_request_id
+                or old_request_id == replacement_request_id):
+            raise FlowError(error_code)
+        _validate_transaction_targets(value, schema_version=schema_version)
         values.append((path, value))
     return values
 
 
-def _validate_transaction_targets(transaction: dict) -> None:
+def _validate_transaction_targets(transaction: dict, *, schema_version: str | None = None) -> None:
+    schema = schema_version or transaction.get("schema_version")
+    if schema not in {SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA}:
+        raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
+    error_code = _transaction_error(schema)
     targets = transaction.get("targets")
     if not isinstance(targets, dict):
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        raise FlowError(error_code)
     names = set(targets)
     if not REQUIRED_SUPERSESSION_TARGETS.issubset(names) or not names.issubset(SUPERSESSION_TARGET_PATHS):
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        raise FlowError(error_code)
     for name, value in targets.items():
         if not isinstance(value, dict) or value.get("path") != SUPERSESSION_TARGET_PATHS[name]:
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+            raise FlowError(error_code)
         if not isinstance(value.get("value"), dict) or value.get("sha256") != _json_sha256(value["value"]):
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+            raise FlowError(error_code)
 
 
-def _transaction_target(transaction: dict, name: str) -> dict | None:
-    _validate_transaction_targets(transaction)
+def _transaction_target(transaction: dict, name: str, *, schema_version: str | None = None) -> dict | None:
+    _validate_transaction_targets(transaction, schema_version=schema_version)
     value = transaction["targets"].get(name)
     if value is None: return None
     return value
@@ -272,48 +322,147 @@ def _first_invalid_superseded(project_id: str, entries: dict[str, dict], request
     return None
 
 
-def _publish_supersession_transaction(paths, transaction: dict,
-                                      *, fault_injector: Callable[[str], None] | None = None) -> None:
+def _abandoned_unresolved_entry_valid(entry: dict, requests: list[dict],
+                                      entries: dict[str, dict]) -> bool:
+    if entry.get("status") != ABANDONED_UNRESOLVED_STATUS or entry.get("selected_asset") is not None:
+        return False
+    request_id = entry.get("request_id")
+    replacement_id = entry.get("replacement_request_id")
+    events = entry.get("unresolved_replay_events")
+    if not isinstance(request_id, str) or not isinstance(replacement_id, str) or not isinstance(events, list) or not events:
+        return False
+    event = events[-1] if isinstance(events[-1], dict) else None
+    if not isinstance(event, dict) or event.get("event") != ABANDONED_UNRESOLVED_STATUS:
+        return False
+    if event.get("old_request_id") != request_id or event.get("replacement_request_id") != replacement_id:
+        return False
+    if event.get("historical_provider_dispatch") not in {"CONFIRMED", "UNKNOWN"}:
+        return False
+    if event.get("historical_attribution") != "UNRESOLVED":
+        return False
+    if (entry.get("historical_provider_dispatch") != event.get("historical_provider_dispatch")
+            or entry.get("historical_attribution") != "UNRESOLVED"
+            or not isinstance(event.get("operator_reason"), str)
+            or not event["operator_reason"].strip()):
+        return False
+    if not all(event.get(key) is True for key in (
+        "previous_dispatch_or_cost_may_have_occurred_acknowledged",
+        "previous_output_ownership_unresolved_acknowledged",
+        "replacement_may_consume_provider_credit_acknowledged",
+    )):
+        return False
+    if event.get("attempts_sha256") != _json_sha256(entry.get("attempts")):
+        return False
+    replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
+    replacement_entry = entries.get(replacement_id)
+    return (
+        isinstance(replacement, dict)
+        and replacement.get("replays_unresolved_request_id") == request_id
+        and isinstance(replacement_entry, dict)
+        and replacement_entry.get("replays_unresolved_request_id") == request_id
+        and replacement_entry.get("status") == "PENDING"
+        and replacement_entry.get("attempts") == []
+        and replacement_id != request_id
+    )
+
+
+def _first_invalid_request_replacement(project_id: str, entries: dict[str, dict],
+                                       requests: list[dict]) -> tuple[dict, dict] | None:
+    invalid = _first_invalid_superseded(project_id, entries, requests)
+    if invalid is not None:
+        return invalid
+    for entry in entries.values():
+        if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
+                and not _abandoned_unresolved_entry_valid(entry, requests, entries)):
+            return {"request_id": entry.get("request_id")}, entry
+    return None
+
+
+def _publish_replacement_transaction(paths, transaction: dict,
+                                     *, fault_injector: Callable[[str], None] | None = None) -> None:
+    schema_version = transaction.get("schema_version")
+    _directory, error_code = _transaction_spec(paths, schema_version)
     transaction_id = transaction.get("transaction_id")
     if not isinstance(transaction_id, str) or not transaction_id:
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
-    _validate_transaction_targets(transaction)
-    prepared_path, committed_path = _transaction_paths(paths, transaction_id)
+        raise FlowError(error_code)
+    _validate_transaction_targets(transaction, schema_version=schema_version)
+    prepared_path, committed_path = _transaction_paths(paths, transaction_id, schema_version=schema_version)
     if not prepared_path.is_file():
         if fault_injector: fault_injector("prepared")
         atomic_write_json(prepared_path, transaction)
     elif read_json(prepared_path) != transaction:
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        raise FlowError(error_code)
     for name in ("media_plan", "generation_requests", "generation_manifest"):
-        target = _transaction_target(transaction, name)
+        target = _transaction_target(transaction, name, schema_version=schema_version)
         if target is None: continue
         if fault_injector: fault_injector(name)
         atomic_write_json(paths.artifact_path(target["path"]), target["value"])
-    receipt = {"schema_version": SUPERSESSION_TRANSACTION_SCHEMA, "state": "COMMITTED",
+    receipt = {"schema_version": schema_version, "state": "COMMITTED",
                "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
     if not committed_path.is_file():
         if fault_injector: fault_injector("committed")
         atomic_write_json(committed_path, receipt)
     elif read_json(committed_path) != receipt:
-        raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+        raise FlowError(error_code)
 
 
-def _recover_pending_supersessions(paths, project_id: str) -> dict[str, dict]:
+def _publish_supersession_transaction(paths, transaction: dict,
+                                      *, fault_injector: Callable[[str], None] | None = None) -> None:
+    _publish_replacement_transaction(paths, transaction, fault_injector=fault_injector)
+
+
+def _publish_unresolved_replay_transaction(paths, transaction: dict,
+                                           *, fault_injector: Callable[[str], None] | None = None) -> None:
+    _publish_replacement_transaction(paths, transaction, fault_injector=fault_injector)
+
+
+def _recover_replacement_transactions(paths, project_id: str, *, schema_version: str) -> dict[str, dict]:
+    _directory, error_code = _transaction_spec(paths, schema_version)
     recovered: dict[str, dict] = {}
-    for _prepared_path, transaction in _prepared_transactions(paths, project_id):
+    for _prepared_path, transaction in _prepared_transactions(paths, project_id, schema_version=schema_version):
         transaction_id = transaction.get("transaction_id")
-        if not isinstance(transaction_id, str): raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
-        _prepared, committed_path = _transaction_paths(paths, transaction_id)
+        if not isinstance(transaction_id, str): raise FlowError(error_code)
+        _prepared, committed_path = _transaction_paths(paths, transaction_id, schema_version=schema_version)
         if not committed_path.is_file():
-            _publish_supersession_transaction(paths, transaction)
-        elif read_json(committed_path).get("prepared_sha256") != _json_sha256(transaction):
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+            _publish_replacement_transaction(paths, transaction)
+        else:
+            try:
+                receipt = read_json(committed_path)
+            except Exception as error:
+                raise FlowError(error_code) from error
+            if (not isinstance(receipt, dict)
+                    or receipt.get("schema_version") != schema_version
+                    or receipt.get("state") != "COMMITTED"
+                    or receipt.get("transaction_id") != transaction_id
+                    or receipt.get("prepared_sha256") != _json_sha256(transaction)):
+                raise FlowError(error_code)
         old_request_id = transaction.get("old_request_id")
         replacement_request_id = transaction.get("replacement_request_id")
         if not isinstance(old_request_id, str) or not isinstance(replacement_request_id, str):
-            raise FlowError("LEGACY_SUPERSESSION_RECOVERY_INVALID")
+            raise FlowError(error_code)
         recovered[old_request_id] = {"replacement_request_id": replacement_request_id,
                                      "transaction_id": transaction_id}
+    return recovered
+
+
+def _recover_pending_supersessions(paths, project_id: str) -> dict[str, dict]:
+    return _recover_replacement_transactions(
+        paths, project_id, schema_version=SUPERSESSION_TRANSACTION_SCHEMA
+    )
+
+
+def _recover_pending_unresolved_replays(paths, project_id: str) -> dict[str, dict]:
+    return _recover_replacement_transactions(
+        paths, project_id, schema_version=UNRESOLVED_REPLAY_TRANSACTION_SCHEMA
+    )
+
+
+def _recover_pending_request_replacements(paths, project_id: str) -> dict[str, dict]:
+    recovered = _recover_pending_supersessions(paths, project_id)
+    replayed = _recover_pending_unresolved_replays(paths, project_id)
+    if set(recovered).intersection(replayed):
+        raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
+    recovered.update(replayed)
     return recovered
 
 
@@ -402,6 +551,172 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
         _publish_supersession_transaction(paths, transaction, fault_injector=_fault_injector)
         return {"old_request_id": request_id, "replacement_request_id": replacement_id,
                 "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS}
+
+
+def replay_unresolved_request(
+        runtime_root: Path | str, project_id: str, request_id: str, *, reason: str,
+        acknowledge_previous_dispatch_or_cost_may_have_occurred: bool,
+        acknowledge_previous_output_ownership_unresolved: bool,
+        acknowledge_replacement_may_consume_provider_credit: bool,
+        _fault_injector: Callable[[str], None] | None = None) -> dict:
+    """Create one fresh request epoch without resolving or rewriting provider truth.
+
+    This is an explicit operator recovery transaction. It never calls a
+    provider; the abandoned attempt history remains immutable and auditable.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise FlowError("UNRESOLVED_REPLAY_REASON_REQUIRED")
+    acknowledgements = {
+        "previous_dispatch_or_cost_may_have_occurred_acknowledged":
+            acknowledge_previous_dispatch_or_cost_may_have_occurred,
+        "previous_output_ownership_unresolved_acknowledged":
+            acknowledge_previous_output_ownership_unresolved,
+        "replacement_may_consume_provider_credit_acknowledged":
+            acknowledge_replacement_may_consume_provider_credit,
+    }
+    if not all(value is True for value in acknowledgements.values()):
+        raise FlowError("UNRESOLVED_REPLAY_ACKNOWLEDGEMENTS_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        recovered = _recover_pending_request_replacements(paths, project_id)
+        manifest_path, manifest = _manifest(paths, project_id)
+        requests_path = paths.artifact_path("output/generation_requests.json")
+        try:
+            requests_data = read_json(requests_path)
+        except Exception as error:
+            raise FlowError("UNRESOLVED_REPLAY_INVALID") from error
+        requests = requests_data.get("requests") if isinstance(requests_data, dict) else None
+        if not isinstance(requests, list):
+            raise FlowError("UNRESOLVED_REPLAY_INVALID")
+        entries = {
+            item.get("request_id"): item for item in manifest.get("requests", [])
+            if isinstance(item, dict) and isinstance(item.get("request_id"), str)
+        }
+        old_request = next((item for item in requests if item.get("request_id") == request_id), None)
+        old_entry = entries.get(request_id)
+        if not isinstance(old_request, dict):
+            completed = recovered.get(request_id)
+            if (isinstance(old_entry, dict) and completed
+                    and _abandoned_unresolved_entry_valid(old_entry, requests, entries)):
+                return {
+                    "old_request_id": request_id,
+                    "replacement_request_id": completed["replacement_request_id"],
+                    "provider_submissions": 0,
+                    "status": ABANDONED_UNRESOLVED_STATUS,
+                    "idempotent": True,
+                }
+            raise FlowError("UNRESOLVED_REPLAY_ALREADY_COMPLETED")
+        barrier = _first_unresolved(project_id, requests, entries)
+        if barrier is None or barrier[0].get("request_id") != request_id or barrier[1] is not old_entry:
+            raise FlowError("UNRESOLVED_REPLAY_NOT_CURRENT_BARRIER")
+        attempts = old_entry.get("attempts") if isinstance(old_entry, dict) else None
+        if (not isinstance(old_entry, dict) or old_entry.get("selected_asset") is not None
+                or not isinstance(attempts, list) or not attempts):
+            raise FlowError("UNRESOLVED_REPLAY_NOT_ELIGIBLE")
+        latest_attempt = attempts[-1] if isinstance(attempts[-1], dict) else None
+        if (not isinstance(latest_attempt, dict)
+                or latest_attempt.get("attribution_state") == "CONFIRMED"
+                or not _unresolved_flow_entry(old_entry)):
+            raise FlowError("UNRESOLVED_REPLAY_PROVIDER_TRUTH_NOT_UNRESOLVED")
+        historical_dispatch = (
+            "CONFIRMED" if any(
+                isinstance(attempt, dict) and attempt.get("dispatch_confirmed") is True
+                for attempt in attempts
+            ) else "UNKNOWN"
+        )
+        old_attempts_sha256 = _json_sha256(attempts)
+        nonce = uuid.uuid4().hex
+        epoch = int(old_request.get("replay_epoch", old_request.get("replacement_epoch", 0))) + 1
+        replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
+        if (replacement_id == request_id
+                or any(item.get("request_id") == replacement_id for item in requests)
+                or replacement_id in entries):
+            raise FlowError("UNRESOLVED_REPLAY_IDENTITY_COLLISION")
+        replacement = dict(old_request)
+        replacement.update({
+            "request_id": replacement_id,
+            "fingerprint": replacement_fingerprint,
+            "replays_unresolved_request_id": request_id,
+            "replay_epoch": epoch,
+            "epoch_nonce": nonce,
+        })
+        position = requests.index(old_request)
+        requests[position] = replacement
+        _migrate_request_references(requests_data, request_id, replacement_id)
+        media_plan_path = paths.artifact_path("output/media_plan.json")
+        media_plan = read_json(media_plan_path) if media_plan_path.is_file() else None
+        media_plan_changed = (
+            isinstance(media_plan, dict)
+            and _migrate_request_references(media_plan, request_id, replacement_id)
+        )
+        event_at = _now()
+        event = {
+            "at": event_at,
+            "event": ABANDONED_UNRESOLVED_STATUS,
+            "operator_reason": reason.strip(),
+            "old_request_id": request_id,
+            "old_status": old_entry.get("status"),
+            "old_failure_class": old_entry.get("failure_class"),
+            "historical_provider_dispatch": historical_dispatch,
+            "historical_attribution": "UNRESOLVED",
+            "replacement_request_id": replacement_id,
+            "attempts_sha256": old_attempts_sha256,
+            **acknowledgements,
+        }
+        old_entry.setdefault("unresolved_replay_events", []).append(event)
+        old_entry.update({
+            "status": ABANDONED_UNRESOLVED_STATUS,
+            "failure_class": "UNRESOLVED_REPLAY_CREATED",
+            "historical_provider_dispatch": historical_dispatch,
+            "historical_attribution": "UNRESOLVED",
+            "replacement_request_id": replacement_id,
+            "updated_at": event_at,
+        })
+        manifest["requests"].append({
+            "request_id": replacement_id,
+            "request_identity_sha256": replacement_fingerprint,
+            "related_identity": replacement.get("shot_id") or replacement.get("entity_id"),
+            "media_type": replacement["media_type"],
+            "provider": replacement.get("provider", "google_flow"),
+            "prompt_sha256": hashlib.sha256(replacement["prompt"].encode("utf-8")).hexdigest(),
+            "reference_asset_hashes": [],
+            "attempts": [],
+            "status": "PENDING",
+            "created_at": event_at,
+            "replays_unresolved_request_id": request_id,
+            "replay_epoch": epoch,
+            "epoch_nonce": nonce,
+        })
+        if _json_sha256(old_entry.get("attempts")) != old_attempts_sha256:
+            raise FlowError("UNRESOLVED_REPLAY_APPEND_ONLY_VIOLATION")
+        transaction_id = "unresolved-replay-" + _json_sha256({
+            "project_id": project_id,
+            "old_request_id": request_id,
+            "replacement_request_id": replacement_id,
+        })[:24]
+        targets = {
+            "generation_requests": _target("output/generation_requests.json", requests_data),
+            "generation_manifest": _target("output/generation_manifest.json", manifest),
+        }
+        if media_plan_changed:
+            targets["media_plan"] = _target("output/media_plan.json", media_plan)
+        transaction = {
+            "schema_version": UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+            "state": "PREPARED",
+            "transaction_id": transaction_id,
+            "project_id": project_id,
+            "old_request_id": request_id,
+            "replacement_request_id": replacement_id,
+            "targets": targets,
+        }
+        _publish_unresolved_replay_transaction(paths, transaction, fault_injector=_fault_injector)
+        return {
+            "old_request_id": request_id,
+            "replacement_request_id": replacement_id,
+            "provider_submissions": 0,
+            "status": ABANDONED_UNRESOLVED_STATUS,
+            "idempotent": False,
+        }
 
 
 def _successful_raw_image(paths, entry):
@@ -950,7 +1265,7 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
 def _unresolved_flow_entry(entry: dict | None) -> bool:
     if not isinstance(entry, dict):
         return False
-    if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS:
+    if entry.get("status") in {SUPERSEDED_AMBIGUOUS_STATUS, ABANDONED_UNRESOLVED_STATUS}:
         return False
     if entry.get("status") in UNRESOLVED_FLOW_STATES:
         return True
@@ -961,7 +1276,7 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
 
 
 def _first_unresolved(project_id: str, requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
-    malformed = _first_invalid_superseded(project_id, entries, requests)
+    malformed = _first_invalid_request_replacement(project_id, entries, requests)
     if malformed is not None:
         return malformed
     for request in requests:
@@ -1238,7 +1553,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     with ProjectLock(paths.runtime, project_id):
-        _recover_pending_supersessions(paths, project_id)
+        # Complete every prepared request-graph replacement before selecting
+        # executable requests. A partially published old epoch is never run.
+        _recover_pending_request_replacements(paths, project_id)
         requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
         selected = [r for r in requests if request_ids is None or r["request_id"] in request_ids]
         if any(r.get("media_type") == "VIDEO" and not isinstance(r.get("motion_risk_analysis"), dict) for r in selected):
@@ -1253,7 +1570,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
-        malformed = _first_invalid_superseded(project_id, entries, requests)
+        malformed = _first_invalid_request_replacement(project_id, entries, requests)
         if malformed is not None:
             return {"selected": len(selected), "new_submissions": 0, "paused": False,
                     "blocked": True, "blocked_request_id": malformed[0]["request_id"],

@@ -19,6 +19,15 @@
 
 ## Unreleased
 
+- Add the Goal 20 local R3 candidate: bounded hash-chained per-poll Flow
+  evidence, durable-identity dispatch confirmation, truthful timeout
+  classification, and an explicit zero-call `ABANDONED_UNRESOLVED` fresh-epoch
+  transaction with mandatory possible-cost/ownership acknowledgements. Preserve
+  Trial A unchanged and stop for independent R3 review before runtime recovery.
+- Record Goal 19 as a terminal production block at fresh request
+  `req_8842b45b5666c9677562`, not a pass. Capture all Goal 19/20 Build OS and
+  workflow cases in the project-local upgrade case study with
+  `unpersisted_os_findings=0`.
 - Record Goal 16 dispatch-confirmation recovery and Goal 17 Flow queue barrier
   and request-epoch asset attribution. A dispatch acknowledgement is not asset
   attribution; stale/foreign output, newest-card ordering, and timestamps are

@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
+import json
 import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable
 
-from story_auto.core.artifacts import atomic_write_bytes, sha256_file
+from story_auto.core.artifacts import atomic_write_bytes, atomic_write_json, sha256_file
 from .attribution import (
     ATTRIBUTION_METHOD_VERSION,
     RequestAttributionTracker,
@@ -34,6 +37,10 @@ _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of docu
 _PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]'));for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){records.push({card_id,asset_id:null,media_type:null,state:'PENDING',url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
+
+PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.0.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.0.0"
+MAX_POLL_OBSERVATIONS = 2048
 
 def records_for_media(records, media_type: str):
     if any("media_type" in item for item in records):
@@ -61,27 +68,102 @@ def _merge_surface_records(*groups: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _identity_projection(records: list[dict], media_type: str) -> list[dict]:
+    projected = {
+        provider_identity(record): evidence_identity(record)
+        for record in records_for_type(records, media_type)
+        if provider_identity(record)
+    }
+    return [projected[key] for key in sorted(projected)]
+
+
+class ProviderPollEvidenceTimeline:
+    """Bounded, hash-chained poll evidence persisted after every observation."""
+
+    def __init__(self, path: Path | None = None, *, max_observations: int = MAX_POLL_OBSERVATIONS):
+        if max_observations < 1:
+            raise ValueError("poll evidence bound must be positive")
+        self.path = path
+        self.max_observations = max_observations
+        self.observations: list[dict] = []
+        self.complete = False
+        self.terminal_state: str | None = None
+
+    def append(self, value: dict) -> dict:
+        if self.complete or len(self.observations) >= self.max_observations:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "provider poll evidence bound reached")
+        observation = dict(value)
+        observation.update({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "poll_sequence": len(self.observations) + 1,
+            "poll_evidence_version": POLL_EVIDENCE_VERSION,
+            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "previous_observation_sha256": (
+                self.observations[-1]["observation_sha256"] if self.observations else None
+            ),
+        })
+        observation["observation_sha256"] = _json_sha256(observation)
+        self.observations.append(observation)
+        self._persist()
+        return observation
+
+    def finish(self, terminal_state: str) -> None:
+        self.complete = True
+        self.terminal_state = str(terminal_state)
+        self._persist()
+
+    def snapshot(self) -> dict:
+        return {
+            "schema_version": POLL_EVIDENCE_VERSION,
+            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "max_observations": self.max_observations,
+            "observation_count": len(self.observations),
+            "complete": self.complete,
+            "terminal_state": self.terminal_state,
+            "timeline_sha256": _json_sha256(self.observations),
+            "observations": list(self.observations),
+        }
+
+    def _persist(self) -> None:
+        if self.path is not None:
+            atomic_write_json(self.path, self.snapshot())
+
+
 def _stable_surface(dom, media_type: str, *, seed: list[dict] | None = None,
                     timeout_seconds: float = 12.0, required_stable_polls: int = 3,
-                    poll_seconds: float = .5) -> tuple[list[dict], int]:
+                    poll_seconds: float = .5,
+                    poll_observer: Callable[[dict, list[dict], int], None] | None = None,
+                    capacity_guard: Callable[[], None] | None = None) -> tuple[list[dict], int]:
     """Return a quiescent provider surface using state, not a blind sleep."""
     deadline = time.monotonic() + timeout_seconds
     union = list(seed or [])
     last_fingerprint = None
     stable = 0
     while time.monotonic() < deadline:
+        if capacity_guard:
+            capacity_guard()
         surface = dom.provider_surface()
         records = surface.get("records", []) if isinstance(surface, dict) else []
         union = _merge_surface_records(union, records)
         typed = records_for_type(records, media_type)
         pending = [record for record in typed if record.get("state") != "READY"]
         fingerprint = surface_fingerprint(typed)
+        quiescent = False
         if not pending and not int((surface or {}).get("global_pending_count", 0)):
             stable = stable + 1 if fingerprint == last_fingerprint else 1
             if stable >= required_stable_polls:
-                return union, stable
+                quiescent = True
         else:
             stable = 0
+        if poll_observer:
+            poll_observer(surface if isinstance(surface, dict) else {}, records, stable)
+        if quiescent:
+            return union, stable
         last_fingerprint = fingerprint
         time.sleep(poll_seconds)
     raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT", "Flow has unresolved provider-visible state")
@@ -152,29 +234,56 @@ class DispatchEvidenceTracker:
     def __init__(self):
         self.state = "NOT_CONFIRMED"
         self.signal = None
+        self.signal_state = "NONE"
+        self.durable_identity = None
+        self.evidence_poll_sequence = None
         self.confirmation_count = 0
 
     def observe(self, *, input_dispatched: bool, trusted_click_seen: bool = False,
                 prompt_transition: bool = False, attributable_job: bool = False,
                 attributable_output: bool = False, provider_job_id: str | None = None,
+                durable_job_identity: str | None = None,
+                durable_evidence_serialized: bool = False,
+                evidence_poll_sequence: int | None = None,
                 unrelated_dom_mutation: bool = False, legacy_ack_present: bool | None = None) -> str:
         del unrelated_dom_mutation, legacy_ack_present
         signal = None
-        if provider_job_id:
+        durable_identity = str(provider_job_id or durable_job_identity or "").strip()
+        if provider_job_id and durable_evidence_serialized:
             signal = "provider_job_id"
-        elif attributable_job:
-            signal = "new_attributable_job_state"
         elif attributable_output:
             signal = "new_attributable_output"
+        elif attributable_job and durable_identity and durable_evidence_serialized:
+            signal = "durable_attributable_job_identity"
         if signal:
             if self.state != "CONFIRMED": self.confirmation_count += 1
             self.state, self.signal = "CONFIRMED", signal
+            self.signal_state = "DISPATCH_CONFIRMED"
+            self.durable_identity = durable_identity or self.durable_identity
+            self.evidence_poll_sequence = evidence_poll_sequence or self.evidence_poll_sequence
+        elif attributable_job:
+            # A request-local visual transition is useful evidence, but cannot
+            # become a durable confirmation without a serialized stable ID.
+            if self.state != "CONFIRMED":
+                self.state, self.signal = "UNCERTAIN", "transient_attributable_job_state"
+                self.signal_state = "SIGNAL_OBSERVED"
         elif not input_dispatched:
             self.state, self.signal = "PRE_DISPATCH_FAILURE", "input_not_dispatched"
+            self.signal_state = "NONE"
         elif self.state != "CONFIRMED" and (trusted_click_seen or prompt_transition):
             self.state = "UNCERTAIN"
             self.signal = "composer_transition_after_activation" if prompt_transition else "trusted_click_only"
+            self.signal_state = "SIGNAL_OBSERVED"
         return self.state
+
+
+def dispatch_timeout_failure(dispatch: DispatchEvidenceTracker) -> str:
+    """Classify timeout from durable dispatch proof, never from output absence."""
+    if dispatch.state == "PRE_DISPATCH_FAILURE":
+        return "FLOW_PRE_DISPATCH_ACTIVATION_FAILED"
+    if dispatch.state == "CONFIRMED":
+        return "OUTPUT_ATTRIBUTION_UNCERTAIN"
+    return "FLOW_DISPATCH_UNCERTAIN"
 
 
 class FlowBrowserDom:
@@ -341,6 +450,7 @@ class LiveFlowGenerator:
         self.last_settings = None
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
+        self._poll_timeline = ProviderPollEvidenceTimeline()
 
     @staticmethod
     def _fetch_bytes(page, url: str) -> bytes:
@@ -349,16 +459,144 @@ class LiveFlowGenerator:
             raise FlowError("ASSET_ACQUISITION_FAILED")
         return base64.b64decode(payload["data"], validate=True)
 
+    def _reset_poll_evidence(self, path: Path) -> None:
+        self._poll_timeline = ProviderPollEvidenceTimeline(path)
+        self.last_settings = {}
+        self._sync_poll_evidence()
+
+    def _ensure_poll_capacity(self) -> None:
+        if len(self._poll_timeline.observations) >= self._poll_timeline.max_observations:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "provider poll evidence bound reached")
+
+    def _sync_poll_evidence(self) -> None:
+        if not isinstance(self.last_settings, dict):
+            self.last_settings = {}
+        snapshot = self._poll_timeline.snapshot()
+        self.last_settings.update({
+            "poll_evidence_version": POLL_EVIDENCE_VERSION,
+            "provider_surface_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "provider_poll_observation_count": snapshot["observation_count"],
+            "provider_poll_timeline_sha256": snapshot["timeline_sha256"],
+            "provider_poll_timeline_complete": snapshot["complete"],
+            "provider_poll_terminal_state": snapshot["terminal_state"],
+            "provider_poll_timeline": snapshot["observations"],
+        })
+
+    def _finish_poll_evidence(self, terminal_state: str) -> None:
+        if not self._poll_timeline.complete:
+            self._poll_timeline.finish(terminal_state)
+        self._sync_poll_evidence()
+
+    def _poll_evidence_fields(self) -> dict:
+        return {
+            key: self.last_settings.get(key)
+            for key in (
+                "poll_evidence_version", "provider_surface_extractor_version",
+                "provider_poll_observation_count", "provider_poll_timeline_sha256",
+                "provider_poll_timeline_complete", "provider_poll_terminal_state",
+                "provider_poll_timeline",
+            )
+        }
+
+    def _record_poll(self, *, phase: str, media_type: str, baseline: list[dict],
+                     current: list[dict], surface: dict, stable_polls: int,
+                     observation=None, dispatch: DispatchEvidenceTracker | None = None,
+                     activation: dict | None = None,
+                     quarantined: list[dict] | None = None) -> dict:
+        baseline_projection = _identity_projection(baseline, media_type)
+        current_projection = _identity_projection(current, media_type)
+        baseline_ids = {item["identity"] for item in baseline_projection}
+        delta = [item for item in current_projection if item["identity"] not in baseline_ids]
+        candidates = observation.candidate_identities if observation is not None else delta
+        lineage_card_id = observation.lineage_card_id if observation is not None else None
+        durable_job_identity = (
+            f"card:{lineage_card_id}" if isinstance(lineage_card_id, str) and lineage_card_id else None
+        )
+        durable_output_identity = None
+        if observation is not None and observation.state == "CONFIRMED" and observation.candidate:
+            durable_output_identity = provider_identity(observation.candidate) or None
+        predicted_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
+        predicted_signal = dispatch.signal if dispatch is not None else None
+        predicted_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
+        if durable_output_identity and dispatch is not None and dispatch.state != "CONFIRMED":
+            predicted_dispatch_state = "CONFIRMED"
+            predicted_signal = "new_attributable_output"
+            predicted_signal_state = "DISPATCH_CONFIRMED"
+        elif durable_job_identity and dispatch is not None and dispatch.state != "CONFIRMED":
+            predicted_dispatch_state = "CONFIRMED"
+            predicted_signal = "durable_attributable_job_identity"
+            predicted_signal_state = "DISPATCH_CONFIRMED"
+        value = {
+            "phase": phase,
+            "provider_surface_fingerprint": surface_fingerprint(records_for_type(current, media_type)),
+            "baseline_surface_fingerprint": surface_fingerprint(records_for_type(baseline, media_type)),
+            "baseline_identity_set": baseline_projection,
+            "current_identity_set": current_projection,
+            "identity_delta": delta,
+            "job_card_identities_observed": sorted({
+                str(item.get("card_id")) for item in current_projection if item.get("card_id")
+            }),
+            "output_asset_identities_observed": sorted({
+                str(item.get("asset_id")) for item in current_projection if item.get("asset_id")
+            }),
+            "candidate_identities": candidates,
+            "candidate_classification": observation.state if observation is not None else "BASELINE_OBSERVATION",
+            "quarantined_identities": list(quarantined or []),
+            "stable_poll_count": observation.stable_polls if observation is not None else stable_polls,
+            "provider_busy": bool(int((surface or {}).get("global_pending_count", 0))),
+            "dispatch_evidence_state": predicted_dispatch_state,
+            "dispatch_evidence_signal": predicted_signal,
+            "dispatch_signal_state": predicted_signal_state,
+            "durable_dispatch_identity": durable_output_identity or durable_job_identity or (dispatch.durable_identity if dispatch else None),
+            "attribution_evidence_state": observation.state if observation is not None else "NOT_ATTEMPTED",
+            "lineage_card_id": lineage_card_id,
+            "input_dispatched": bool((activation or {}).get("input_dispatched")),
+        }
+        persisted = self._poll_timeline.append(value)
+        if dispatch is not None and dispatch.state != "CONFIRMED":
+            if durable_output_identity:
+                dispatch.observe(
+                    input_dispatched=bool((activation or {}).get("input_dispatched", True)),
+                    attributable_output=True,
+                    durable_evidence_serialized=True,
+                    evidence_poll_sequence=persisted["poll_sequence"],
+                )
+                dispatch.durable_identity = durable_output_identity
+                dispatch.evidence_poll_sequence = persisted["poll_sequence"]
+            elif durable_job_identity:
+                dispatch.observe(
+                    input_dispatched=bool((activation or {}).get("input_dispatched", True)),
+                    attributable_job=True,
+                    durable_job_identity=durable_job_identity,
+                    durable_evidence_serialized=True,
+                    evidence_poll_sequence=persisted["poll_sequence"],
+                )
+        self._sync_poll_evidence()
+        return persisted
+
     def _record_observation(self, observation) -> None:
         self.last_settings.update({
             "attribution_method": observation.method,
             "attribution_method_version": ATTRIBUTION_METHOD_VERSION,
             "attribution_state": observation.state,
-            "provider_lineage_card_id": observation.lineage_card_id,
             "candidate_delta_count": observation.candidate_delta_count,
             "candidate_identities": observation.candidate_identities,
             "foreign_candidate_identities": observation.foreign_candidate_identities,
             "attribution_stable_polls": observation.stable_polls,
+        })
+        if observation.lineage_card_id:
+            self.last_settings["provider_lineage_card_id"] = observation.lineage_card_id
+
+    def _sync_dispatch_state(self, dispatch: DispatchEvidenceTracker) -> None:
+        self.dispatch_confirmed = dispatch.state == "CONFIRMED"
+        self.dispatch_confirmation_state = dispatch.state
+        self.last_settings.update({
+            "dispatch_confirmation_state": dispatch.state,
+            "dispatch_confirmation_signal": dispatch.signal,
+            "dispatch_ack_method": dispatch.signal,
+            "dispatch_signal_state": dispatch.signal_state,
+            "durable_dispatch_identity": dispatch.durable_identity,
+            "dispatch_evidence_poll_sequence": dispatch.evidence_poll_sequence,
         })
 
     def _reference_echoes(self, page, records: list[dict], observation,
@@ -388,18 +626,26 @@ class LiveFlowGenerator:
         # evidence are request-local and must never leak from a prior attempt.
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
-        self.last_settings = None
+        self._reset_poll_evidence(destination.parent / "provider_poll_evidence.json")
         page = CdpPage.open(self.runtime)
         try:
             dom = FlowBrowserDom(page)
             identity_history = request.get("_flow_provider_identity_history", [])
+            history_seed = identity_history if isinstance(identity_history, list) else []
             historical_records, _ = _stable_surface(
                 dom, request["media_type"],
-                seed=identity_history if isinstance(identity_history, list) else None,
+                seed=history_seed,
+                capacity_guard=self._ensure_poll_capacity,
+                poll_observer=lambda surface, records, stable: self._record_poll(
+                    phase="PRE_DISPATCH_DISCOVERY", media_type=request["media_type"],
+                    baseline=history_seed, current=records, surface=surface,
+                    stable_polls=stable,
+                ),
             )
             dom.reset_composer()
             resolved = resolve_settings(request)
-            self.last_settings = dom.apply_settings(resolved)
+            self.last_settings.update(dom.apply_settings(resolved))
+            self._sync_poll_evidence()
             if request["media_type"] == "IMAGE" and not (
                     self.last_settings.get("requested_output_count") ==
                     self.last_settings.get("actual_output_count") == 1):
@@ -408,8 +654,15 @@ class LiveFlowGenerator:
 
             def baseline():
                 nonlocal baseline_records
+                prior_baseline = list(baseline_records)
                 baseline_records, stable_polls = _stable_surface(
-                    dom, request["media_type"], seed=baseline_records
+                    dom, request["media_type"], seed=baseline_records,
+                    capacity_guard=self._ensure_poll_capacity,
+                    poll_observer=lambda surface, records, stable: self._record_poll(
+                        phase="PRE_DISPATCH_BASELINE", media_type=request["media_type"],
+                        baseline=prior_baseline, current=records, surface=surface,
+                        stable_polls=stable,
+                    ),
                 )
                 typed = records_for_type(baseline_records, request["media_type"])
                 self.last_settings.update({
@@ -492,6 +745,7 @@ class LiveFlowGenerator:
 
             deadline = time.monotonic() + self.timeout_seconds
             while time.monotonic() < deadline:
+                self._ensure_poll_capacity()
                 states = page.evaluate(_EDITOR_JS) or []
                 prompt_transition = len(states) == 0 or all(
                     item.get("text", "") != request["prompt"] for item in states
@@ -508,22 +762,25 @@ class LiveFlowGenerator:
                 observation = attribution.observe(
                     current, provider_busy=bool(int((surface or {}).get("global_pending_count", 0)))
                 )
-                self._record_observation(observation)
-                if observation.lineage_card_id and dispatch.state != "CONFIRMED":
-                    dispatch.observe(input_dispatched=True, attributable_job=True)
-                self.dispatch_confirmed = dispatch.state == "CONFIRMED"
-                self.dispatch_confirmation_state = dispatch.state
-                self.last_settings.update({
-                    "dispatch_confirmation_state": dispatch.state,
-                    "dispatch_confirmation_signal": dispatch.signal,
-                    "dispatch_ack_method": dispatch.signal,
-                })
+                quarantined: list[dict] = []
                 if observation.state == "AMBIGUOUS":
                     echoes = self._reference_echoes(page, current, observation, reference_hashes)
                     if echoes:
+                        quarantined = [
+                            {**evidence_identity(item), "reason": "REFERENCE_INPUT_ECHO"}
+                            for item in echoes
+                        ]
+                        self._record_poll(
+                            phase="POST_DISPATCH", media_type=request["media_type"],
+                            baseline=baseline_records, current=current, surface=surface,
+                            stable_polls=observation.stable_polls, observation=observation,
+                            dispatch=dispatch, activation=activation, quarantined=quarantined,
+                        )
+                        self._record_observation(observation)
+                        self._sync_dispatch_state(dispatch)
                         baseline_records = _merge_surface_records(baseline_records, echoes)
                         self.last_settings.setdefault("quarantined_foreign_identities", []).extend(
-                            evidence_identity(item) for item in echoes
+                            quarantined
                         )
                         attribution = RequestAttributionTracker(
                             baseline_records, media_type=request["media_type"],
@@ -531,6 +788,14 @@ class LiveFlowGenerator:
                         )
                         time.sleep(.5)
                         continue
+                    self._record_poll(
+                        phase="POST_DISPATCH", media_type=request["media_type"],
+                        baseline=baseline_records, current=current, surface=surface,
+                        stable_polls=observation.stable_polls, observation=observation,
+                        dispatch=dispatch, activation=activation,
+                    )
+                    self._record_observation(observation)
+                    self._sync_dispatch_state(dispatch)
                     self.last_settings["attribution_state"] = "AMBIGUOUS"
                     raise FlowError(
                         "OUTPUT_ATTRIBUTION_AMBIGUOUS",
@@ -543,8 +808,16 @@ class LiveFlowGenerator:
                         candidate_hash = _dhash_bytes(data)
                         if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
                                for reference_hash in reference_hashes):
-                            quarantined = evidence_identity(candidate)
-                            self.last_settings.setdefault("quarantined_foreign_identities", []).append(quarantined)
+                            quarantined = [{**evidence_identity(candidate), "reason": "REFERENCE_INPUT_ECHO"}]
+                            self._record_poll(
+                                phase="POST_DISPATCH", media_type=request["media_type"],
+                                baseline=baseline_records, current=current, surface=surface,
+                                stable_polls=observation.stable_polls, observation=observation,
+                                dispatch=dispatch, activation=activation, quarantined=quarantined,
+                            )
+                            self._record_observation(observation)
+                            self._sync_dispatch_state(dispatch)
+                            self.last_settings.setdefault("quarantined_foreign_identities", []).extend(quarantined)
                             baseline_records = _merge_surface_records(baseline_records, [candidate])
                             attribution = RequestAttributionTracker(
                                 baseline_records, media_type=request["media_type"],
@@ -552,19 +825,29 @@ class LiveFlowGenerator:
                             )
                             time.sleep(.5)
                             continue
-                    dispatch.observe(input_dispatched=True, attributable_output=True)
-                    self.dispatch_confirmed = True
-                    self.dispatch_confirmation_state = dispatch.state
+                    self._record_poll(
+                        phase="POST_DISPATCH", media_type=request["media_type"],
+                        baseline=baseline_records, current=current, surface=surface,
+                        stable_polls=observation.stable_polls, observation=observation,
+                        dispatch=dispatch, activation=activation,
+                    )
+                    self._record_observation(observation)
+                    self._sync_dispatch_state(dispatch)
                     self.last_settings.update({
-                        "dispatch_confirmation_state": dispatch.state,
-                        "dispatch_confirmation_signal": dispatch.signal,
-                        "dispatch_ack_method": dispatch.signal,
                         "attribution_state": "CONFIRMED",
                         "attributed_provider_identity": evidence_identity(candidate),
                         "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
                     })
                     atomic_write_bytes(destination, data)
                     return destination
+                self._record_poll(
+                    phase="POST_DISPATCH", media_type=request["media_type"],
+                    baseline=baseline_records, current=current, surface=surface,
+                    stable_polls=observation.stable_polls, observation=observation,
+                    dispatch=dispatch, activation=activation,
+                )
+                self._record_observation(observation)
+                self._sync_dispatch_state(dispatch)
                 time.sleep(.5)
 
             self.dispatch_confirmation_state = dispatch.state
@@ -572,14 +855,20 @@ class LiveFlowGenerator:
                 "dispatch_confirmation_state": dispatch.state,
                 "dispatch_confirmation_signal": dispatch.signal,
             })
-            if dispatch.state == "PRE_DISPATCH_FAILURE":
+            failure = dispatch_timeout_failure(dispatch)
+            if failure == "FLOW_PRE_DISPATCH_ACTIVATION_FAILED":
                 raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "no Generate input was dispatched")
-            if dispatch.state == "CONFIRMED":
+            if failure == "OUTPUT_ATTRIBUTION_UNCERTAIN":
                 self.last_settings["attribution_state"] = "UNCERTAIN"
                 raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN", "dispatch was confirmed but no unique stable output lineage completed")
             raise FlowError("FLOW_DISPATCH_UNCERTAIN", "activation occurred but no attributable Flow job or output was proven")
         finally:
-            page.close()
+            try:
+                self._finish_poll_evidence(
+                    str((self.last_settings or {}).get("attribution_state") or self.dispatch_confirmation_state)
+                )
+            finally:
+                page.close()
 
     def reconcile(self, request, attempt: dict, destination: Path) -> dict:
         """Inspect a prior request baseline without another activation."""
@@ -590,6 +879,18 @@ class LiveFlowGenerator:
             baseline = _merge_surface_records(baseline if isinstance(baseline, list) else [], history)
         if not isinstance(baseline, list) or not baseline:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"}}
+        self._reset_poll_evidence(destination.parent / "reconciliation_poll_evidence.json")
+        dispatch = DispatchEvidenceTracker()
+        activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {"input_dispatched": True}
+        prior_durable_identity = settings.get("durable_dispatch_identity") or attempt.get("provider_job_id")
+        if attempt.get("dispatch_confirmed") is True and isinstance(prior_durable_identity, str) and prior_durable_identity:
+            dispatch.observe(
+                input_dispatched=True, attributable_job=True,
+                durable_job_identity=prior_durable_identity,
+                durable_evidence_serialized=True,
+            )
+        elif attempt.get("dispatch_confirmed") is True:
+            dispatch.observe(input_dispatched=True, attributable_job=True)
         page = CdpPage.open(self.runtime)
         try:
             dom = FlowBrowserDom(page)
@@ -607,6 +908,7 @@ class LiveFlowGenerator:
             deadline = time.monotonic() + 12.0
             last = None
             while time.monotonic() < deadline:
+                self._ensure_poll_capacity()
                 surface = dom.provider_surface()
                 records = surface.get("records", []) if isinstance(surface, dict) else []
                 busy = bool(int((surface or {}).get("global_pending_count", 0)))
@@ -616,6 +918,18 @@ class LiveFlowGenerator:
                 if last.state == "AMBIGUOUS":
                     echoes = self._reference_echoes(page, records, last, reference_hashes)
                     if echoes:
+                        quarantined = [
+                            {**evidence_identity(item), "reason": "REFERENCE_INPUT_ECHO"}
+                            for item in echoes
+                        ]
+                        self._record_poll(
+                            phase="RECONCILIATION", media_type=request["media_type"],
+                            baseline=baseline, current=records, surface=surface,
+                            stable_polls=last.stable_polls, observation=last,
+                            dispatch=dispatch, activation=activation, quarantined=quarantined,
+                        )
+                        self._record_observation(last)
+                        self._sync_dispatch_state(dispatch)
                         baseline = _merge_surface_records(baseline, echoes)
                         tracker = RequestAttributionTracker(
                             baseline, media_type=request["media_type"],
@@ -623,14 +937,33 @@ class LiveFlowGenerator:
                         )
                         time.sleep(.5)
                         continue
+                    self._record_poll(
+                        phase="RECONCILIATION", media_type=request["media_type"],
+                        baseline=baseline, current=records, surface=surface,
+                        stable_polls=last.stable_polls, observation=last,
+                        dispatch=dispatch, activation=activation,
+                    )
+                    self._record_observation(last)
+                    self._sync_dispatch_state(dispatch)
+                    self._finish_poll_evidence("OUTPUT_ATTRIBUTION_AMBIGUOUS")
                     return {"state": "REMAINS_AMBIGUOUS", "evidence": {
                         "reason": "OUTPUT_ATTRIBUTION_AMBIGUOUS",
                         "candidate_delta_count": last.candidate_delta_count,
                         "candidate_identities": last.candidate_identities,
+                        **self._poll_evidence_fields(),
                     }}
                 if last.state == "CONFIRMED" and last.candidate:
+                    self._record_poll(
+                        phase="RECONCILIATION", media_type=request["media_type"],
+                        baseline=baseline, current=records, surface=surface,
+                        stable_polls=last.stable_polls, observation=last,
+                        dispatch=dispatch, activation=activation,
+                    )
+                    self._record_observation(last)
+                    self._sync_dispatch_state(dispatch)
                     data = self._fetch_bytes(page, last.candidate["url"])
                     atomic_write_bytes(destination, data)
+                    self._finish_poll_evidence("CONFIRMED_OUTPUT")
                     evidence = {
                         "attribution_state": "CONFIRMED",
                         "attribution_method": last.method,
@@ -643,22 +976,53 @@ class LiveFlowGenerator:
                         "baseline_provider_identities": [evidence_identity(item) for item in baseline],
                         "dispatch_confirmation_state": "CONFIRMED",
                         "dispatch_confirmation_signal": "reconciled_provider_tile_lineage",
+                        "durable_dispatch_identity": dispatch.durable_identity,
+                        "dispatch_evidence_poll_sequence": dispatch.evidence_poll_sequence,
+                        **self._poll_evidence_fields(),
                     }
                     return {"state": "CONFIRMED_OUTPUT", "path": str(destination), "evidence": evidence}
                 if last.lineage_card_id and last.state == "WAITING":
+                    self._record_poll(
+                        phase="RECONCILIATION", media_type=request["media_type"],
+                        baseline=baseline, current=records, surface=surface,
+                        stable_polls=last.stable_polls, observation=last,
+                        dispatch=dispatch, activation=activation,
+                    )
+                    self._record_observation(last)
+                    self._sync_dispatch_state(dispatch)
+                    self._finish_poll_evidence("CONFIRMED_DISPATCH")
                     return {"state": "CONFIRMED_DISPATCH", "evidence": {
                         "provider_lineage_card_id": last.lineage_card_id,
                         "candidate_delta_count": last.candidate_delta_count,
                         "candidate_identities": last.candidate_identities,
+                        "dispatch_confirmation_state": dispatch.state,
+                        "dispatch_confirmation_signal": dispatch.signal,
+                        "durable_dispatch_identity": dispatch.durable_identity,
+                        "dispatch_evidence_poll_sequence": dispatch.evidence_poll_sequence,
+                        **self._poll_evidence_fields(),
                     }}
+                self._record_poll(
+                    phase="RECONCILIATION", media_type=request["media_type"],
+                    baseline=baseline, current=records, surface=surface,
+                    stable_polls=last.stable_polls, observation=last,
+                    dispatch=dispatch, activation=activation,
+                )
+                self._record_observation(last)
+                self._sync_dispatch_state(dispatch)
                 time.sleep(.5)
+            self._finish_poll_evidence("NO_UNIQUE_PROVIDER_DELTA")
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {
                 "reason": "NO_UNIQUE_PROVIDER_DELTA",
                 "candidate_delta_count": last.candidate_delta_count if last else 0,
                 "candidate_identities": last.candidate_identities if last else [],
+                **self._poll_evidence_fields(),
             }}
         finally:
-            page.close()
+            try:
+                if not self._poll_timeline.complete:
+                    self._finish_poll_evidence("RECONCILIATION_EXIT")
+            finally:
+                page.close()
 
 
 def download_provider_asset_candidate(runtime, destination: Path, *, provider_asset_id: str) -> Path:

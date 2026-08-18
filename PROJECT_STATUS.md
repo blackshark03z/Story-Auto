@@ -58,35 +58,47 @@ The current accepted post-release development state includes:
   provider lineage is confirmed. Stale/foreign output, gallery recency, and
   timestamp proximity are not ownership evidence; competing candidates remain
   ambiguous. Goal 17 acceptance preserved Trial A and did not execute Trial B.
+- **Goal 19** (`STORY-AUTO-GOAL-19-TRIAL-A-RECOVERY-AND-PRODUCTION-CLOSEOUT`),
+  source anchor `2a009c2329005b9f667805bbeff65af9aec8fa41`, added a
+  transaction-safe exception for two explicitly classified pre-Goal-17 legacy
+  epochs. Goal 19 ended as a legitimate terminal production **BLOCK**, not a
+  production pass: fresh request `req_8842b45b5666c9677562` remained
+  `AMBIGUOUS / OUTPUT_ATTRIBUTION_UNCERTAIN` after one provider submission.
+- **Goal 20** (`STORY-AUTO-GOAL-20-FLOW-EVIDENCE-AND-UNRESOLVED-REPLAY`) is a
+  local R3 candidate. It retains a bounded hash-chained per-poll provider
+  timeline, prevents a transient job signal without durable identity from
+  confirming dispatch, and adds an explicit zero-call fresh-epoch recovery for
+  irreducible unresolved attempts. It is not yet authorized for Trial A:
+  independent R3 review must approve the exact Goal 20 commit first.
 
-The current source implementation anchor is Goal 17; resolve live `HEAD` for
-the documentation-sync commit rather than treating this current-state record as
-a self-pinning Git authority.
+The current committed source implementation anchor is Goal 19; resolve live
+`HEAD` for the Goal 20 source/docs commit rather than treating this current-state
+record as a self-pinning Git authority.
 
 ## Trial A and next-techlead handoff
 
 Trial A remains the preserved Quiet Verdict project
 `prj_4f895eb1436c42c4ba5b908381b14fd1`; it is not a replacement-project or
-fresh-batch candidate. Its current manifest has 14 IMAGE requests. The first
-unresolved request, `req_28728acbcab5522b8685`, is `AMBIGUOUS` with
-`FLOW_DISPATCH_UNCERTAIN`: its first attempt was reconciled as
-`NOT_DISPATCHED`, while its second reconciliation remains `AMBIGUOUS`.
-`req_6b755dde5a6e7b5c3295` has the same unresolved dispatch state.
-`req_3591b82710f9c1c59acf` is `FAILED_RETRYABLE` with
-`OUTPUT_ATTRIBUTION_INVALID`: its formerly successful, dispatch-confirmed
-attempt has invalidated attribution and no selected asset. These states are
-preserved evidence, not a license to resubmit or to select an
-available-looking gallery item; the listed unresolved requests have no
-`selected_asset`.
+fresh-batch candidate. Goal 19 safely resolved the two explicitly classified
+legacy evidence-gap epochs and retained their history. The current earliest
+barrier is the fresh request `req_8842b45b5666c9677562`: one attempt,
+`dispatch_confirmed=true`, `AMBIGUOUS / OUTPUT_ATTRIBUTION_UNCERTAIN`, no
+`provider_job_id`, no final lineage card, no candidate output, and no
+`selected_asset`. One foreign/reference identity remains quarantined. The five
+later planned requests have no manifest entries or provider attempts.
 
-The safe next action is for the next techlead to resume this existing project
-only through the Goal 17 reconciliation/barrier path. It must reconcile the
-earliest unresolved attempt before any Flow activation. If that reconciliation
-does not prove a safe resolution, the serial project queue remains halted; do
-not click Generate, select newest output, use timestamps as ownership evidence,
-or begin Trial B. Only a confirmed request-specific attribution (or the
-supported manual recovery/retry outcome after reconciliation) can release the
-barrier for the next activation.
+Goal 20 source work does not change that runtime state. Do not reconcile, call
+Flow, invoke the new unresolved replay operation, click Generate, select a
+gallery item, run later Trial A requests, or start Trial B before independent R3
+approval of the exact Goal 20 commit. After approval, an operator may choose the
+distinct unresolved replay contract only with a non-empty reason and explicit
+acknowledgement that the prior dispatch/cost may have occurred, output ownership
+remains unresolved, and a replacement may consume another provider credit. The
+operation itself makes zero provider calls and retains the old attempt as
+`historical_attribution=UNRESOLVED`.
+
+Build OS/workflow findings and upgrade recommendations are captured in
+[`docs/reference/BUILD_OS_WORKFLOW_CASE_STUDY_GOALS_19_20.md`](docs/reference/BUILD_OS_WORKFLOW_CASE_STUDY_GOALS_19_20.md).
 
 ## Accepted feature inventory
 
