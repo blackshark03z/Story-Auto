@@ -10,7 +10,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
-                                                adopt_manual_recovery,
+                                                adopt_exact_flow_recovery, adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 review_production_asset)
@@ -327,7 +327,8 @@ class FlowTests(unittest.TestCase):
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","request_identity_sha256":"refhash","media_type":"IMAGE","status":"AMBIGUOUS","failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS","attempts":[{"attempt":1,"status":"AMBIGUOUS","failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS"}]}]})
             from PIL import Image
             recovered=Path(root)/"recovered.png"; Image.new("RGB",(1280,720),"navy").save(recovered,"PNG")
-            adopt_manual_recovery(runtime.root,cfg.project_id,"ref",recovered,settings={"provider_asset_id":"exact"},attribution="operator selected exact provider asset identity")
+            adopt_exact_flow_recovery(runtime.root,cfg.project_id,"ref",recovered,
+                                      provider_identity={"asset_id":"exact"},evidence="operator selected exact provider asset identity")
             def generate(request,_refs,path): calls.append(request["request_id"]); Image.new("RGB",(1280,720),"green").save(path,"PNG"); return path
             execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate),execute=True,request_ids={"shot"},production_batch=True)
             self.assertEqual(calls,["shot"])

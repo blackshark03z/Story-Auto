@@ -23,7 +23,8 @@ from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
 )
-from story_auto.providers.flow.service import queue_regeneration, review_production_asset
+from story_auto.providers.flow.service import (queue_regeneration, review_production_asset,
+                                               supersede_ambiguous_request)
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider
 
@@ -438,9 +439,15 @@ class OperatorService:
     def replace_asset(self, project_id: str, request_id: str, source: Path | str) -> dict[str, Any]:
         current=next((item for group in self.media_items(project_id).values() for item in group if item.get("request",{}).get("request_id")==request_id),None)
         if not current: raise OperatorServiceError("request not found")
-        if current.get("status")!="AMBIGUOUS": queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
+        if current.get("status")=="AMBIGUOUS": raise OperatorServiceError("MANUAL_LOCAL_OVERRIDE_AMBIGUOUS_BLOCKED")
+        queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
         adopt_manual_recovery(self.runtime.root,project_id,request_id,Path(source),settings={"source":"operator_replacement"},attribution="operator-selected local file")
         return self.media_items(project_id)
+
+    def supersede_ambiguous_request(self, project_id: str, request_id: str, *, reason: str,
+                                    acknowledge_historical_dispatch_unknown: bool) -> dict[str, Any]:
+        return supersede_ambiguous_request(self.runtime.root,project_id,request_id,reason=reason,
+                                           acknowledge_historical_dispatch_unknown=acknowledge_historical_dispatch_unknown)
 
     def edit_prompt(self, project_id: str, request_id: str, prompt: str) -> dict[str, Any]:
         if not isinstance(prompt,str) or not prompt.strip(): raise OperatorServiceError("prompt is required")

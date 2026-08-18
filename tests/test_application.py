@@ -185,12 +185,14 @@ class OperatorApplicationTests(unittest.TestCase):
             app.regenerate("prj_recovery","shot_auth",reason="signed in; create again")
             self.assertEqual(app.snapshot("prj_recovery")["primary_action"]["action"],"Review recovery")
             recovered=Path(root)/"recovered.png"; Image.new("RGB",(32,32),"navy").save(recovered,"PNG")
-            app.replace_asset("prj_recovery","shot_ambiguous",recovered)
+            with self.assertRaises(OperatorServiceError) as caught:
+                app.replace_asset("prj_recovery","shot_ambiguous",recovered)
+            self.assertEqual(str(caught.exception),"MANUAL_LOCAL_OVERRIDE_AMBIGUOUS_BLOCKED")
             manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
             adopted=next(item for item in manifest["requests"] if item["request_id"]=="shot_ambiguous")
-            self.assertEqual(adopted["status"],"SUCCEEDED")
+            self.assertEqual(adopted["status"],"AMBIGUOUS")
             self.assertEqual(adopted["attempts"][0]["failure_class"],"FLOW_TIMEOUT")
-            self.assertEqual(adopted["attempts"][1]["dispatch_origin"],"human_manual_recovery")
+            self.assertEqual(len(adopted["attempts"]),1)
 
 
 if __name__ == "__main__": unittest.main()

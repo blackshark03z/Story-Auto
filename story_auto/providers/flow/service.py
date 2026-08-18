@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import hashlib
+import json
 import shutil
+import uuid
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
@@ -33,6 +35,8 @@ UNRESOLVED_FLOW_FAILURES = {
     "OUTPUT_ATTRIBUTION_AMBIGUOUS",
 }
 UNRESOLVED_FLOW_STATES = {"GENERATING", "AMBIGUOUS"}
+SUPERSEDED_AMBIGUOUS_STATUS = "SUPERSEDED_AMBIGUOUS"
+LEGACY_EVIDENCE_GAP_REASON = "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"
 LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_FAILED",
     "FLOW_IMAGE_POSTPROCESS_SOURCE_INVALID",
@@ -98,6 +102,120 @@ def _valid_selected(paths, entry):
         metadata = validate_image(path) if entry["media_type"] == "IMAGE" else validate_video(path)
         return metadata["sha256"] == selected.get("sha256")
     except Exception: return False
+
+
+def _legacy_ambiguous_supersession_eligible(entry: dict | None) -> bool:
+    """Allow a new epoch only for the audited legacy evidence-gap shape.
+
+    A normal modern AMBIGUOUS Flow request remains a hard queue barrier.  This
+    exception deliberately requires the exact legacy reconciliation conclusion
+    that cannot be repaired by another provider inspection.
+    """
+    if not isinstance(entry, dict): return False
+    if entry.get("status") != "AMBIGUOUS" or entry.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return False
+    if entry.get("selected_asset") is not None: return False
+    attempts = entry.get("attempts") if isinstance(entry.get("attempts"), list) else []
+    if not attempts: return False
+    last = attempts[-1]
+    if not isinstance(last, dict) or last.get("failure_class") != "FLOW_DISPATCH_UNCERTAIN": return False
+    if last.get("dispatch_confirmed") is not False or last.get("provider_job_id") is not None: return False
+    events = last.get("reconciliation_events") if isinstance(last.get("reconciliation_events"), list) else []
+    if not events: return False
+    latest = events[-1] if isinstance(events[-1], dict) else {}
+    evidence = latest.get("evidence") if isinstance(latest.get("evidence"), dict) else {}
+    return latest.get("state") == "REMAINS_AMBIGUOUS" and evidence.get("reason") == LEGACY_EVIDENCE_GAP_REASON
+
+
+def _replacement_identity(request: dict, *, nonce: str, epoch: int) -> tuple[str, str]:
+    """Derive a fresh identity while retaining the unchanged semantic request."""
+    semantic = request.get("fingerprint")
+    if not isinstance(semantic, str) or not semantic:
+        raise FlowError("LEGACY_SUPERSESSION_INVALID")
+    identity_input = {"semantic_fingerprint": semantic, "replacement_epoch": epoch, "epoch_nonce": nonce}
+    fingerprint = hashlib.sha256(json.dumps(identity_input, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return "req_" + fingerprint[:20], fingerprint
+
+
+def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
+    """Migrate only declared dependency/selection references, never free text."""
+    changed = False
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "selected_request_id" and item == old_request_id:
+                value[key] = replacement_request_id; changed = True
+            elif key in {"depends_on", "reference_asset_ids"} and isinstance(item, list):
+                rewritten = [replacement_request_id if candidate == old_request_id else candidate for candidate in item]
+                if rewritten != item: value[key] = rewritten; changed = True
+            elif isinstance(item, (dict, list)):
+                changed = _migrate_request_references(item, old_request_id, replacement_request_id) or changed
+    elif isinstance(value, list):
+        for item in value: changed = _migrate_request_references(item, old_request_id, replacement_request_id) or changed
+    return changed
+
+
+def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                reason: str, acknowledge_historical_dispatch_unknown: bool) -> dict:
+    """Abandon one unrecoverable legacy Flow epoch without asserting provider truth.
+
+    The old manifest record and its attempts/reconciliations remain immutable;
+    the active request graph receives a nonce-backed replacement identity.  This
+    operation performs no provider action.
+    """
+    if not isinstance(reason, str) or not reason.strip(): raise FlowError("LEGACY_SUPERSESSION_REASON_REQUIRED")
+    if acknowledge_historical_dispatch_unknown is not True: raise FlowError("LEGACY_SUPERSESSION_UNKNOWN_ACK_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        requests_path = paths.artifact_path("output/generation_requests.json")
+        try: requests_data = read_json(requests_path)
+        except Exception as error: raise FlowError("LEGACY_SUPERSESSION_INVALID") from error
+        requests = requests_data.get("requests") if isinstance(requests_data, dict) else None
+        if not isinstance(requests, list): raise FlowError("LEGACY_SUPERSESSION_INVALID")
+        old_request = next((item for item in requests if item.get("request_id") == request_id), None)
+        old_entry = next((item for item in manifest.get("requests", []) if item.get("request_id") == request_id), None)
+        if not isinstance(old_request, dict) or not _legacy_ambiguous_supersession_eligible(old_entry):
+            raise FlowError("LEGACY_SUPERSESSION_NOT_ELIGIBLE")
+        old_attempts = old_entry.get("attempts")
+        old_reconciliations = old_entry.get("reconciliation_events")
+        nonce = uuid.uuid4().hex
+        epoch = int(old_request.get("replacement_epoch", 0)) + 1
+        replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
+        if any(item.get("request_id") == replacement_id for item in requests) or any(item.get("request_id") == replacement_id for item in manifest.get("requests", [])):
+            raise FlowError("LEGACY_SUPERSESSION_IDENTITY_COLLISION")
+        replacement = dict(old_request)
+        replacement.update({"request_id": replacement_id, "fingerprint": replacement_fingerprint,
+                            "replaces_request_id": request_id, "replacement_epoch": epoch,
+                            "epoch_nonce": nonce})
+        position = requests.index(old_request)
+        requests[position] = replacement
+        _migrate_request_references(requests_data, request_id, replacement_id)
+        media_plan_path = paths.artifact_path("output/media_plan.json")
+        media_plan = read_json(media_plan_path) if media_plan_path.is_file() else None
+        if isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, replacement_id):
+            atomic_write_json(media_plan_path, media_plan)
+        event = {"at": _now(), "event": SUPERSEDED_AMBIGUOUS_STATUS, "operator_reason": reason.strip(),
+                 "old_request_id": request_id, "old_status": old_entry.get("status"),
+                 "old_failure_class": old_entry.get("failure_class"), "prior_dispatch_state": "UNKNOWN",
+                 "prior_attribution_state": "UNRESOLVED", "replacement_request_id": replacement_id,
+                 "historical_dispatch_unknown_acknowledged": True}
+        old_entry.setdefault("supersession_events", []).append(event)
+        old_entry.update({"status": SUPERSEDED_AMBIGUOUS_STATUS,
+                          "failure_class": "LEGACY_SUPERSEDED_AMBIGUOUS",
+                          "historical_provider_dispatch": "UNKNOWN",
+                          "historical_attribution": "UNRESOLVED",
+                          "replacement_request_id": replacement_id, "updated_at": event["at"]})
+        manifest["requests"].append({"request_id": replacement_id, "request_identity_sha256": replacement_fingerprint,
+                                     "related_identity": replacement.get("shot_id") or replacement.get("entity_id"),
+                                     "media_type": replacement["media_type"], "provider": replacement.get("provider", "google_flow"),
+                                     "prompt_sha256": hashlib.sha256(replacement["prompt"].encode("utf-8")).hexdigest(),
+                                     "reference_asset_hashes": [], "attempts": [], "status": "PENDING", "created_at": event["at"],
+                                     "replaces_request_id": request_id, "replacement_epoch": epoch, "epoch_nonce": nonce})
+        if old_entry.get("attempts") != old_attempts or old_entry.get("reconciliation_events") != old_reconciliations:
+            raise FlowError("LEGACY_SUPERSESSION_APPEND_ONLY_VIOLATION")
+        atomic_write_json(requests_path, requests_data)
+        atomic_write_json(manifest_path, manifest)
+        return {"old_request_id": request_id, "replacement_request_id": replacement_id,
+                "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS}
 
 
 def _successful_raw_image(paths, entry):
@@ -493,37 +611,69 @@ def reopen_verified_false_dispatch(runtime_root: Path | str, project_id: str, re
         atomic_write_json(path, manifest)
 
 def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id: str, source: Path, *, settings: dict, attribution: str) -> dict:
-    """Adopt one attributable human-recovered Flow output without a new submit."""
+    """Adopt a local override without fabricating confirmed Flow attribution.
+
+    Exact provider recovery is intentionally a separate, evidence-bearing path;
+    an arbitrary operator file is recorded as an operator-local asset only.
+    """
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest=_manifest(paths, project_id); entry=next((e for e in manifest["requests"] if e.get("request_id")==request_id),None)
         if not entry or entry.get("status") not in {"AMBIGUOUS", "NOT_DISPATCHED", "FAILED_RETRYABLE"} or not attribution: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
+        if entry.get("status") == "AMBIGUOUS": raise FlowError("MANUAL_LOCAL_OVERRIDE_AMBIGUOUS_BLOCKED")
         metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
         number=len(entry["attempts"])+1
         try: request=next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"] if item.get("request_id")==request_id)
         except Exception: request={}
         production=request.get("execution_tier")=="STANDARD_PRODUCTION"
         raw_suffix = source.suffix.lower() or (".png" if entry["media_type"] == "IMAGE" else ".mp4")
-        raw_label = "manual_recovery_raw" if production and entry["media_type"] == "IMAGE" else "manual_recovery"
+        raw_label = "operator_local_asset"
         rel=f"assets/{entry['media_type'].lower()}/{request_id}/{raw_label}_{number:03d}{raw_suffix}"
         target=paths.artifact_path(rel);target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
         confirmed_at = _now()
-        attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_manual_recovery","attribution_evidence":attribution,"attribution_state":"CONFIRMED","attribution_method":"operator_exact_provider_identity","attribution_method_version":"operator-recovery/1.0.0","attribution_confirmation_timestamp":confirmed_at,"provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"downloaded_raw_path":rel,"raw_sha256":metadata["sha256"],"metadata":metadata,"completed_at":confirmed_at}
-        if production and entry["media_type"] == "IMAGE":
-            attempt["production_image_postprocess_required"] = True
+        attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"operator_local_override","attribution_evidence":attribution,"attribution_state":"LOCAL_OVERRIDE","attribution_method":"operator_local_asset","attribution_method_version":"operator-local-asset/1.0.0","provider_settings":settings,"asset_path":rel,"asset_sha256":metadata["sha256"],"downloaded_raw_path":rel,"raw_sha256":metadata["sha256"],"metadata":metadata,"completed_at":confirmed_at}
+        entry["attempts"].append(attempt)
+        selected={"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,
+                  "provenance":"OPERATOR_LOCAL_ASSET","production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}
+        entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":selected,
+                      "failure_class":None,"updated_at":_now()})
+        atomic_write_json(path,manifest);return selected
+
+
+def adopt_exact_flow_recovery(runtime_root: Path | str, project_id: str, request_id: str, source: Path, *,
+                              provider_identity: dict, evidence: str, settings: dict | None = None) -> dict:
+    """Record a human-downloaded result only when exact provider identity is supplied."""
+    if not isinstance(provider_identity, dict) or not any(provider_identity.get(key) for key in ("asset_id", "card_id", "identity")):
+        raise FlowError("MANUAL_RECOVERY_EXACT_PROVIDER_IDENTITY_REQUIRED")
+    if not isinstance(evidence, str) or not evidence.strip(): raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id); entry=next((e for e in manifest["requests"] if e.get("request_id")==request_id),None)
+        if not entry or entry.get("status") not in {"AMBIGUOUS", "NOT_DISPATCHED", "FAILED_RETRYABLE"}: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
+        try: request=next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"] if item.get("request_id")==request_id)
+        except Exception as error: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT") from error
+        production=request.get("execution_tier") == "STANDARD_PRODUCTION"
+        metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
+        number=len(entry["attempts"])+1; suffix=source.suffix.lower() or (".png" if entry["media_type"] == "IMAGE" else ".mp4")
+        rel=f"assets/{entry['media_type'].lower()}/{request_id}/exact_flow_recovery_{number:03d}{suffix}"
+        target=paths.artifact_path(rel); target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,target)
+        at=_now(); attempt={"attempt":number,"status":"SUCCEEDED","dispatch_origin":"human_exact_flow_recovery",
+            "attribution_evidence":evidence.strip(),"attribution_state":"CONFIRMED","attribution_method":"operator_exact_provider_identity",
+            "attribution_method_version":"operator-exact-flow-recovery/1.0.0","attributed_provider_identity":dict(provider_identity),
+            "attribution_confirmation_timestamp":at,"provider_settings":settings or {},"asset_path":rel,"asset_sha256":metadata["sha256"],
+            "downloaded_raw_path":rel,"raw_sha256":metadata["sha256"],"metadata":metadata,"completed_at":at}
+        if production and entry["media_type"] == "IMAGE": attempt["production_image_postprocess_required"] = True
         entry["attempts"].append(attempt)
         if production and entry["media_type"] == "IMAGE":
-            try:
-                selected = _process_raw_image(paths, entry, attempt)
+            try: selected = _process_raw_image(paths, entry, attempt)
             except FlowImagePostprocessError as error:
-                atomic_write_json(path, manifest)
-                raise FlowError(error.failure_class, str(error)) from error
+                atomic_write_json(path, manifest); raise FlowError(error.failure_class, str(error)) from error
+            selected["provenance"] = "EXACT_FLOW_RECOVERY"
         else:
-            selected={"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,
-                      "production_qc":"PENDING" if production else "ENGINEERING_FIXTURE"}
-            entry.update({"status":"QC_PENDING" if production else "SUCCEEDED","selected_asset":selected,
-                          "failure_class":None,"updated_at":_now()})
-        atomic_write_json(path,manifest);return selected
+            selected={"path":rel,"sha256":metadata["sha256"],"attempt":number,"metadata":metadata,"provenance":"EXACT_FLOW_RECOVERY",
+                      "production_qc":"ENGINEERING_FIXTURE"}
+            entry.update({"status":"SUCCEEDED","selected_asset":selected,"failure_class":None,"updated_at":at})
+        atomic_write_json(path,manifest); return selected
 
 
 def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_request_id: str,
@@ -613,6 +763,8 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
 
 def _unresolved_flow_entry(entry: dict | None) -> bool:
     if not isinstance(entry, dict):
+        return False
+    if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS:
         return False
     if entry.get("status") in UNRESOLVED_FLOW_STATES:
         return True

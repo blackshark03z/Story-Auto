@@ -18,6 +18,7 @@ from story_auto.providers.flow.postprocess import (
 from story_auto.providers.flow.service import (
     FlowError,
     FlowExecutor,
+    adopt_exact_flow_recovery,
     adopt_manual_recovery,
     execute_generation,
     invalidate_asset_attribution,
@@ -147,8 +148,9 @@ class FlowImagePostprocessTests(unittest.TestCase):
                                execute=True)
             recovered = Path(root) / "recovered.png"; self._write_flow_image(recovered)
             raw_sha = sha256_file(recovered)
-            selected = adopt_manual_recovery(runtime.root, config.project_id, "ref", recovered,
-                                             settings={"source": "operator"}, attribution="exact visible Flow result")
+            selected = adopt_exact_flow_recovery(runtime.root, config.project_id, "ref", recovered,
+                                                 provider_identity={"asset_id": "operator-observed-flow-tile"},
+                                                 evidence="exact visible Flow result", settings={"source": "operator"})
             entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             attempt = entry["attempts"][-1]
             self.assertEqual((attempt["status"], attempt["asset_sha256"]), ("SUCCEEDED", raw_sha))
