@@ -30,6 +30,18 @@ a serial barrier.
 
 ## External R3 corrective findings
 
+### Candidate durability is not attribution confirmation
+
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified failure shape: moving authoritative confirmation before fallible
+  acquisition protected against duplicate generation but could falsely confirm
+  a candidate before byte-dependent reference-echo exclusion.
+- Reusable rule: persist enough exact identity to prevent resubmission before
+  fallible acquisition, but delay authoritative ownership until every required
+  attribution exclusion has passed.
+- Positive control: external R3 detected the provenance inversion before Trial
+  A resumed.
+
 ### FAILED_RETRYABLE is state, not provider-resubmission authority
 
 - Classification: `PRODUCT ARCHITECTURE / SPEC`.

@@ -817,7 +817,8 @@ class LiveFlowGenerator:
                      current: list[dict], surface: dict, stable_polls: int,
                      observation=None, dispatch: DispatchEvidenceTracker | None = None,
                      activation: dict | None = None,
-                     quarantined: list[dict] | None = None) -> dict:
+                     quarantined: list[dict] | None = None,
+                     bind_authoritative_output: bool = True) -> dict:
         baseline_projection = _identity_projection(baseline, media_type)
         current_projection = _identity_projection(current, media_type)
         baseline_ids = {item["identity"] for item in baseline_projection}
@@ -884,8 +885,9 @@ class LiveFlowGenerator:
                     durable_evidence_serialized=True,
                     evidence_poll_sequence=persisted["poll_sequence"],
                 )
-        if durable_output_identity or (durable_job_identity and dispatch is not None
-                                       and dispatch.state == "CONFIRMED"):
+        if (bind_authoritative_output
+                and (durable_output_identity or (durable_job_identity and dispatch is not None
+                                                  and dispatch.state == "CONFIRMED"))):
             resulting_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
             resulting_signal = dispatch.signal if dispatch is not None else None
             resulting_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
@@ -918,20 +920,56 @@ class LiveFlowGenerator:
             "provider_poll_authoritative_binding": binding,
         })
 
-    def _persist_confirmed_candidate(self, *, phase: str, media_type: str,
-                                     baseline: list[dict], current: list[dict], surface: dict,
-                                     observation, dispatch: DispatchEvidenceTracker,
-                                     activation: dict) -> None:
-        """Durably bind exact provider ownership before any byte acquisition."""
-        self._record_poll(
+    def _persist_candidate_observation_before_acquisition(self, *, phase: str, media_type: str,
+                                                           baseline: list[dict], current: list[dict], surface: dict,
+                                                           observation, dispatch: DispatchEvidenceTracker,
+                                                           activation: dict) -> dict:
+        """Persist exact candidate evidence without claiming output ownership.
+
+        This is deliberately sufficient to preserve the candidate and keep the
+        provider retry barrier closed if byte acquisition fails.  It is not an
+        authoritative attribution decision when a later byte-dependent
+        exclusion, such as reference-echo detection, remains outstanding.
+        """
+        persisted = self._record_poll(
             phase=phase, media_type=media_type, baseline=baseline, current=current,
             surface=surface, stable_polls=observation.stable_polls,
             observation=observation, dispatch=dispatch, activation=activation,
+            bind_authoritative_output=False,
         )
         self._record_observation(observation)
         self._sync_dispatch_state(dispatch)
+        self.last_settings.pop("attributed_provider_identity", None)
+        self.last_settings.pop("attribution_confirmation_timestamp", None)
         self.last_settings.update({
-            "attribution_state": "CONFIRMED",
+            "candidate_observation_state": "DURABLE_OBSERVED",
+            "candidate_acquisition_state": "PENDING",
+            "durable_candidate_identity": evidence_identity(observation.candidate),
+            "candidate_observed_poll_sequence": persisted["poll_sequence"],
+            "attribution_state": "PENDING",
+            # Do not expose an older dispatch-only decision binding as the
+            # authority for this unexcluded candidate.
+            "provider_poll_authoritative_binding": None,
+        })
+        return persisted
+
+    def _confirm_candidate_attribution_after_required_exclusions(self, *, persisted: dict,
+                                                                  observation,
+                                                                  dispatch: DispatchEvidenceTracker) -> None:
+        """Bind CONFIRMED only after every required exclusion has passed."""
+        durable_identity = provider_identity(observation.candidate) or None
+        binding = self._poll_timeline.append_decision_binding(
+            persisted,
+            dispatch_state=dispatch.state,
+            dispatch_signal=dispatch.signal,
+            dispatch_signal_state=dispatch.signal_state,
+            attribution_state="CONFIRMED",
+            durable_identity=durable_identity,
+        )
+        self._sync_poll_evidence()
+        self._sync_bound_decision(binding)
+        self.last_settings.update({
+            "candidate_acquisition_state": "RESOLVED",
             "attribution_method": observation.method,
             "attribution_method_version": ATTRIBUTION_METHOD_VERSION,
             "attributed_provider_identity": evidence_identity(observation.candidate),
@@ -939,6 +977,31 @@ class LiveFlowGenerator:
             "candidate_identities": observation.candidate_identities,
             "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
         })
+
+    def _quarantine_reference_echo_candidate(self, *, phase: str, media_type: str,
+                                              baseline: list[dict], current: list[dict], surface: dict,
+                                              observation, dispatch: DispatchEvidenceTracker,
+                                              activation: dict) -> list[dict]:
+        """Persist a byte-proven input echo without confirming provider ownership."""
+        quarantined = [{**evidence_identity(observation.candidate), "reason": "REFERENCE_INPUT_ECHO"}]
+        self._record_poll(
+            phase=phase, media_type=media_type, baseline=baseline, current=current,
+            surface=surface, stable_polls=observation.stable_polls,
+            observation=observation, dispatch=dispatch, activation=activation,
+            quarantined=quarantined, bind_authoritative_output=False,
+        )
+        self._record_observation(observation)
+        self._sync_dispatch_state(dispatch)
+        self.last_settings.pop("attributed_provider_identity", None)
+        self.last_settings.pop("attribution_confirmation_timestamp", None)
+        self.last_settings.update({
+            "candidate_observation_state": "QUARANTINED_REFERENCE_INPUT_ECHO",
+            "candidate_acquisition_state": "RESOLVED",
+            "attribution_state": "PENDING",
+            "provider_poll_authoritative_binding": None,
+        })
+        self.last_settings.setdefault("quarantined_foreign_identities", []).extend(quarantined)
+        return quarantined
 
     @staticmethod
     def _verify_persisted_poll_evidence(settings: dict) -> dict:
@@ -994,13 +1057,21 @@ class LiveFlowGenerator:
             if provider_identity(record) not in candidate_ids or not record.get("url"):
                 continue
             try:
-                candidate_hash = _dhash_bytes(self._fetch_bytes(page, record["url"]))
+                candidate_is_echo = self._is_reference_input_echo(
+                    self._fetch_bytes(page, record["url"]), reference_hashes,
+                )
             except Exception:
                 continue
-            if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
-                   for reference_hash in reference_hashes):
+            if candidate_is_echo:
                 echoes.append(record)
         return echoes
+
+    @staticmethod
+    def _is_reference_input_echo(data: bytes, reference_hashes: list[str]) -> bool:
+        """Return whether bytes match an attached input closely enough to exclude."""
+        candidate_hash = _dhash_bytes(data)
+        return any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
+                   for reference_hash in reference_hashes)
 
     def __call__(self, request, references, destination: Path):
         # The generator is reused across a batch. Dispatch and attribution
@@ -1205,30 +1276,19 @@ class LiveFlowGenerator:
                     )
                 if observation.state == "CONFIRMED" and observation.candidate:
                     candidate = observation.candidate
-                    # Persist and verify the raw observation and authoritative
-                    # exact-identity binding before a local byte acquisition can
-                    # fail.  The service will then retain confirmed ownership
-                    # and block any new Generate after an acquisition failure.
-                    self._persist_confirmed_candidate(
+                    persisted = self._persist_candidate_observation_before_acquisition(
                         phase="POST_DISPATCH", media_type=request["media_type"],
                         baseline=baseline_records, current=current, surface=surface,
                         observation=observation, dispatch=dispatch, activation=activation,
                     )
-                    data = self._fetch_bytes(page, candidate["url"])
                     if request["media_type"] == "IMAGE" and reference_hashes:
-                        candidate_hash = _dhash_bytes(data)
-                        if any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
-                               for reference_hash in reference_hashes):
-                            quarantined = [{**evidence_identity(candidate), "reason": "REFERENCE_INPUT_ECHO"}]
-                            self._record_poll(
+                        data = self._fetch_bytes(page, candidate["url"])
+                        if self._is_reference_input_echo(data, reference_hashes):
+                            self._quarantine_reference_echo_candidate(
                                 phase="POST_DISPATCH", media_type=request["media_type"],
                                 baseline=baseline_records, current=current, surface=surface,
-                                stable_polls=observation.stable_polls, observation=observation,
-                                dispatch=dispatch, activation=activation, quarantined=quarantined,
+                                observation=observation, dispatch=dispatch, activation=activation,
                             )
-                            self._record_observation(observation)
-                            self._sync_dispatch_state(dispatch)
-                            self.last_settings.setdefault("quarantined_foreign_identities", []).extend(quarantined)
                             baseline_records = _merge_surface_records(baseline_records, [candidate])
                             attribution = RequestAttributionTracker(
                                 baseline_records, media_type=request["media_type"],
@@ -1236,6 +1296,13 @@ class LiveFlowGenerator:
                             )
                             time.sleep(.5)
                             continue
+                    else:
+                        data = None
+                    self._confirm_candidate_attribution_after_required_exclusions(
+                        persisted=persisted, observation=observation, dispatch=dispatch,
+                    )
+                    if data is None:
+                        data = self._fetch_bytes(page, candidate["url"])
                     atomic_write_bytes(destination, data)
                     return destination
                 self._record_poll(
@@ -1366,12 +1433,33 @@ class LiveFlowGenerator:
                         **self._poll_evidence_fields(),
                     }}
                 if last.state == "CONFIRMED" and last.candidate:
-                    self._persist_confirmed_candidate(
+                    persisted = self._persist_candidate_observation_before_acquisition(
                         phase="RECONCILIATION", media_type=request["media_type"],
                         baseline=baseline, current=records, surface=surface,
                         observation=last, dispatch=dispatch, activation=activation,
                     )
-                    data = self._fetch_bytes(page, last.candidate["url"])
+                    if request["media_type"] == "IMAGE" and reference_hashes:
+                        data = self._fetch_bytes(page, last.candidate["url"])
+                        if self._is_reference_input_echo(data, reference_hashes):
+                            self._quarantine_reference_echo_candidate(
+                                phase="RECONCILIATION", media_type=request["media_type"],
+                                baseline=baseline, current=records, surface=surface,
+                                observation=last, dispatch=dispatch, activation=activation,
+                            )
+                            baseline = _merge_surface_records(baseline, [last.candidate])
+                            tracker = RequestAttributionTracker(
+                                baseline, media_type=request["media_type"],
+                                expected_count=int(request.get("output_count", 1)),
+                            )
+                            time.sleep(.5)
+                            continue
+                    else:
+                        data = None
+                    self._confirm_candidate_attribution_after_required_exclusions(
+                        persisted=persisted, observation=last, dispatch=dispatch,
+                    )
+                    if data is None:
+                        data = self._fetch_bytes(page, last.candidate["url"])
                     atomic_write_bytes(destination, data)
                     self._finish_poll_evidence("CONFIRMED_OUTPUT")
                     evidence = {

@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from io import BytesIO
+from pathlib import Path
 
 from PIL import Image
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.providers.flow.attribution import AttributionObservation
-from story_auto.providers.flow.live import DispatchEvidenceTracker, LiveFlowGenerator
+from story_auto.providers.flow.live import DispatchEvidenceTracker, LiveFlowGenerator, _dhash_bytes
 from story_auto.providers.flow.service import FlowError, FlowExecutor, execute_generation
 from story_auto.providers.flow.session import FlowCapabilities
 from tests.test_goal20_flow_evidence_and_unresolved_replay import Goal20UnresolvedReplayTests
@@ -175,7 +177,71 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
                 self.assertEqual((second["blocked"], second["blocked_request_id"], calls),
                                  (True, request_id, []))
 
-    def test_confirmed_exact_ownership_precedes_acquisition_failure_and_blocks_generate(self):
+    @staticmethod
+    def _candidate_observation(candidate):
+        return AttributionObservation(
+            state="CONFIRMED", method="fixture-exact", candidate=candidate,
+            lineage_card_id=candidate["card_id"], candidate_delta_count=1,
+            candidate_identities=[{"identity": f"asset:{candidate['asset_id']}"}],
+            foreign_candidate_identities=[], stable_polls=3,
+        )
+
+    @staticmethod
+    def _image_bytes(*, reverse=False):
+        image = Image.new("L", (9, 8))
+        for x in range(9):
+            for y in range(8):
+                image.putpixel((x, y), 255 if (x >= 4) ^ reverse else 0)
+        buffer = BytesIO(); image.save(buffer, "PNG")
+        return buffer.getvalue()
+
+    def test_candidate_observation_precedes_reference_echo_exclusion_without_confirmation(self):
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        with tempfile.TemporaryDirectory() as root:
+            generator._reset_poll_evidence(Path(root) / "fixture-polls.json")
+            generator.last_settings = {}
+            candidate = {"card_id": "card-exact", "asset_id": "asset-exact", "media_type": "IMAGE", "state": "READY"}
+            observation = self._candidate_observation(candidate)
+            persisted = generator._persist_candidate_observation_before_acquisition(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
+                surface={"global_pending_count": 0}, observation=observation,
+                dispatch=DispatchEvidenceTracker(), activation={"input_dispatched": True},
+            )
+            settings = generator.last_settings
+            self.assertEqual((settings["candidate_observation_state"], settings["candidate_acquisition_state"],
+                              settings["attribution_state"], settings["durable_candidate_identity"]["identity"]),
+                             ("DURABLE_OBSERVED", "PENDING", "PENDING", "asset:asset-exact"))
+            self.assertEqual(persisted["poll_sequence"], settings["candidate_observed_poll_sequence"])
+            self.assertIsNone(settings["provider_poll_authoritative_binding"])
+
+    def test_reference_echo_is_quarantined_without_authoritative_confirmation(self):
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        with tempfile.TemporaryDirectory() as root:
+            generator._reset_poll_evidence(Path(root) / "fixture-polls.json")
+            generator.last_settings = {}
+            candidate = {"card_id": "card-echo", "asset_id": "asset-echo", "media_type": "IMAGE", "state": "READY"}
+            observation = self._candidate_observation(candidate)
+            dispatch = DispatchEvidenceTracker()
+            generator._persist_candidate_observation_before_acquisition(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
+                surface={"global_pending_count": 0}, observation=observation,
+                dispatch=dispatch, activation={"input_dispatched": True},
+            )
+            echo_bytes = self._image_bytes()
+            self.assertTrue(generator._is_reference_input_echo(echo_bytes, [_dhash_bytes(echo_bytes)]))
+            quarantined = generator._quarantine_reference_echo_candidate(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
+                surface={"global_pending_count": 0}, observation=observation,
+                dispatch=dispatch, activation={"input_dispatched": True},
+            )
+            settings = generator.last_settings
+            self.assertEqual(quarantined[0]["reason"], "REFERENCE_INPUT_ECHO")
+            self.assertEqual((settings["candidate_observation_state"], settings["attribution_state"]),
+                             ("QUARANTINED_REFERENCE_INPUT_ECHO", "PENDING"))
+            self.assertIsNone(settings["provider_poll_authoritative_binding"])
+            self.assertNotIn("attributed_provider_identity", settings)
+
+    def test_candidate_observation_acquisition_failure_blocks_generate_without_false_confirmation(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root)
             manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
@@ -187,22 +253,17 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
             generator._reset_poll_evidence(paths.artifact_path("output/fixture-polls.json"))
             generator.last_settings = {}
             candidate = {"card_id": "card-exact", "asset_id": "asset-exact", "media_type": "IMAGE", "state": "READY"}
-            observation = AttributionObservation(
-                state="CONFIRMED", method="fixture-exact", candidate=candidate,
-                lineage_card_id="card-exact", candidate_delta_count=1,
-                candidate_identities=[{"identity": "asset:asset-exact"}],
-                foreign_candidate_identities=[], stable_polls=3,
-            )
-            generator._persist_confirmed_candidate(
+            observation = self._candidate_observation(candidate)
+            generator._persist_candidate_observation_before_acquisition(
                 phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
                 surface={"global_pending_count": 0}, observation=observation,
                 dispatch=DispatchEvidenceTracker(), activation={"input_dispatched": True},
             )
             settings = generator.last_settings
             self.assertEqual((settings["dispatch_confirmation_state"], settings["attribution_state"],
-                              settings["attributed_provider_identity"]["identity"]),
-                             ("CONFIRMED", "CONFIRMED", "asset:asset-exact"))
-            self.assertTrue(settings["provider_poll_authoritative_binding"])
+                              settings["durable_candidate_identity"]["identity"]),
+                             ("CONFIRMED", "PENDING", "asset:asset-exact"))
+            self.assertIsNone(settings["provider_poll_authoritative_binding"])
 
             class AcquisitionFails:
                 dispatch_confirmed = True
@@ -218,8 +279,8 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
             entry = self._entry(paths, self.OLD_ID)
             attempt = entry["attempts"][-1]
             self.assertEqual((first["blocked"], entry["status"], attempt["dispatch_confirmation_state"],
-                              attempt["attribution_state"], attempt["attributed_provider_identity"]["identity"]),
-                             (True, "FAILED_RETRYABLE", "CONFIRMED", "CONFIRMED", "asset:asset-exact"))
+                              attempt["attribution_state"], attempt["durable_candidate_identity"]["identity"]),
+                             (True, "FAILED_RETRYABLE", "CONFIRMED", "PENDING", "asset:asset-exact"))
             self.assertNotIn("selected_asset", entry)
             calls = []
             second = execute_generation(
@@ -229,6 +290,55 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
                 execute=True, request_ids={self.OLD_ID}, max_requests=1,
             )
             self.assertEqual((second["blocked"], calls), (True, []))
+
+    def test_non_echo_candidate_confirms_only_after_exclusion(self):
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        with tempfile.TemporaryDirectory() as root:
+            generator._reset_poll_evidence(Path(root) / "fixture-polls.json")
+            generator.last_settings = {}
+            candidate = {"card_id": "card-valid", "asset_id": "asset-valid", "media_type": "IMAGE", "state": "READY"}
+            observation = self._candidate_observation(candidate)
+            dispatch = DispatchEvidenceTracker()
+            persisted = generator._persist_candidate_observation_before_acquisition(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
+                surface={"global_pending_count": 0}, observation=observation,
+                dispatch=dispatch, activation={"input_dispatched": True},
+            )
+            self.assertFalse(generator._is_reference_input_echo(
+                self._image_bytes(reverse=True),
+                [_dhash_bytes(self._image_bytes())],
+            ))
+            generator._confirm_candidate_attribution_after_required_exclusions(
+                persisted=persisted, observation=observation, dispatch=dispatch,
+            )
+            settings = generator.last_settings
+            self.assertEqual((settings["candidate_acquisition_state"], settings["attribution_state"],
+                              settings["attributed_provider_identity"]["identity"]),
+                             ("RESOLVED", "CONFIRMED", "asset:asset-valid"))
+            self.assertTrue(settings["provider_poll_authoritative_binding"])
+            runtime, config, paths = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            entry = manifest["requests"][0]
+            entry.update({"status": "PENDING", "failure_class": None, "attempts": [],
+                          "reference_asset_hashes": [_dhash_bytes(self._image_bytes())]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            class ValidExcludedCandidate:
+                dispatch_confirmed = True
+                last_settings = settings
+                def __call__(self, _request, _references, destination):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+                    return destination
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), ValidExcludedCandidate()),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            entry = self._entry(paths, self.OLD_ID)
+            self.assertEqual((result["new_submissions"], entry["attempts"][-1]["attribution_state"]), (1, "CONFIRMED"))
+            self.assertIn("selected_asset", entry)
 
 
 if __name__ == "__main__":
