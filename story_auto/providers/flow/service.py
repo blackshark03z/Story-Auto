@@ -604,7 +604,10 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
     if replacement_entry.get("status") == "PENDING":
         return attempts == []
     if replacement_entry.get("status") == "NOT_DISPATCHED":
-        return bool(attempts) and attempts[-1].get("status") == "NOT_DISPATCHED" and _proven_safe_pre_dispatch_attempt(attempts[-1])
+        # Replay validity is a semantic no-dispatch decision.  It must accept
+        # both the current activation proof and a verified retained timeline,
+        # exactly as the retry, queue, and execution gates do.
+        return bool(attempts) and attempts[-1].get("status") == "NOT_DISPATCHED" and canonical_no_dispatch_proof(attempts[-1])
     # Normal execution states remain subject to the usual state machine.  They
     # are deliberately not compared with the immutable creation projection.
     return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
@@ -1981,7 +1984,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     "FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED",
                     "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
                 }
-                if safe_pre_dispatch_candidate and _proven_safe_pre_dispatch_attempt(attempt):
+                if safe_pre_dispatch_candidate and canonical_no_dispatch_proof(attempt):
                     state = "NOT_DISPATCHED"
                 elif safe_pre_dispatch_candidate or error.failure_class in UNRESOLVED_FLOW_FAILURES:
                     # Error labels and a missing job ID are not dispatch proof.
