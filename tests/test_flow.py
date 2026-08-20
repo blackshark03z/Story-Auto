@@ -202,7 +202,7 @@ class FlowTests(unittest.TestCase):
             first=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(first["new_submissions"],2)
             second=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(second["new_submissions"],0); self.assertEqual(len(calls),2)
             manifest=read_json(paths.artifact_path("output/generation_manifest.json")); selected=paths.artifact_path(manifest["requests"][0]["selected_asset"]["path"]); selected.unlink()
-            third=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertEqual(third["new_submissions"],1)
+            third=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True); self.assertTrue(third["blocked"]); self.assertEqual(third["new_submissions"],0)
 
     def test_local_reconciliation_invalidates_only_missing_selected_asset(self):
         with tempfile.TemporaryDirectory() as root:
@@ -216,7 +216,8 @@ class FlowTests(unittest.TestCase):
             self.assertEqual(next(item for item in reconciled["requests"] if item["request_id"]=="shot")["status"], "FAILED_RETRYABLE")
             self.assertEqual(next(item for item in reconciled["requests"] if item["request_id"]=="ref")["status"], "SUCCEEDED")
             result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True)
-            self.assertEqual(result["new_submissions"],1)
+            self.assertTrue(result["blocked"])
+            self.assertEqual(result["new_submissions"],0)
 
     def test_visual_rejection_preserves_successful_attempt_provenance(self):
         with tempfile.TemporaryDirectory() as root:

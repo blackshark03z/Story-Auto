@@ -918,6 +918,28 @@ class LiveFlowGenerator:
             "provider_poll_authoritative_binding": binding,
         })
 
+    def _persist_confirmed_candidate(self, *, phase: str, media_type: str,
+                                     baseline: list[dict], current: list[dict], surface: dict,
+                                     observation, dispatch: DispatchEvidenceTracker,
+                                     activation: dict) -> None:
+        """Durably bind exact provider ownership before any byte acquisition."""
+        self._record_poll(
+            phase=phase, media_type=media_type, baseline=baseline, current=current,
+            surface=surface, stable_polls=observation.stable_polls,
+            observation=observation, dispatch=dispatch, activation=activation,
+        )
+        self._record_observation(observation)
+        self._sync_dispatch_state(dispatch)
+        self.last_settings.update({
+            "attribution_state": "CONFIRMED",
+            "attribution_method": observation.method,
+            "attribution_method_version": ATTRIBUTION_METHOD_VERSION,
+            "attributed_provider_identity": evidence_identity(observation.candidate),
+            "candidate_delta_count": observation.candidate_delta_count,
+            "candidate_identities": observation.candidate_identities,
+            "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
     @staticmethod
     def _verify_persisted_poll_evidence(settings: dict) -> dict:
         snapshot = settings.get("provider_poll_evidence")
@@ -1183,6 +1205,15 @@ class LiveFlowGenerator:
                     )
                 if observation.state == "CONFIRMED" and observation.candidate:
                     candidate = observation.candidate
+                    # Persist and verify the raw observation and authoritative
+                    # exact-identity binding before a local byte acquisition can
+                    # fail.  The service will then retain confirmed ownership
+                    # and block any new Generate after an acquisition failure.
+                    self._persist_confirmed_candidate(
+                        phase="POST_DISPATCH", media_type=request["media_type"],
+                        baseline=baseline_records, current=current, surface=surface,
+                        observation=observation, dispatch=dispatch, activation=activation,
+                    )
                     data = self._fetch_bytes(page, candidate["url"])
                     if request["media_type"] == "IMAGE" and reference_hashes:
                         candidate_hash = _dhash_bytes(data)
@@ -1205,19 +1236,6 @@ class LiveFlowGenerator:
                             )
                             time.sleep(.5)
                             continue
-                    self._record_poll(
-                        phase="POST_DISPATCH", media_type=request["media_type"],
-                        baseline=baseline_records, current=current, surface=surface,
-                        stable_polls=observation.stable_polls, observation=observation,
-                        dispatch=dispatch, activation=activation,
-                    )
-                    self._record_observation(observation)
-                    self._sync_dispatch_state(dispatch)
-                    self.last_settings.update({
-                        "attribution_state": "CONFIRMED",
-                        "attributed_provider_identity": evidence_identity(candidate),
-                        "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
                     atomic_write_bytes(destination, data)
                     return destination
                 self._record_poll(
@@ -1348,14 +1366,11 @@ class LiveFlowGenerator:
                         **self._poll_evidence_fields(),
                     }}
                 if last.state == "CONFIRMED" and last.candidate:
-                    self._record_poll(
+                    self._persist_confirmed_candidate(
                         phase="RECONCILIATION", media_type=request["media_type"],
                         baseline=baseline, current=records, surface=surface,
-                        stable_polls=last.stable_polls, observation=last,
-                        dispatch=dispatch, activation=activation,
+                        observation=last, dispatch=dispatch, activation=activation,
                     )
-                    self._record_observation(last)
-                    self._sync_dispatch_state(dispatch)
                     data = self._fetch_bytes(page, last.candidate["url"])
                     atomic_write_bytes(destination, data)
                     self._finish_poll_evidence("CONFIRMED_OUTPUT")

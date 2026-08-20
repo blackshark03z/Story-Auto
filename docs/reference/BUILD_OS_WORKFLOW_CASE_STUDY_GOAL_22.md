@@ -28,6 +28,32 @@ records `dispatch_confirmed=false`, no job/lineage/output evidence,
 uncertain dispatch, uncertain/ambiguous attribution, or unresolved ownership is
 a serial barrier.
 
+## External R3 corrective findings
+
+### FAILED_RETRYABLE is state, not provider-resubmission authority
+
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified failure shape: a generic retryable status could bypass the positive
+  no-dispatch predicate and enter another provider generation attempt.
+- Control added: every request with an existing attempt now reaches Generate
+  only when its latest attempt satisfies the canonical positive no-dispatch
+  predicate. `FAILED_RETRYABLE`, a missing job ID, a false dispatch flag, a
+  timeout, and an error label are diagnostic state, not authority.
+- Local-only recovery remains separate: it may work on already-owned bytes but
+  cannot use this path to create another provider generation.
+
+### Durable output ownership must precede fallible asset acquisition
+
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified failure shape: a stable exact provider candidate could be fetched
+  before its raw poll and authoritative ownership binding were durable, leaving
+  a duplicate-generation window if local acquisition failed.
+- Positive control: external R3 found the window before Trial A re-entry.
+- Control added: the exact raw observation and verified authoritative binding
+  are persisted before fetching bytes. An acquisition failure retains confirmed
+  dispatch, confirmed attribution, and exact provider identity, with no
+  selected asset and no authority for another Generate.
+
 ## Workflow lesson
 
 A runtime goal that discovers a source defect must be explicitly dispositioned

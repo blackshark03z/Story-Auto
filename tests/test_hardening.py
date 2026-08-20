@@ -45,7 +45,8 @@ class ReleaseHardeningTests(unittest.TestCase):
             def valid(_request,_refs,path): Image.new("RGB",(32,32),"navy").save(path,"PNG");return path
             second=execute_generation(runtime.root,config.project_id,executor=FlowExecutor(capabilities,valid),execute=True)
             entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
-            self.assertEqual((second["new_submissions"],entry["status"],len(entry["attempts"])),(1,"SUCCEEDED",2))
+            self.assertEqual((second["new_submissions"],entry["status"],len(entry["attempts"])),(0,"FAILED_RETRYABLE",1))
+            self.assertTrue(second["blocked"])
 
     def test_partial_download_failure_remains_isolated_from_selection(self):
         with tempfile.TemporaryDirectory() as root:

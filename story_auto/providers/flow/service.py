@@ -283,6 +283,22 @@ def _proven_safe_pre_dispatch_attempt(attempt: dict) -> bool:
     return isinstance(activation, dict) and activation.get("input_dispatched") is False
 
 
+def _provider_generation_retry_authorized(entry: dict | None) -> bool:
+    """Authorize Generate only from persisted positive no-dispatch evidence.
+
+    A request with no attempts is a first submission.  Once an attempt exists,
+    lifecycle status and failure labels are diagnostic state only; the latest
+    attempt itself must prove that provider input never crossed dispatch.
+    Local-only recovery paths deliberately do not use this gate.
+    """
+    if not isinstance(entry, dict):
+        return False
+    attempts = entry.get("attempts")
+    if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
+        return False
+    return not attempts or _proven_safe_pre_dispatch_attempt(attempts[-1])
+
+
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
     """Migrate only declared dependency/selection references, never free text."""
     changed = False
@@ -1459,6 +1475,12 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
         return False
     if entry.get("status") in {SUPERSEDED_AMBIGUOUS_STATUS, ABANDONED_UNRESOLVED_STATUS}:
         return False
+    if entry.get("status") in {"SUCCEEDED", "QC_PENDING"}:
+        return False
+    # A previous provider attempt without canonical positive no-dispatch proof
+    # is a serial barrier; FAILED_RETRYABLE is never resubmission authority.
+    if entry.get("attempts") and not _provider_generation_retry_authorized(entry):
+        return True
     if entry.get("status") in UNRESOLVED_FLOW_STATES:
         return True
     if entry.get("failure_class") in UNRESOLVED_FLOW_FAILURES:
@@ -1655,8 +1677,12 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
     })
     if state == "PROVEN_PRE_DISPATCH_FAILURE" and evidence.get("input_dispatched") is False:
         attempt.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+                        "dispatch_confirmed": False, "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                        "attribution_state": "NOT_ATTEMPTED",
+                        "provider_settings": {"activation": {"input_dispatched": False,
+                                                                  "proof": "RECONCILIATION_PROVEN_PRE_DISPATCH_FAILURE"}},
                         "completed_at": event["at"]})
-        entry.update({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+        entry.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
                       "updated_at": event["at"]})
         return True, None, 1
     if state == "CONFIRMED_OUTPUT" and evidence.get("attribution_state") == "CONFIRMED":
@@ -1784,6 +1810,15 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     "blocked": True, "blocked_request_id": malformed[0]["request_id"],
                     "attention": "FLOW_GENERATION_RECONCILIATION_REQUIRED", "reconciliations": 0,
                     "manifest": "output/generation_manifest.json"}
+        # A preserved raw production image is recoverable without a provider
+        # activation.  Do that local-only work before asking the reconciliation
+        # adapter about an unresolved provider attempt; its failure status is
+        # never authority to cross the Generate boundary again.
+        initial_blocker = _first_unresolved(paths, project_id, requests, entries)
+        if (initial_blocker is not None
+                and _repair_local_image(paths, initial_blocker[1], initial_blocker[0])):
+            atomic_write_json(path, manifest)
+            entries[initial_blocker[0]["request_id"]] = initial_blocker[1]
         released, blocked_request_id, reconciled = _reconcile_unresolved(
             paths, project_id, manifest, requests, entries, executor
         )
@@ -1805,6 +1840,14 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if paused: break
             blocker = _first_unresolved(paths, project_id, requests, entries)
             if blocker is not None:
+                # A preserved raw production image can be repaired locally
+                # without invoking Generate.  Give that separate recovery path
+                # precedence over the provider-resubmission barrier only for
+                # the blocked request itself.
+                if blocker[0].get("request_id") == request.get("request_id") and _repair_local_image(paths, blocker[1], request):
+                    atomic_write_json(path, manifest)
+                    entries[request["request_id"]] = blocker[1]
+                    continue
                 blocked_request_id = blocker[0]["request_id"]
                 break
             if request.get("media_type") == "IMAGE" and request.get("output_count", 1) != 1:
@@ -1820,6 +1863,11 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 blocked_request_id = request["request_id"]
                 break
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
+            if not _provider_generation_retry_authorized(entry):
+                # This is intentionally independent of status/failure labels.
+                # An unproven prior attempt cannot reach executor.run again.
+                blocked_request_id = request["request_id"]
+                break
             if not _runnable(request, entries): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             attempt_number = len(entry["attempts"]) + 1

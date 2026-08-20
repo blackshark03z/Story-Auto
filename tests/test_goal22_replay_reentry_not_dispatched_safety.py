@@ -7,6 +7,8 @@ import unittest
 from PIL import Image
 
 from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.providers.flow.attribution import AttributionObservation
+from story_auto.providers.flow.live import DispatchEvidenceTracker, LiveFlowGenerator
 from story_auto.providers.flow.service import FlowError, FlowExecutor, execute_generation
 from story_auto.providers.flow.session import FlowCapabilities
 from tests.test_goal20_flow_evidence_and_unresolved_replay import Goal20UnresolvedReplayTests
@@ -137,6 +139,96 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
                                                                  lambda *_: calls.append("provider")),
                                            execute=True, request_ids={replacement_id}, max_requests=1)
                 self.assertEqual((retry["blocked"], calls), (True, []))
+
+    def test_failed_retryable_never_authorizes_replay_or_ordinary_provider_resubmission(self):
+        for replay in (True, False):
+            with self.subTest(replay=replay), tempfile.TemporaryDirectory() as root:
+                runtime, config, paths = self._project(root)
+                request_id = self._replay(runtime, config)["replacement_request_id"] if replay else self.OLD_ID
+                if not replay:
+                    manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+                    entry = next(item for item in manifest["requests"] if item["request_id"] == request_id)
+                    entry.update({"status": "PENDING", "failure_class": None, "attempts": []})
+                    atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+                class ArbitraryFailure:
+                    dispatch_confirmed = False
+                    last_settings = {"dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                     "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                    def __call__(self, *_):
+                        raise FlowError("FLOW_ARBITRARY_RETRYABLE_FAILURE")
+
+                first = execute_generation(
+                    runtime.root, config.project_id,
+                    executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), ArbitraryFailure()),
+                    execute=True, request_ids={request_id}, max_requests=1,
+                )
+                self.assertTrue(first["blocked"])
+                self.assertEqual(self._entry(paths, request_id)["status"], "FAILED_RETRYABLE")
+                calls = []
+                second = execute_generation(
+                    runtime.root, config.project_id,
+                    executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True),
+                                          lambda *_: calls.append("provider")),
+                    execute=True, request_ids={request_id}, max_requests=1,
+                )
+                self.assertEqual((second["blocked"], second["blocked_request_id"], calls),
+                                 (True, request_id, []))
+
+    def test_confirmed_exact_ownership_precedes_acquisition_failure_and_blocks_generate(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            entry = manifest["requests"][0]
+            entry.update({"status": "PENDING", "failure_class": None, "attempts": []})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            generator = LiveFlowGenerator(None, timeout_seconds=0)
+            generator._reset_poll_evidence(paths.artifact_path("output/fixture-polls.json"))
+            generator.last_settings = {}
+            candidate = {"card_id": "card-exact", "asset_id": "asset-exact", "media_type": "IMAGE", "state": "READY"}
+            observation = AttributionObservation(
+                state="CONFIRMED", method="fixture-exact", candidate=candidate,
+                lineage_card_id="card-exact", candidate_delta_count=1,
+                candidate_identities=[{"identity": "asset:asset-exact"}],
+                foreign_candidate_identities=[], stable_polls=3,
+            )
+            generator._persist_confirmed_candidate(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
+                surface={"global_pending_count": 0}, observation=observation,
+                dispatch=DispatchEvidenceTracker(), activation={"input_dispatched": True},
+            )
+            settings = generator.last_settings
+            self.assertEqual((settings["dispatch_confirmation_state"], settings["attribution_state"],
+                              settings["attributed_provider_identity"]["identity"]),
+                             ("CONFIRMED", "CONFIRMED", "asset:asset-exact"))
+            self.assertTrue(settings["provider_poll_authoritative_binding"])
+
+            class AcquisitionFails:
+                dispatch_confirmed = True
+                last_settings = settings
+                def __call__(self, *_):
+                    raise FlowError("ASSET_ACQUISITION_FAILED")
+
+            first = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), AcquisitionFails()),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            entry = self._entry(paths, self.OLD_ID)
+            attempt = entry["attempts"][-1]
+            self.assertEqual((first["blocked"], entry["status"], attempt["dispatch_confirmation_state"],
+                              attempt["attribution_state"], attempt["attributed_provider_identity"]["identity"]),
+                             (True, "FAILED_RETRYABLE", "CONFIRMED", "CONFIRMED", "asset:asset-exact"))
+            self.assertNotIn("selected_asset", entry)
+            calls = []
+            second = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True),
+                                      lambda *_: calls.append("provider")),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            self.assertEqual((second["blocked"], calls), (True, []))
 
 
 if __name__ == "__main__":
