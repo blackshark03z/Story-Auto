@@ -16,6 +16,7 @@ from story_auto.providers.flow.live import (
     ProviderPollEvidenceTimeline,
     _stable_surface,
     dispatch_timeout_failure,
+    _json_sha256,
 )
 from story_auto.providers.flow.service import (
     ABANDONED_UNRESOLVED_STATUS,
@@ -23,11 +24,131 @@ from story_auto.providers.flow.service import (
     FlowExecutor,
     execute_generation,
     replay_unresolved_request,
+    _confirm_executor_attribution,
 )
 from story_auto.providers.flow.session import FlowCapabilities
 
 
 class Goal20PollEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def _reseal_bindings(snapshot: dict) -> None:
+        for index, binding in enumerate(snapshot["decision_bindings"], start=1):
+            binding["binding_sequence"] = index
+            binding["previous_binding_sha256"] = (
+                snapshot["decision_bindings"][index - 2]["binding_sha256"] if index > 1 else None
+            )
+            unsigned = dict(binding); unsigned.pop("binding_sha256", None)
+            binding["binding_sha256"] = _json_sha256(unsigned)
+        snapshot["decision_binding_count"] = len(snapshot["decision_bindings"])
+        snapshot["decision_bindings_sha256"] = _json_sha256(snapshot["decision_bindings"])
+        snapshot["evidence_head_sha256"] = ProviderPollEvidenceTimeline._head_sha256(snapshot)
+
+    @staticmethod
+    def _confirmed_bound_settings() -> dict:
+        timeline = ProviderPollEvidenceTimeline(max_observations=8)
+        source = timeline.append({
+            "phase": "POST_DISPATCH",
+            "current_identity_set": [{"identity": "asset:new", "card_id": "new", "asset_id": "new"}],
+            "job_card_identities_observed": ["new"],
+            "output_asset_identities_observed": ["new"],
+            "candidate_identities": [{"identity": "asset:new", "card_id": "new", "asset_id": "new"}],
+            "attribution_evidence_state": "CONFIRMED",
+            "dispatch_evidence_state": "UNCERTAIN",
+            "durable_dispatch_identity": "asset:new",
+        })
+        binding = timeline.append_decision_binding(
+            source, dispatch_state="CONFIRMED", dispatch_signal="new_attributable_output",
+            dispatch_signal_state="DISPATCH_CONFIRMED", attribution_state="CONFIRMED",
+            durable_identity="asset:new",
+        )
+        snapshot = timeline.snapshot()
+        return {
+            "provider_poll_evidence": snapshot,
+            "provider_poll_authoritative_binding": binding,
+            "dispatch_confirmation_state": "CONFIRMED",
+            "dispatch_confirmation_signal": "new_attributable_output",
+            "attribution_state": "CONFIRMED",
+            "attributed_provider_identity": {"identity": "asset:new"},
+        }
+
+    def test_durable_job_then_exact_output_are_bound_and_finalizer_accepts(self):
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        generator._reset_poll_evidence(Path(tempfile.gettempdir()) / "goal20-binding-polls.json")
+        baseline = [{"card_id": "old", "asset_id": "old", "media_type": "IMAGE", "state": "READY"}]
+        pending = baseline + [{"card_id": "new", "asset_id": None, "media_type": "IMAGE", "state": "PENDING"}]
+        dispatch = DispatchEvidenceTracker()
+        dispatch.observe(input_dispatched=True, attributable_job=True)
+        pending_observation = RequestAttributionTracker(baseline, media_type="IMAGE", expected_count=1).observe(pending)
+        raw = generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline, current=pending,
+            surface={"records": pending, "global_pending_count": 1}, stable_polls=0,
+            observation=pending_observation, dispatch=dispatch, activation={"input_dispatched": True},
+        )
+        self.assertEqual(raw["dispatch_evidence_state"], "UNCERTAIN")
+        first_binding = generator.last_settings["provider_poll_authoritative_binding"]
+        self.assertEqual((first_binding["source_poll_sequence"], first_binding["resulting_dispatch_state"]), (1, "CONFIRMED"))
+        self.assertEqual(first_binding["source_observation_sha256"], raw["observation_sha256"])
+
+        current = baseline + [{"card_id": "new", "asset_id": "new", "media_type": "IMAGE", "state": "READY"}]
+        tracker = RequestAttributionTracker(baseline, media_type="IMAGE", expected_count=1)
+        for _ in range(3):
+            exact = tracker.observe(current)
+            generator._record_poll(
+                phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline, current=current,
+                surface={"records": current, "global_pending_count": 0}, stable_polls=exact.stable_polls,
+                observation=exact, dispatch=dispatch, activation={"input_dispatched": True},
+            )
+        generator._record_observation(exact)
+        generator.last_settings["attributed_provider_identity"] = {"identity": "asset:new"}
+        self.assertEqual((exact.state, generator.last_settings["dispatch_confirmation_state"],
+                          generator.last_settings["attribution_state"]), ("CONFIRMED", "CONFIRMED", "CONFIRMED"))
+        _confirm_executor_attribution({"attribution_state": "CONFIRMED"}, type("Generator", (), {"last_settings": generator.last_settings})())
+
+    def test_unbound_authoritative_state_and_binding_corruption_fail_closed(self):
+        settings = self._confirmed_bound_settings()
+        raw_only = copy.deepcopy(settings)
+        raw_only["provider_poll_evidence"]["decision_bindings"] = []
+        self._reseal_bindings(raw_only["provider_poll_evidence"])
+        with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_INVALID"):
+            _confirm_executor_attribution({}, type("Generator", (), {"last_settings": raw_only})())
+
+        for name, mutate in {
+            "hash": lambda snapshot: snapshot["decision_bindings"][0].update({"binding_sha256": "0" * 64}),
+            "source_sequence": lambda snapshot: snapshot["decision_bindings"][0].update({"source_poll_sequence": 99}),
+            "source_hash": lambda snapshot: snapshot["decision_bindings"][0].update({"source_observation_sha256": "0" * 64}),
+            "foreign_identity": lambda snapshot: snapshot["decision_bindings"][0].update({"durable_identity_used": "asset:foreign"}),
+        }.items():
+            with self.subTest(name=name):
+                corrupted = copy.deepcopy(settings)
+                mutate(corrupted["provider_poll_evidence"])
+                if name in {"source_sequence", "source_hash", "foreign_identity"}:
+                    self._reseal_bindings(corrupted["provider_poll_evidence"])
+                with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_INVALID"):
+                    _confirm_executor_attribution({}, type("Generator", (), {"last_settings": corrupted})())
+
+    def test_incomplete_or_transient_evidence_cannot_create_confirmed_binding(self):
+        timeline = ProviderPollEvidenceTimeline(max_provider_identities=2)
+        with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED"):
+            timeline.append({"current_identity_set": [{"identity": f"asset:{index}"} for index in range(3)]})
+        with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED"):
+            timeline.append_decision_binding(
+                timeline.observations[0], dispatch_state="CONFIRMED", dispatch_signal="test",
+                dispatch_signal_state="DISPATCH_CONFIRMED", attribution_state="CONFIRMED",
+                durable_identity="asset:0",
+            )
+
+        generator = LiveFlowGenerator(None, timeout_seconds=0)
+        generator._reset_poll_evidence(Path(tempfile.gettempdir()) / "goal20-transient-polls.json")
+        baseline = [{"card_id": "old", "asset_id": "old", "media_type": "IMAGE", "state": "READY"}]
+        dispatch = DispatchEvidenceTracker()
+        dispatch.observe(input_dispatched=True, attributable_job=True)
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline, current=baseline,
+            surface={"records": baseline, "global_pending_count": 0}, stable_polls=0,
+            dispatch=dispatch, activation={"input_dispatched": True},
+        )
+        self.assertEqual(dispatch.state, "UNCERTAIN")
+        self.assertEqual(generator.last_settings["provider_poll_decision_bindings"], [])
     @staticmethod
     def _complete_snapshot() -> dict:
         timeline = ProviderPollEvidenceTimeline(max_observations=8)
@@ -117,6 +238,14 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         result = LiveFlowGenerator(None).reconcile(
             {"media_type": "IMAGE", "output_count": 1},
             {"provider_settings": {"provider_poll_evidence": corrupted}},
+            Path("unused.png"),
+        )
+        self.assertEqual(result, {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}})
+
+    def test_reconciliation_rejects_missing_decision_binding_before_browser_access(self):
+        result = LiveFlowGenerator(None).reconcile(
+            {"media_type": "IMAGE", "output_count": 1},
+            {"provider_settings": {"provider_poll_evidence": self._complete_snapshot()}},
             Path("unused.png"),
         )
         self.assertEqual(result, {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}})
@@ -462,6 +591,32 @@ class Goal20UnresolvedReplayTests(unittest.TestCase):
             self.assertTrue(result["blocked"])
             self.assertEqual(entry["status"], "AMBIGUOUS")
             self.assertNotIn("selected_asset", entry)
+
+    def test_verified_exact_output_binding_can_finalize_selected_asset(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"][0].update({"status": "PENDING", "failure_class": None, "attempts": []})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            settings = Goal20PollEvidenceTests._confirmed_bound_settings()
+
+            class BoundExactGenerator:
+                dispatch_confirmed = True
+                last_settings = settings
+                def __call__(self, _request, _refs, destination):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+                    return destination
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), BoundExactGenerator()),
+                execute=True, request_ids={self.OLD_ID}, max_requests=1,
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertFalse(result["blocked"])
+            self.assertEqual(entry["status"], "SUCCEEDED")
+            self.assertIn("selected_asset", entry)
 
     def test_invalid_persisted_evidence_cannot_finalize_selected_asset(self):
         with tempfile.TemporaryDirectory() as root:

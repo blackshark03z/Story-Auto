@@ -39,7 +39,7 @@ _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
 PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.0.0"
-POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.1.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.2.0"
 MAX_POLL_OBSERVATIONS = 2048
 MAX_PROVIDER_IDENTITIES_PER_POLL = 256
 MAX_CANDIDATE_IDENTITIES_PER_POLL = 64
@@ -116,6 +116,7 @@ class ProviderPollEvidenceTimeline:
         self.max_quarantined_identities = max_quarantined_identities
         self.max_serialized_bytes = max_serialized_bytes
         self.observations: list[dict] = []
+        self.decision_bindings: list[dict] = []
         self.complete = False
         self.evidence_complete = True
         self.terminal_state: str | None = None
@@ -157,6 +158,48 @@ class ProviderPollEvidenceTimeline:
         })
         observation["observation_sha256"] = _json_sha256(observation)
         return observation
+
+    def append_decision_binding(self, source: dict, *, dispatch_state: str,
+                                dispatch_signal: str | None,
+                                dispatch_signal_state: str,
+                                attribution_state: str,
+                                durable_identity: str | None) -> dict:
+        """Persist a derived decision only after its raw source poll verifies."""
+        if not self.evidence_complete:
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "incomplete evidence cannot bind a decision")
+        verified = self.verify_snapshot(self.snapshot())
+        source_poll_sequence = source.get("poll_sequence")
+        source_hash = source.get("observation_sha256")
+        source_observation = next(
+            (item for item in verified["observations"] if item.get("poll_sequence") == source_poll_sequence),
+            None,
+        )
+        if (not isinstance(source_observation, dict)
+                or source_observation.get("observation_sha256") != source_hash):
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "decision source poll is not verified")
+        binding = {
+            "binding_sequence": len(self.decision_bindings) + 1,
+            "source_poll_sequence": source_poll_sequence,
+            "source_observation_sha256": source_hash,
+            "resulting_dispatch_state": dispatch_state,
+            "resulting_dispatch_signal": dispatch_signal,
+            "resulting_dispatch_signal_state": dispatch_signal_state,
+            "resulting_attribution_state": attribution_state,
+            "durable_identity_used": durable_identity,
+            "previous_binding_sha256": (
+                self.decision_bindings[-1]["binding_sha256"] if self.decision_bindings else None
+            ),
+        }
+        binding["binding_sha256"] = _json_sha256(binding)
+        self.decision_bindings.append(binding)
+        if self._serialized_size_for_existing() > self.max_serialized_bytes:
+            self.decision_bindings.pop()
+            self.evidence_complete = False
+            self._persist()
+            raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "decision binding cannot fit bounded evidence")
+        self.verify_snapshot(self.snapshot())
+        self._persist()
+        return binding
 
     def _collection_overflow(self, value: dict) -> list[dict]:
         limits = {
@@ -215,6 +258,9 @@ class ProviderPollEvidenceTimeline:
             "max_quarantined_identities_per_poll": self.max_quarantined_identities,
             "max_serialized_bytes": self.max_serialized_bytes,
             "observation_count": len(self.observations if observations is None else observations),
+            "decision_binding_count": len(self.decision_bindings),
+            "decision_bindings_sha256": _json_sha256(self.decision_bindings),
+            "decision_bindings": list(self.decision_bindings),
             "complete": self.complete,
             "evidence_complete": self.evidence_complete,
             "terminal_state": self.terminal_state,
@@ -232,7 +278,7 @@ class ProviderPollEvidenceTimeline:
                 "max_provider_identities_per_poll", "max_candidate_identities_per_poll",
                 "max_quarantined_identities_per_poll", "max_serialized_bytes",
                 "observation_count", "complete", "evidence_complete", "terminal_state",
-                "timeline_sha256",
+                "timeline_sha256", "decision_binding_count", "decision_bindings_sha256",
             )
         })
 
@@ -245,7 +291,8 @@ class ProviderPollEvidenceTimeline:
             if snapshot.get("parser_extractor_version") != PROVIDER_SURFACE_EXTRACTOR_VERSION:
                 raise ValueError("extractor")
             observations = snapshot.get("observations")
-            if not isinstance(observations, list):
+            bindings = snapshot.get("decision_bindings")
+            if not isinstance(observations, list) or not isinstance(bindings, list):
                 raise ValueError("observations")
             limits = {
                 "max_observations": snapshot.get("max_observations"),
@@ -265,6 +312,10 @@ class ProviderPollEvidenceTimeline:
                 raise ValueError("limits_outside_supported_range")
             if len(observations) != snapshot.get("observation_count") or len(observations) > limits["max_observations"]:
                 raise ValueError("count")
+            if (len(bindings) != snapshot.get("decision_binding_count")
+                    or len(bindings) > len(observations)
+                    or snapshot.get("decision_bindings_sha256") != _json_sha256(bindings)):
+                raise ValueError("binding_count")
             if not isinstance(snapshot.get("complete"), bool) or not isinstance(snapshot.get("evidence_complete"), bool):
                 raise ValueError("completion")
             if snapshot.get("timeline_sha256") != _json_sha256(observations):
@@ -307,6 +358,40 @@ class ProviderPollEvidenceTimeline:
                     if isinstance(observation.get("quarantined_identities"), list) and len(observation["quarantined_identities"]) > limits["max_quarantined_identities_per_poll"]:
                         raise ValueError("quarantine_bound")
                 previous = stored_hash
+            previous_binding = None
+            source_by_sequence = {item["poll_sequence"]: item for item in observations}
+            for index, binding in enumerate(bindings, start=1):
+                if not isinstance(binding, dict):
+                    raise ValueError("binding")
+                stored_hash = binding.get("binding_sha256")
+                unsigned = dict(binding); unsigned.pop("binding_sha256", None)
+                if (not isinstance(stored_hash, str) or _json_sha256(unsigned) != stored_hash
+                        or binding.get("binding_sequence") != index
+                        or binding.get("previous_binding_sha256") != previous_binding):
+                    raise ValueError("binding_chain")
+                source = source_by_sequence.get(binding.get("source_poll_sequence"))
+                if (not isinstance(source, dict)
+                        or binding.get("source_observation_sha256") != source.get("observation_sha256")):
+                    raise ValueError("binding_source")
+                dispatch_state = binding.get("resulting_dispatch_state")
+                attribution_state = binding.get("resulting_attribution_state")
+                durable_identity = binding.get("durable_identity_used")
+                if not isinstance(dispatch_state, str) or not isinstance(attribution_state, str):
+                    raise ValueError("binding_state")
+                source_identities = cls._source_identities(source)
+                if durable_identity is not None and (not isinstance(durable_identity, str)
+                                                     or durable_identity not in source_identities):
+                    raise ValueError("binding_identity")
+                if dispatch_state == "CONFIRMED" and not durable_identity:
+                    raise ValueError("binding_dispatch_identity")
+                if attribution_state == "CONFIRMED":
+                    if (source.get("attribution_evidence_state") != "CONFIRMED"
+                            or dispatch_state != "CONFIRMED" or not durable_identity):
+                        raise ValueError("binding_attribution")
+                if source.get("evidence_complete") is False and (
+                        dispatch_state == "CONFIRMED" or attribution_state == "CONFIRMED"):
+                    raise ValueError("binding_incomplete")
+                previous_binding = stored_hash
             if incomplete_seen == snapshot["evidence_complete"]:
                 raise ValueError("completeness")
             serialized = len(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
@@ -317,6 +402,29 @@ class ProviderPollEvidenceTimeline:
             raise
         except Exception as error:
             raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "persisted poll evidence failed verification") from error
+
+    @staticmethod
+    def _source_identities(observation: dict) -> set[str]:
+        identities = set()
+        for field in (*_PROVIDER_IDENTITY_FIELDS, "candidate_identities", "quarantined_identities"):
+            for item in observation.get(field, []) if isinstance(observation.get(field), list) else []:
+                if isinstance(item, dict) and isinstance(item.get("identity"), str):
+                    identities.add(item["identity"])
+        identities.update(f"card:{item}" for item in observation.get("job_card_identities_observed", [])
+                          if isinstance(item, str))
+        identities.update(f"asset:{item}" for item in observation.get("output_asset_identities_observed", [])
+                          if isinstance(item, str))
+        if isinstance(observation.get("durable_dispatch_identity"), str):
+            identities.add(observation["durable_dispatch_identity"])
+        return identities
+
+    @classmethod
+    def verify_authoritative_binding(cls, snapshot: dict) -> dict:
+        verified = cls.verify_snapshot(snapshot)
+        bindings = verified.get("decision_bindings", [])
+        if not bindings:
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "authoritative decision binding is unavailable")
+        return bindings[-1]
 
     def _persist(self) -> None:
         if self.path is not None:
@@ -664,6 +772,10 @@ class LiveFlowGenerator:
         ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
         self.last_settings.update({
             "provider_poll_evidence": snapshot,
+            "provider_poll_decision_bindings": snapshot["decision_bindings"],
+            "provider_poll_authoritative_binding": (
+                snapshot["decision_bindings"][-1] if snapshot["decision_bindings"] else None
+            ),
             "poll_evidence_version": POLL_EVIDENCE_VERSION,
             "provider_surface_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
             "provider_poll_max_observations": snapshot["max_observations"],
@@ -690,6 +802,7 @@ class LiveFlowGenerator:
             for key in (
                 "poll_evidence_version", "provider_surface_extractor_version",
                 "provider_poll_evidence", "provider_poll_max_observations",
+                "provider_poll_decision_bindings", "provider_poll_authoritative_binding",
                 "provider_poll_max_identities_per_observation",
                 "provider_poll_max_candidates_per_observation",
                 "provider_poll_max_quarantined_per_observation",
@@ -717,17 +830,11 @@ class LiveFlowGenerator:
         durable_output_identity = None
         if observation is not None and observation.state == "CONFIRMED" and observation.candidate:
             durable_output_identity = provider_identity(observation.candidate) or None
-        predicted_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
-        predicted_signal = dispatch.signal if dispatch is not None else None
-        predicted_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
-        if durable_output_identity and dispatch is not None and dispatch.state != "CONFIRMED":
-            predicted_dispatch_state = "CONFIRMED"
-            predicted_signal = "new_attributable_output"
-            predicted_signal_state = "DISPATCH_CONFIRMED"
-        elif durable_job_identity and dispatch is not None and dispatch.state != "CONFIRMED":
-            predicted_dispatch_state = "CONFIRMED"
-            predicted_signal = "durable_attributable_job_identity"
-            predicted_signal_state = "DISPATCH_CONFIRMED"
+        # This is raw provider fact only.  A resulting decision is created only
+        # after this exact observation is durable and has verified.
+        observed_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
+        observed_signal = dispatch.signal if dispatch is not None else None
+        observed_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
         value = {
             "phase": phase,
             "provider_surface_fingerprint": surface_fingerprint(records_for_type(current, media_type)),
@@ -746,9 +853,9 @@ class LiveFlowGenerator:
             "quarantined_identities": list(quarantined or []),
             "stable_poll_count": observation.stable_polls if observation is not None else stable_polls,
             "provider_busy": bool(int((surface or {}).get("global_pending_count", 0))),
-            "dispatch_evidence_state": predicted_dispatch_state,
-            "dispatch_evidence_signal": predicted_signal,
-            "dispatch_signal_state": predicted_signal_state,
+            "dispatch_evidence_state": observed_dispatch_state,
+            "dispatch_evidence_signal": observed_signal,
+            "dispatch_signal_state": observed_signal_state,
             "durable_dispatch_identity": durable_output_identity or durable_job_identity or (dispatch.durable_identity if dispatch else None),
             "attribution_evidence_state": observation.state if observation is not None else "NOT_ATTEMPTED",
             "lineage_card_id": lineage_card_id,
@@ -758,6 +865,7 @@ class LiveFlowGenerator:
         # A dispatch transition may use this poll only after the exact persisted
         # snapshot verifies under the writer's canonical hash contract.
         ProviderPollEvidenceTimeline.verify_snapshot(self._poll_timeline.snapshot())
+        binding = None
         if dispatch is not None and dispatch.state != "CONFIRMED":
             if durable_output_identity:
                 dispatch.observe(
@@ -776,8 +884,39 @@ class LiveFlowGenerator:
                     durable_evidence_serialized=True,
                     evidence_poll_sequence=persisted["poll_sequence"],
                 )
+        if durable_output_identity or (durable_job_identity and dispatch is not None
+                                       and dispatch.state == "CONFIRMED"):
+            resulting_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
+            resulting_signal = dispatch.signal if dispatch is not None else None
+            resulting_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
+            durable_identity = durable_output_identity or durable_job_identity
+            binding = self._poll_timeline.append_decision_binding(
+                persisted,
+                dispatch_state=resulting_dispatch_state,
+                dispatch_signal=resulting_signal,
+                dispatch_signal_state=resulting_signal_state,
+                attribution_state=observation.state if observation is not None else "NOT_ATTEMPTED",
+                durable_identity=durable_identity,
+            )
         self._sync_poll_evidence()
+        if binding is not None:
+            self._sync_bound_decision(binding)
         return persisted
+
+    def _sync_bound_decision(self, binding: dict) -> None:
+        """Expose only a decision already bound to a verified raw poll."""
+        self.dispatch_confirmed = binding["resulting_dispatch_state"] == "CONFIRMED"
+        self.dispatch_confirmation_state = binding["resulting_dispatch_state"]
+        self.last_settings.update({
+            "dispatch_confirmation_state": binding["resulting_dispatch_state"],
+            "dispatch_confirmation_signal": binding["resulting_dispatch_signal"],
+            "dispatch_ack_method": binding["resulting_dispatch_signal"],
+            "dispatch_signal_state": binding["resulting_dispatch_signal_state"],
+            "durable_dispatch_identity": binding["durable_identity_used"],
+            "dispatch_evidence_poll_sequence": binding["source_poll_sequence"],
+            "attribution_state": binding["resulting_attribution_state"],
+            "provider_poll_authoritative_binding": binding,
+        })
 
     @staticmethod
     def _verify_persisted_poll_evidence(settings: dict) -> dict:
@@ -803,6 +942,11 @@ class LiveFlowGenerator:
             self.last_settings["provider_lineage_card_id"] = observation.lineage_card_id
 
     def _sync_dispatch_state(self, dispatch: DispatchEvidenceTracker) -> None:
+        # Runtime state is diagnostic until _record_poll has persisted a binding.
+        # Do not let an unbound transition become authoritative in settings.
+        binding = self.last_settings.get("provider_poll_authoritative_binding") if isinstance(self.last_settings, dict) else None
+        if isinstance(binding, dict):
+            return
         self.dispatch_confirmed = dispatch.state == "CONFIRMED"
         self.dispatch_confirmation_state = dispatch.state
         self.last_settings.update({
@@ -1092,10 +1236,13 @@ class LiveFlowGenerator:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
         try:
             verified_evidence = self._verify_persisted_poll_evidence(settings)
+            verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified_evidence)
         except FlowError as error:
             # Never reuse a baseline, durable dispatch identity, or attribution
             # detail from evidence that cannot verify exactly as persisted.
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
+        if verified_binding.get("resulting_dispatch_state") != "CONFIRMED":
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
         baseline_observations = [
             observation for observation in verified_evidence["observations"]
             if observation.get("phase") == "PRE_DISPATCH_BASELINE"
@@ -1109,13 +1256,7 @@ class LiveFlowGenerator:
         self._reset_poll_evidence(destination.parent / "reconciliation_poll_evidence.json")
         dispatch = DispatchEvidenceTracker()
         activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {"input_dispatched": True}
-        verified_identities = [
-            observation.get("durable_dispatch_identity")
-            for observation in verified_evidence["observations"]
-            if isinstance(observation.get("durable_dispatch_identity"), str)
-            and observation.get("durable_dispatch_identity")
-        ]
-        prior_durable_identity = verified_identities[-1] if verified_identities else None
+        prior_durable_identity = verified_binding.get("durable_identity_used")
         if attempt.get("dispatch_confirmed") is True and isinstance(prior_durable_identity, str) and prior_durable_identity:
             dispatch.observe(
                 input_dispatched=True, attributable_job=True,

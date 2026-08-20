@@ -268,10 +268,33 @@ artifacts and the immutable `.buildos` generation/evidence chain.
 - Control added: the writer and reader now share one canonical serialization
   and verifier; payload mutation, sequence change, middle deletion, reorder,
   duplication, broken previous link, and incorrect timeline head fail closed.
+- Scope clarification: this is canonical integrity/consistency verification of
+  persisted evidence, not cryptographic principal attestation against an actor
+  able to rewrite and recompute every record.
 - Reusable recommendation: every declared integrity invariant must name its
   implementation, verifier/enforcement call site, and regression proof.
 - Severity/priority: `CRITICAL / P0`.
 - Status: `GOAL20_R3_CORRECTIVE_CANDIDATE_AWAITING_EXTERNAL_R3`.
+
+## Case 14 — verified evidence needs a separately durable decision binding
+
+- Origin: Goal 20 external R3 review of commit
+  `81ca0c473fd90ac0363a31e099635d00f524d970`.
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified symptom: a raw poll could be persisted and verified while the
+  resulting durable dispatch or attribution transition was applied only to
+  runtime/settings state afterward, leaving finalization unable to prove which
+  poll authorized that transition.
+- Root cause status: verified by external R3 review.
+- Control added: a second bounded, hash-chained decision-binding event now
+  references the exact verified poll sequence and hash, the resulting states,
+  signal, and source-present durable identity. Finalization and reconciliation
+  accept only the verified binding, never a settings-only transition.
+- Reusable recommendation: evidence persistence and evidence-derived decision
+  are separate durable events; verification before a decision is necessary but
+  insufficient unless the decision is durably bound back to that evidence.
+- Severity/priority: `CRITICAL / P0`.
+- Status: `GOAL20_R3_DECISION_BINDING_CANDIDATE_AWAITING_EXTERNAL_R3`.
 
 ## Case 13 — bounding poll count alone does not bound evidence storage
 
@@ -305,3 +328,5 @@ artifacts and the immutable `.buildos` generation/evidence chain.
 6. `P0`: require a canonical verifier for every persisted integrity chain.
 7. `P0`: evaluate count, per-observation collection, and serialized-byte bounds
    together for production evidence contracts.
+8. `P0`: require each authoritative evidence-derived decision to retain a
+   verified immutable reference to the observation that justified it.

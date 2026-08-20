@@ -109,6 +109,8 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "poll_evidence_version": settings.get("poll_evidence_version"),
         "provider_surface_extractor_version": settings.get("provider_surface_extractor_version"),
         "provider_poll_evidence": settings.get("provider_poll_evidence"),
+        "provider_poll_decision_bindings": settings.get("provider_poll_decision_bindings"),
+        "provider_poll_authoritative_binding": settings.get("provider_poll_authoritative_binding"),
         "provider_poll_max_observations": settings.get("provider_poll_max_observations"),
         "provider_poll_max_identities_per_observation": settings.get("provider_poll_max_identities_per_observation"),
         "provider_poll_max_candidates_per_observation": settings.get("provider_poll_max_candidates_per_observation"),
@@ -1334,12 +1336,16 @@ def _confirm_executor_attribution(attempt: dict, generator: Any) -> None:
         verified = ProviderPollEvidenceTimeline.verify_snapshot(settings["provider_poll_evidence"])
         if not verified.get("evidence_complete"):
             raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED")
-        observations = verified.get("observations", [])
-        final_observation = observations[-1] if observations else {}
-        if (not isinstance(final_observation, dict)
-                or settings.get("attribution_state") != final_observation.get("attribution_evidence_state")
-                or settings.get("dispatch_confirmation_state") != final_observation.get("dispatch_evidence_state")):
-            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "live attribution state is not bound to verified evidence")
+        binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified)
+        if (settings.get("attribution_state") != binding.get("resulting_attribution_state")
+                or settings.get("dispatch_confirmation_state") != binding.get("resulting_dispatch_state")
+                or settings.get("dispatch_confirmation_signal") != binding.get("resulting_dispatch_signal")):
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "live authority does not match verified decision binding")
+        attributed = settings.get("attributed_provider_identity")
+        if (binding.get("resulting_attribution_state") == "CONFIRMED"
+                and (not isinstance(attributed, dict)
+                     or attributed.get("identity") != binding.get("durable_identity_used"))):
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "attribution identity is not bound to verified decision")
     if settings is None:
         confirmed_at = _now()
         attempt.update({
