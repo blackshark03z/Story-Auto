@@ -358,6 +358,41 @@ def canonical_no_dispatch_proof(attempt: dict) -> bool:
     return _proven_safe_pre_dispatch_attempt(attempt) or _verified_historical_no_dispatch_attempt(attempt)
 
 
+def _produce_crash_before_provider_setup_proof(attempt: dict) -> bool:
+    """Persist the current-schema proof only before the provider boundary.
+
+    ``provider_execution_state`` is synchronously persisted as
+    ``NOT_STARTED`` with the submitted attempt, then changed and persisted
+    immediately before ``executor.run``.  A restart can therefore turn the
+    former state into the normal current-schema proof, but never infer it after
+    the provider boundary may have been entered.
+    """
+    if not isinstance(attempt, dict):
+        return False
+    if (attempt.get("status") != "SUBMITTED"
+            or attempt.get("dispatch_confirmed") is not False
+            or attempt.get("provider_execution_state") != "NOT_STARTED"
+            or attempt.get("provider_boundary_entered_at") is not None
+            or attempt.get("provider_settings") is not None):
+        return False
+    if any(attempt.get(key) is not None for key in (
+        "provider_job_id", "durable_dispatch_identity", "provider_lineage_card_id",
+        "attributed_provider_identity",
+    )):
+        return False
+    if attempt.get("attribution_state") not in {None, "NOT_ATTEMPTED"}:
+        return False
+    attempt.update({
+        "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+        "attribution_state": "NOT_ATTEMPTED",
+        "provider_settings": {"activation": {
+            "input_dispatched": False,
+            "proof": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP",
+        }},
+    })
+    return canonical_no_dispatch_proof(attempt)
+
+
 def _provider_generation_retry_authorized(entry: dict | None) -> bool:
     """Authorize Generate only from persisted positive no-dispatch evidence.
 
@@ -1218,22 +1253,18 @@ def invalidate_asset_attribution(runtime_root: Path | str, project_id: str, requ
 
 
 def recover_interrupted_pre_dispatch_attempt(runtime_root: Path | str, project_id: str, request_id: str) -> None:
-    """Reopen a process-interrupted attempt only when no dispatch setup began."""
+    """Recover only an attempt durably known to precede the provider boundary."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
         attempt = entry.get("attempts", [])[-1] if isinstance(entry, dict) and entry.get("attempts") else None
-        valid = (
-            isinstance(entry, dict) and entry.get("status") == "GENERATING"
-            and isinstance(attempt, dict) and attempt.get("status") == "SUBMITTED"
-            and attempt.get("dispatch_confirmed") is False
-            and attempt.get("provider_settings") is None
-        )
-        if not valid:
+        if not isinstance(entry, dict) or entry.get("status") != "GENERATING":
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        if not _produce_crash_before_provider_setup_proof(attempt):
             raise FlowError("GENERATION_RECONCILIATION_INVALID")
         attempt.update({"status":"NOT_DISPATCHED", "failure_class":"FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
-                        "diagnostic":"process interrupted before provider setup or dispatch", "completed_at":_now()})
+                        "diagnostic":"process interrupted before the persisted provider boundary", "completed_at":_now()})
         entry.update({"status":"NOT_DISPATCHED", "failure_class":"FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
                       "updated_at":_now()})
         atomic_write_json(path, manifest)
@@ -1358,19 +1389,21 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
         atomic_write_json(path, manifest)
 
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
-    """Only reopens an attempt with recorded proof no Generate click happened."""
+    """Only reopen an attempt already proven safe by the canonical authority."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id); entry = next((e for e in manifest["requests"] if e.get("request_id") == request_id), None)
         if not entry or entry.get("status") != "FAILED_PERMANENT": raise FlowError("GENERATION_RECONCILIATION_INVALID")
         attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
         safe_pre_dispatch = {"FLOW_UI_CHANGED", "FLOW_CAPABILITY_UNAVAILABLE"}
-        if not isinstance(attempt, dict) or attempt.get("failure_class") not in safe_pre_dispatch or attempt.get("dispatch_confirmed") is not False: raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        if (not isinstance(attempt, dict) or attempt.get("failure_class") not in safe_pre_dispatch
+                or not canonical_no_dispatch_proof(attempt)):
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
         entry["status"] = "FAILED_RETRYABLE"; entry["reconciled_at"] = _now(); entry["reconciliation"] = "verified_no_dispatch"; atomic_write_json(path, manifest)
 
 def reopen_verified_false_dispatch(runtime_root: Path | str, project_id: str, request_id: str,
                                    *, evidence: dict) -> None:
-    """Reopen a legacy timeout only when exact post-attempt UI evidence proves no dispatch."""
+    """Reopen only when external evidence and canonical proof both agree."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
@@ -1390,9 +1423,10 @@ def reopen_verified_false_dispatch(runtime_root: Path | str, project_id: str, re
                  and evidence.get("prompt_retained") is True and evidence.get("visible_media_count") == 0
                  and evidence.get("prompt_sha256") == prompt_hash and isinstance(screenshot_hash, str)
                  and len(screenshot_hash) == 64 and all(c in "0123456789abcdef" for c in screenshot_hash))
-        if not valid: raise FlowError("GENERATION_RECONCILIATION_INVALID")
-        attempt.update({"status":"NOT_DISPATCHED", "dispatch_confirmed":False,
-                        "failure_class":"FLOW_FALSE_DISPATCH_ACK", "reconciliation_evidence":dict(evidence)})
+        if not valid or not canonical_no_dispatch_proof(attempt):
+            raise FlowError("GENERATION_RECONCILIATION_INVALID")
+        attempt.update({"status":"NOT_DISPATCHED", "failure_class":"FLOW_FALSE_DISPATCH_ACK",
+                        "reconciliation_evidence":dict(evidence)})
         entry.update({"status":"FAILED_RETRYABLE", "failure_class":"FLOW_FALSE_DISPATCH_ACK",
                       "reconciled_at":_now(), "reconciliation":"verified_prompt_retained_and_no_media"})
         atomic_write_json(path, manifest)
@@ -1717,11 +1751,13 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
     if not isinstance(attempt, dict):
         return False, request["request_id"], 0
 
-    # A crash before provider setup is the only restart case proven locally.
-    if (entry.get("status") == "GENERATING" and attempt.get("status") == "SUBMITTED"
-            and attempt.get("dispatch_confirmed") is False and attempt.get("provider_settings") is None):
+    # A crash before the persisted provider boundary is the only restart case
+    # proven locally.  Produce the same current-schema proof every downstream
+    # retry/replay/queue consumer verifies.
+    if entry.get("status") == "GENERATING" and _produce_crash_before_provider_setup_proof(attempt):
         event = {"at": _now(), "state": "PROVEN_PRE_DISPATCH_FAILURE",
-                 "evidence": {"input_dispatched": False, "reason": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP"}}
+                 "evidence": {"input_dispatched": False, "reason": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP",
+                              "canonical_no_dispatch_proof": True}}
         attempt.setdefault("reconciliation_events", []).append(event)
         attempt.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_PROCESS_INTERRUPTED_PRE_DISPATCH",
                         "completed_at": event["at"]})
@@ -1754,12 +1790,17 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
         "at": event["at"], "attempt": attempt.get("attempt"), "state": state,
     })
     if state == "PROVEN_PRE_DISPATCH_FAILURE" and evidence.get("input_dispatched") is False:
-        attempt.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
-                        "dispatch_confirmed": False, "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
-                        "attribution_state": "NOT_ATTEMPTED",
-                        "provider_settings": {"activation": {"input_dispatched": False,
-                                                                  "proof": "RECONCILIATION_PROVEN_PRE_DISPATCH_FAILURE"}},
-                        "completed_at": event["at"]})
+        recovered = dict(attempt)
+        recovered.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+                          "dispatch_confirmed": False, "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                          "attribution_state": "NOT_ATTEMPTED",
+                          "provider_settings": {"activation": {"input_dispatched": False,
+                                                                    "proof": "RECONCILIATION_PROVEN_PRE_DISPATCH_FAILURE"}},
+                          "completed_at": event["at"]})
+        if not canonical_no_dispatch_proof(recovered):
+            event["state"] = "PROVEN_PRE_DISPATCH_FAILURE_CANONICAL_REJECTED"
+            return False, request["request_id"], 1
+        attempt.update(recovered)
         entry.update({"status": "NOT_DISPATCHED", "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
                       "updated_at": event["at"]})
         return True, None, 1
@@ -1957,7 +1998,8 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if attempt_number > maximum:
                 entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"
                 entry["updated_at"]=_now(); atomic_write_json(path,manifest); continue
-            attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
+            attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False,
+                       "provider_execution_state":"NOT_STARTED"}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             # Provider adapters receive concrete local files, never manifest-
             # relative paths.  In particular CDP's file-input API silently
@@ -1970,6 +2012,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt_number
                 )
                 request_context["_flow_reference_paths"] = list(refs)
+                # Persist this marker before the only call that can reach the
+                # provider.  Recovery may prove no dispatch only while the
+                # durable state remains NOT_STARTED.
+                attempt["provider_execution_state"] = "PROVIDER_BOUNDARY_ENTERED"
+                attempt["provider_boundary_entered_at"] = _now()
+                atomic_write_json(path, manifest)
                 result = executor.run(request_context, refs, temp)
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True))
                 _record_attempt_provider_state(attempt, executor.generate)

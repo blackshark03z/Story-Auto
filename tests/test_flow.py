@@ -178,7 +178,7 @@ class FlowTests(unittest.TestCase):
                 "request_id":"ref","request_identity_sha256":"refhash","related_identity":None,"media_type":"IMAGE",
                 "provider":"google_flow","prompt_sha256":"refhash","reference_asset_hashes":[],"created_at":"now",
                 "status":"GENERATING","attempts":[{"attempt":1,"status":"SUBMITTED","dispatch_confirmed":False,
-                "provider_settings":None,"started_at":"now"}]}]}
+                "provider_settings":None,"provider_execution_state":"NOT_STARTED","started_at":"now"}]}]}
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
             recover_interrupted_pre_dispatch_attempt(runtime.root,cfg.project_id,"ref")
             entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
@@ -440,18 +440,19 @@ class FlowTests(unittest.TestCase):
     def test_pre_dispatch_failure_can_only_be_reopened_with_evidence(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
-            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","status":"FAILED_PERMANENT","attempts":[{"failure_class":"FLOW_UI_CHANGED","dispatch_confirmed":False}]}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","status":"FAILED_PERMANENT","attempts":[{"failure_class":"FLOW_UI_CHANGED","dispatch_confirmed":False,"provider_job_id":None,"durable_dispatch_identity":None,"provider_lineage_card_id":None,"attributed_provider_identity":None,"attribution_state":"NOT_ATTEMPTED","dispatch_confirmation_state":"PRE_DISPATCH_FAILURE","provider_settings":{"activation":{"input_dispatched":False}}}]}]})
             from story_auto.providers.flow.service import reopen_verified_pre_dispatch_failure
             reopen_verified_pre_dispatch_failure(runtime.root,cfg.project_id,"ref")
             self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"FAILED_RETRYABLE")
-    def test_legacy_false_dispatch_timeout_requires_exact_ui_evidence(self):
+    def test_legacy_false_dispatch_timeout_requires_exact_ui_evidence_and_canonical_proof(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[{"request_id":"ref","status":"AMBIGUOUS","attempts":[{"failure_class":"FLOW_TIMEOUT","dispatch_confirmed":True,"provider_settings":{"dispatch_ack_method":"composer_clear_or_output_transition","last_added_candidate_count":0}}]}]})
             evidence={"prompt_retained":True,"visible_media_count":0,"prompt_sha256":hashlib.sha256(b"p").hexdigest(),"screenshot_sha256":"a"*64}
-            reopen_verified_false_dispatch(runtime.root,cfg.project_id,"ref",evidence=evidence)
+            with self.assertRaisesRegex(FlowError,"GENERATION_RECONCILIATION_INVALID"):
+                reopen_verified_false_dispatch(runtime.root,cfg.project_id,"ref",evidence=evidence)
             entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
-            self.assertEqual((entry["status"],entry["attempts"][0]["dispatch_confirmed"]),("FAILED_RETRYABLE",False))
+            self.assertEqual((entry["status"],entry["attempts"][0]["dispatch_confirmed"]),("AMBIGUOUS",True))
     def test_uncertain_temporal_qc_retry_reuses_selected_bytes_without_generation(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)

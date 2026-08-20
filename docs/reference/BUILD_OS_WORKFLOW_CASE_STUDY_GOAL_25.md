@@ -42,3 +42,36 @@ No Build OS implementation was modified for these findings.
 `unpersisted_os_findings=0`
 
 `unpersisted_orchestration_findings=0`
+
+## Revision 2 corrective finding
+
+- Title: Safety producers and consumers must share the same semantic proof.
+- Classification: `PRODUCT ARCHITECTURE / SPEC`.
+- Verified failure: a recovery path could classify an interrupted attempt as
+  safely `NOT_DISPATCHED`, while the canonical semantic authority could not
+  verify that classification on subsequent re-entry.
+- Reusable rule: any component that produces a safety-relevant state must
+  persist or verify the same semantic evidence consumed by downstream safety
+  gates.
+- Positive control: external R3 found the recoverability contradiction before
+  Trial A runtime resumed.
+
+Revision 2 persists `provider_execution_state=NOT_STARTED` with every submitted
+attempt, then durably records `PROVIDER_BOUNDARY_ENTERED` immediately before
+the only provider invocation. Only the former state may be converted into the
+normal current-schema activation proof. Crashes after that boundary, ambiguous
+crash points, and status-only records fail closed. The reopen helpers now also
+require `canonical_no_dispatch_proof(attempt)` rather than declaring a separate
+retry authority.
+
+### Revision-2 Flow source audit
+
+| Classification | Flow ownership |
+| --- | --- |
+| Evidence producers | Live adapter activation evidence; ordered crash recovery; external reconciliation evidence. Every producer persists the current-schema proof and verifies `canonical_no_dispatch_proof` before releasing a barrier. |
+| Evidence verifiers | Current activation validator, verified legacy-timeline validator, and their one semantic wrapper `canonical_no_dispatch_proof`. |
+| Semantic consumers | Provider retry authorization, abandoned-replay validation, queue-barrier detection, execution re-entry, and both reopen helpers. |
+| Unrelated lifecycle state | `SUBMITTED`, `GENERATING`, `FAILED_RETRYABLE`, local postprocess recovery, manual asset adoption, and status projection remain diagnostic or local-only; none crosses the provider boundary without the canonical retry gate. |
+
+No producer can authorize from `NOT_DISPATCHED`, `dispatch_confirmed=False`,
+`provider_settings=None`, `SUBMITTED`, or `GENERATING` alone.
