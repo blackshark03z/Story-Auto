@@ -287,6 +287,77 @@ def _proven_safe_pre_dispatch_attempt(attempt: dict) -> bool:
     return isinstance(activation, dict) and activation.get("input_dispatched") is False
 
 
+def _verified_historical_no_dispatch_attempt(attempt: dict) -> bool:
+    """Recognize only hash-bound, pre-dispatch poll evidence from the old shape.
+
+    The historical form deliberately has no ``activation`` object.  A nested
+    ``input_dispatched=false`` is insufficient by itself: every retained poll
+    must be integrity-verified, pre-dispatch, and free of any dispatch or
+    attribution signal.  This reader projects the old fact into the same
+    semantic proof as the current activation record; it never rewrites runtime
+    evidence.
+    """
+    if not isinstance(attempt, dict):
+        return False
+    if attempt.get("dispatch_confirmed") is not False:
+        return False
+    if attempt.get("provider_job_id") is not None or attempt.get("durable_dispatch_identity") is not None:
+        return False
+    if attempt.get("provider_lineage_card_id") is not None or attempt.get("attributed_provider_identity") is not None:
+        return False
+    if attempt.get("attribution_state") != "NOT_ATTEMPTED":
+        return False
+    if attempt.get("dispatch_confirmation_state") != "PRE_DISPATCH_FAILURE":
+        return False
+    settings = attempt.get("provider_settings")
+    if not isinstance(settings, dict) or isinstance(settings.get("activation"), dict):
+        return False
+    snapshot = settings.get("provider_poll_evidence")
+    if not isinstance(snapshot, dict) or attempt.get("poll_evidence_version") != snapshot.get("schema_version"):
+        return False
+    try:
+        # Imported lazily because live.py uses FlowError from this module.
+        from .live import ProviderPollEvidenceTimeline
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+    except (FlowError, ValueError, TypeError):
+        return False
+    observations = verified.get("observations")
+    if (verified.get("complete") is not True or verified.get("evidence_complete") is not True
+            or verified.get("terminal_state") != "NOT_ATTEMPTED"
+            or verified.get("decision_binding_count") != 0
+            or not isinstance(observations, list) or not observations):
+        return False
+    for observation in observations:
+        if not isinstance(observation, dict):
+            return False
+        if observation.get("phase") not in {"PRE_DISPATCH_DISCOVERY", "PRE_DISPATCH_BASELINE"}:
+            return False
+        if observation.get("input_dispatched") is not False:
+            return False
+        if observation.get("dispatch_evidence_state") != "NOT_CONFIRMED":
+            return False
+        if observation.get("dispatch_signal_state") != "NONE":
+            return False
+        if observation.get("attribution_evidence_state") != "NOT_ATTEMPTED":
+            return False
+        if (observation.get("provider_job_id") is not None
+                or observation.get("durable_dispatch_identity") is not None
+                or observation.get("lineage_card_id") is not None
+                or observation.get("attributed_provider_identity") is not None):
+            return False
+    return True
+
+
+def canonical_no_dispatch_proof(attempt: dict) -> bool:
+    """Return positive proof that provider input never crossed Generate.
+
+    Current-schema attempts use ``activation.input_dispatched=false``.  Older
+    retained attempts may instead use a verified pre-dispatch poll timeline.
+    Both branches prove the identical safety invariant and both fail closed.
+    """
+    return _proven_safe_pre_dispatch_attempt(attempt) or _verified_historical_no_dispatch_attempt(attempt)
+
+
 def _provider_generation_retry_authorized(entry: dict | None) -> bool:
     """Authorize Generate only from persisted positive no-dispatch evidence.
 
@@ -300,7 +371,7 @@ def _provider_generation_retry_authorized(entry: dict | None) -> bool:
     attempts = entry.get("attempts")
     if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
         return False
-    return not attempts or _proven_safe_pre_dispatch_attempt(attempts[-1])
+    return not attempts or canonical_no_dispatch_proof(attempts[-1])
 
 
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
