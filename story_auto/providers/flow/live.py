@@ -991,16 +991,32 @@ class LiveFlowGenerator:
             dom = FlowBrowserDom(page)
             identity_history = request.get("_flow_provider_identity_history", [])
             history_seed = identity_history if isinstance(identity_history, list) else []
-            historical_records, _ = _stable_surface(
-                dom, request["media_type"],
-                seed=history_seed,
-                capacity_guard=self._ensure_poll_capacity,
-                poll_observer=lambda surface, records, stable: self._record_poll(
-                    phase="PRE_DISPATCH_DISCOVERY", media_type=request["media_type"],
-                    baseline=history_seed, current=records, surface=surface,
-                    stable_polls=stable,
-                ),
-            )
+            try:
+                historical_records, _ = _stable_surface(
+                    dom, request["media_type"],
+                    seed=history_seed,
+                    capacity_guard=self._ensure_poll_capacity,
+                    poll_observer=lambda surface, records, stable: self._record_poll(
+                        phase="PRE_DISPATCH_DISCOVERY", media_type=request["media_type"],
+                        baseline=history_seed, current=records, surface=surface,
+                        stable_polls=stable,
+                    ),
+                )
+            except FlowError as error:
+                if error.failure_class == "OUTPUT_ATTRIBUTION_NOT_QUIESCENT":
+                    # The baseline gate runs before the composer/activation path.
+                    # Persist that positive no-dispatch proof; the error name alone
+                    # must never make a later retry safe.
+                    self.dispatch_confirmation_state = "PRE_DISPATCH_FAILURE"
+                    self.last_settings.update({
+                        "activation": {"input_dispatched": False,
+                                       "proof": "PRE_DISPATCH_BASELINE_NOT_QUIESCENT"},
+                        "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                        "dispatch_confirmation_signal": "pre_dispatch_baseline_not_quiescent",
+                        "provider_job_id": None,
+                        "attribution_state": "NOT_ATTEMPTED",
+                    })
+                raise
             dom.reset_composer()
             resolved = resolve_settings(request)
             self.last_settings.update(dom.apply_settings(resolved))
@@ -1066,6 +1082,11 @@ class LiveFlowGenerator:
                         self.last_settings["composer_ready_state"] = composer
                     if isinstance(activation, dict):
                         self.last_settings["activation"] = activation
+                    elif error.failure_class != "FLOW_DISPATCH_UNCERTAIN":
+                        self.last_settings["activation"] = {
+                            "input_dispatched": False,
+                            "proof": "PRE_DISPATCH_COMPOSER_FAILURE",
+                        }
                     uncertain = error.failure_class == "FLOW_DISPATCH_UNCERTAIN"
                     state = "UNCERTAIN" if uncertain else "PRE_DISPATCH_FAILURE"
                     self.dispatch_confirmation_state = state

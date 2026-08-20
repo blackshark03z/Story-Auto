@@ -70,6 +70,12 @@ The current accepted post-release development state includes:
   confirming dispatch, and adds an explicit zero-call fresh-epoch recovery for
   irreducible unresolved attempts. It is not yet authorized for Trial A:
   independent R3 review must approve the exact Goal 20 commit first.
+- **Goal 22** (`STORY-AUTO-GOAL-22-REPLAY-REENTRY-NOT-DISPATCHED-SAFETY`) is an
+  offline source-assurance candidate. It separates immutable replay genesis from
+  mutable replacement execution history, permits re-entry only after persisted
+  positive no-dispatch proof, and retains confirmed/uncertain dispatch or
+  attribution as serial barriers. Goal 21 revision 1 is aborted with its source
+  defect preserved; Trial A remains untouched pending Goal 22 external R3.
 
 The current committed source implementation anchor is Goal 19; resolve live
 `HEAD` for the Goal 20 source/docs commit rather than treating this current-state

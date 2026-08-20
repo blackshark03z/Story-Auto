@@ -135,12 +135,14 @@ The preserved Quiet Verdict Trial A project is
 block at fresh request `req_8842b45b5666c9677562`: one provider attempt,
 `AMBIGUOUS / OUTPUT_ATTRIBUTION_UNCERTAIN`, dispatch recorded confirmed, output
 ownership unresolved, no selected asset, and five later requests untouched.
-The wrong/reference candidate remains quarantined. Goal 20 implementation and
-offline validation must leave these bytes unchanged.
+The wrong/reference candidate remains quarantined. Goal 20 and Goal 22 source
+assurance/offline validation must leave these bytes unchanged.
 
-Until independent R3 approval of the exact Goal 20 commit, do not reconcile,
-call Flow, invoke unresolved replay, run later Trial A requests, or start Trial
-B. The new `OperatorService.replay_unresolved_request` is a separate manual
+Until independent R3 approval of the Goal 22 candidate, do not reconcile, call
+Flow, invoke unresolved replay, run later Trial A requests, or start Trial B.
+Goal 21 revision 1 is explicitly aborted for the replay re-entry source defect;
+only a later Goal 21 revision may resume it after that assurance. The
+`OperatorService.replay_unresolved_request` operation is a separate manual
 recovery contract, never an automatic resume step. It requires a reason and all
 three acknowledgements: prior dispatch/cost may have occurred, prior output
 ownership remains unresolved, and the fresh request may consume another

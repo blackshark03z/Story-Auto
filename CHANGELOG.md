@@ -19,6 +19,11 @@
 
 ## Unreleased
 
+- Add the Goal 22 offline source-assurance candidate: replay genesis now protects
+  immutable replacement provenance without freezing append-only attempt history;
+  re-entry requires persisted positive no-dispatch evidence, while confirmed or
+  uncertain dispatch/attribution remains a serial barrier. Trial A and Trial B
+  remain untouched pending independent R3 review.
 - Add the Goal 20 local R3 candidate: bounded hash-chained per-poll Flow
   evidence, durable-identity dispatch confirmation, truthful timeout
   classification, and an explicit zero-call `ABANDONED_UNRESOLVED` fresh-epoch

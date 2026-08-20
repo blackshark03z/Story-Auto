@@ -56,6 +56,7 @@ LEGACY_EPOCH_CLASSIFICATIONS = {
 }
 SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-legacy-supersession-transaction/1.0.0"
 UNRESOLVED_REPLAY_TRANSACTION_SCHEMA = "story-auto-unresolved-replay-transaction/1.0.0"
+UNRESOLVED_REPLAY_GENESIS_SCHEMA = "story-auto-unresolved-replay-genesis/1.0.0"
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
     "generation_requests": "output/generation_requests.json",
@@ -193,6 +194,93 @@ def _replacement_identity(request: dict, *, nonce: str, epoch: int) -> tuple[str
     identity_input = {"semantic_fingerprint": semantic, "replacement_epoch": epoch, "epoch_nonce": nonce}
     fingerprint = hashlib.sha256(json.dumps(identity_input, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return "req_" + fingerprint[:20], fingerprint
+
+
+def _immutable_replay_request_projection(request: dict) -> dict | None:
+    """Return only request facts that must remain fixed for a replay epoch."""
+    required_strings = ("request_id", "fingerprint", "prompt", "purpose", "media_type", "provider",
+                        "replays_unresolved_request_id", "epoch_nonce")
+    if not isinstance(request, dict) or any(not isinstance(request.get(key), str) or not request[key] for key in required_strings):
+        return None
+    if not isinstance(request.get("replay_epoch"), int) or request["replay_epoch"] < 1:
+        return None
+    for key in ("depends_on", "reference_asset_ids"):
+        if not isinstance(request.get(key), list) or any(not isinstance(value, str) or not value for value in request[key]):
+            return None
+    return {
+        "request_id": request["request_id"],
+        "request_identity_sha256": request["fingerprint"],
+        "prompt_sha256": hashlib.sha256(request["prompt"].encode("utf-8")).hexdigest(),
+        "purpose": request["purpose"],
+        "entity_id": request.get("entity_id"),
+        "shot_id": request.get("shot_id"),
+        "media_type": request["media_type"],
+        "provider": request["provider"],
+        "output_count": request.get("output_count", 1),
+        "execution_tier": request.get("execution_tier"),
+        "depends_on": list(request["depends_on"]),
+        "reference_asset_ids": list(request["reference_asset_ids"]),
+        "replays_unresolved_request_id": request["replays_unresolved_request_id"],
+        "replay_epoch": request["replay_epoch"],
+        "epoch_nonce": request["epoch_nonce"],
+    }
+
+
+def _replay_genesis_projection(*, replacement: dict, queue_position: int, event: dict,
+                               transaction_id: str) -> dict | None:
+    request = _immutable_replay_request_projection(replacement)
+    if request is None or not isinstance(queue_position, int) or queue_position < 0:
+        return None
+    acknowledgement_keys = (
+        "previous_dispatch_or_cost_may_have_occurred_acknowledged",
+        "previous_output_ownership_unresolved_acknowledged",
+        "replacement_may_consume_provider_credit_acknowledged",
+    )
+    if (not isinstance(transaction_id, str) or not transaction_id
+            or not isinstance(event.get("operator_reason"), str) or not event["operator_reason"].strip()
+            or event.get("old_request_id") != request["replays_unresolved_request_id"]
+            or event.get("replacement_request_id") != request["request_id"]
+            or event.get("historical_provider_dispatch") not in {"CONFIRMED", "UNKNOWN"}
+            or event.get("historical_attribution") != "UNRESOLVED"
+            or not isinstance(event.get("attempts_sha256"), str)
+            or not all(event.get(key) is True for key in acknowledgement_keys)):
+        return None
+    return {
+        "schema_version": UNRESOLVED_REPLAY_GENESIS_SCHEMA,
+        "old_request_id": event["old_request_id"],
+        "replacement_request_id": request["request_id"],
+        "replay_epoch": request["replay_epoch"],
+        "epoch_nonce": request["epoch_nonce"],
+        "operator_reason": event["operator_reason"],
+        "acknowledgements": {key: True for key in acknowledgement_keys},
+        "old_historical_truth": {
+            "provider_dispatch": event["historical_provider_dispatch"],
+            "attribution": event["historical_attribution"],
+            "attempts_sha256": event["attempts_sha256"],
+        },
+        "replacement_request": request,
+        "queue_position": queue_position,
+        "creation_transaction_id": transaction_id,
+    }
+
+
+def _proven_safe_pre_dispatch_attempt(attempt: dict) -> bool:
+    """Retry only after persisted evidence proves that input never dispatched."""
+    if not isinstance(attempt, dict):
+        return False
+    if attempt.get("dispatch_confirmed") is not False:
+        return False
+    if attempt.get("provider_job_id") is not None or attempt.get("durable_dispatch_identity") is not None:
+        return False
+    if attempt.get("provider_lineage_card_id") is not None or attempt.get("attributed_provider_identity") is not None:
+        return False
+    if attempt.get("attribution_state") != "NOT_ATTEMPTED":
+        return False
+    if attempt.get("dispatch_confirmation_state") != "PRE_DISPATCH_FAILURE":
+        return False
+    settings = attempt.get("provider_settings")
+    activation = settings.get("activation") if isinstance(settings, dict) and isinstance(settings.get("activation"), dict) else None
+    return isinstance(activation, dict) and activation.get("input_dispatched") is False
 
 
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
@@ -333,14 +421,15 @@ def _first_invalid_superseded(project_id: str, entries: dict[str, dict], request
     return None
 
 
-def _abandoned_unresolved_entry_valid(entry: dict, requests: list[dict],
+def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, requests: list[dict],
                                       entries: dict[str, dict]) -> bool:
     if entry.get("status") != ABANDONED_UNRESOLVED_STATUS or entry.get("selected_asset") is not None:
         return False
     request_id = entry.get("request_id")
     replacement_id = entry.get("replacement_request_id")
     events = entry.get("unresolved_replay_events")
-    if not isinstance(request_id, str) or not isinstance(replacement_id, str) or not isinstance(events, list) or not events:
+    if (not isinstance(request_id, str) or not isinstance(replacement_id, str)
+            or not isinstance(events, list) or len(events) != 1):
         return False
     event = events[-1] if isinstance(events[-1], dict) else None
     if not isinstance(event, dict) or event.get("event") != ABANDONED_UNRESOLVED_STATUS:
@@ -366,25 +455,78 @@ def _abandoned_unresolved_entry_valid(entry: dict, requests: list[dict],
         return False
     replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
     replacement_entry = entries.get(replacement_id)
-    return (
-        isinstance(replacement, dict)
-        and replacement.get("replays_unresolved_request_id") == request_id
-        and isinstance(replacement_entry, dict)
-        and replacement_entry.get("replays_unresolved_request_id") == request_id
-        and replacement_entry.get("status") == "PENDING"
-        and replacement_entry.get("attempts") == []
-        and replacement_id != request_id
+    if not isinstance(replacement, dict) or not isinstance(replacement_entry, dict) or replacement_id == request_id:
+        return False
+    resolved_transaction = _unresolved_replay_transaction(paths, project_id, request_id, replacement_id)
+    if resolved_transaction is None:
+        return False
+    transaction, _receipt = resolved_transaction
+    transaction_id = transaction["transaction_id"]
+    stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
+    stored_manifest = transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+    stored_replacement = next((item for item in stored_requests if item.get("request_id") == replacement_id), None)
+    stored_old = next((item for item in stored_manifest if item.get("request_id") == request_id), None)
+    stored_event = (stored_old.get("unresolved_replay_events") or [None])[-1] if isinstance(stored_old, dict) else None
+    if not isinstance(stored_replacement, dict) or not isinstance(stored_event, dict):
+        return False
+    expected = _replay_genesis_projection(
+        replacement=replacement,
+        queue_position=requests.index(replacement),
+        event=event,
+        transaction_id=transaction_id,
     )
+    stored_genesis = stored_event.get("replay_genesis")
+    if not isinstance(stored_genesis, dict):
+        # Goal 20 transactions predate the explicit projection.  Their committed
+        # target is the immutable genesis source; derive the same narrow
+        # projection without touching preserved runtime artifacts.
+        stored_genesis = _replay_genesis_projection(
+            replacement=stored_replacement,
+            queue_position=stored_requests.index(stored_replacement),
+            event=stored_event,
+            transaction_id=transaction_id,
+        )
+    if not isinstance(stored_genesis, dict):
+        return False
+    genesis_sha256 = _json_sha256(stored_genesis)
+    explicit_genesis = event.get("replay_genesis")
+    if (expected != stored_genesis
+            or (isinstance(explicit_genesis, dict) and (
+                explicit_genesis != stored_genesis or event.get("replay_genesis_sha256") != genesis_sha256))
+            or (isinstance(event.get("replay_genesis"), dict) and replacement_entry.get("replay_genesis_sha256") != genesis_sha256)
+            or (isinstance(replacement_entry.get("replay_creation_transaction_id"), str)
+                and replacement_entry.get("replay_creation_transaction_id") != transaction_id)
+            or replacement_entry.get("replays_unresolved_request_id") != request_id
+            or replacement_entry.get("replay_epoch") != stored_genesis.get("replay_epoch")
+            or replacement_entry.get("epoch_nonce") != stored_genesis.get("epoch_nonce")
+            or replacement_entry.get("request_identity_sha256") != stored_genesis["replacement_request"].get("request_identity_sha256")
+            or replacement_entry.get("prompt_sha256") != stored_genesis["replacement_request"].get("prompt_sha256")):
+        return False
+    if ("replay_genesis_sha256" in transaction
+            and transaction.get("replay_genesis_sha256") != genesis_sha256):
+        return False
+    attempts = replacement_entry.get("attempts")
+    if not isinstance(attempts, list) or any(not isinstance(attempt, dict) for attempt in attempts):
+        return False
+    if replacement_entry.get("selected_asset") is not None and replacement_entry.get("status") not in {"SUCCEEDED", "QC_PENDING"}:
+        return False
+    if replacement_entry.get("status") == "PENDING":
+        return attempts == []
+    if replacement_entry.get("status") == "NOT_DISPATCHED":
+        return bool(attempts) and attempts[-1].get("status") == "NOT_DISPATCHED" and _proven_safe_pre_dispatch_attempt(attempts[-1])
+    # Normal execution states remain subject to the usual state machine.  They
+    # are deliberately not compared with the immutable creation projection.
+    return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
 
 
-def _first_invalid_request_replacement(project_id: str, entries: dict[str, dict],
+def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str, dict],
                                        requests: list[dict]) -> tuple[dict, dict] | None:
     invalid = _first_invalid_superseded(project_id, entries, requests)
     if invalid is not None:
         return invalid
     for entry in entries.values():
         if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
-                and not _abandoned_unresolved_entry_valid(entry, requests, entries)):
+                and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
     return None
 
@@ -466,6 +608,32 @@ def _recover_pending_unresolved_replays(paths, project_id: str) -> dict[str, dic
     return _recover_replacement_transactions(
         paths, project_id, schema_version=UNRESOLVED_REPLAY_TRANSACTION_SCHEMA
     )
+
+
+def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
+                                   replacement_request_id: str) -> tuple[dict, dict] | None:
+    """Find the one committed creation transaction for a replay epoch."""
+    matches = []
+    for _prepared_path, transaction in _prepared_transactions(
+            paths, project_id, schema_version=UNRESOLVED_REPLAY_TRANSACTION_SCHEMA):
+        if (transaction.get("old_request_id") == old_request_id
+                and transaction.get("replacement_request_id") == replacement_request_id):
+            transaction_id = transaction.get("transaction_id")
+            if not isinstance(transaction_id, str):
+                return None
+            _prepared, committed_path = _transaction_paths(
+                paths, transaction_id, schema_version=UNRESOLVED_REPLAY_TRANSACTION_SCHEMA
+            )
+            try:
+                receipt = read_json(committed_path)
+            except Exception:
+                return None
+            expected = {"schema_version": UNRESOLVED_REPLAY_TRANSACTION_SCHEMA, "state": "COMMITTED",
+                        "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+            if receipt != expected:
+                return None
+            matches.append((transaction, receipt))
+    return matches[0] if len(matches) == 1 else None
 
 
 def _recover_pending_request_replacements(paths, project_id: str) -> dict[str, dict]:
@@ -608,7 +776,7 @@ def replay_unresolved_request(
         if not isinstance(old_request, dict):
             completed = recovered.get(request_id)
             if (isinstance(old_entry, dict) and completed
-                    and _abandoned_unresolved_entry_valid(old_entry, requests, entries)):
+                    and _abandoned_unresolved_entry_valid(paths, project_id, old_entry, requests, entries)):
                 return {
                     "old_request_id": request_id,
                     "replacement_request_id": completed["replacement_request_id"],
@@ -617,7 +785,7 @@ def replay_unresolved_request(
                     "idempotent": True,
                 }
             raise FlowError("UNRESOLVED_REPLAY_ALREADY_COMPLETED")
-        barrier = _first_unresolved(project_id, requests, entries)
+        barrier = _first_unresolved(paths, project_id, requests, entries)
         if barrier is None or barrier[0].get("request_id") != request_id or barrier[1] is not old_entry:
             raise FlowError("UNRESOLVED_REPLAY_NOT_CURRENT_BARRIER")
         attempts = old_entry.get("attempts") if isinstance(old_entry, dict) else None
@@ -674,6 +842,21 @@ def replay_unresolved_request(
             "attempts_sha256": old_attempts_sha256,
             **acknowledgements,
         }
+        transaction_id = "unresolved-replay-" + _json_sha256({
+            "project_id": project_id,
+            "old_request_id": request_id,
+            "replacement_request_id": replacement_id,
+        })[:24]
+        replay_genesis = _replay_genesis_projection(
+            replacement=replacement,
+            queue_position=position,
+            event=event,
+            transaction_id=transaction_id,
+        )
+        if replay_genesis is None:
+            raise FlowError("UNRESOLVED_REPLAY_GENESIS_INVALID")
+        replay_genesis_sha256 = _json_sha256(replay_genesis)
+        event.update({"replay_genesis": replay_genesis, "replay_genesis_sha256": replay_genesis_sha256})
         old_entry.setdefault("unresolved_replay_events", []).append(event)
         old_entry.update({
             "status": ABANDONED_UNRESOLVED_STATUS,
@@ -697,14 +880,11 @@ def replay_unresolved_request(
             "replays_unresolved_request_id": request_id,
             "replay_epoch": epoch,
             "epoch_nonce": nonce,
+            "replay_creation_transaction_id": transaction_id,
+            "replay_genesis_sha256": replay_genesis_sha256,
         })
         if _json_sha256(old_entry.get("attempts")) != old_attempts_sha256:
             raise FlowError("UNRESOLVED_REPLAY_APPEND_ONLY_VIOLATION")
-        transaction_id = "unresolved-replay-" + _json_sha256({
-            "project_id": project_id,
-            "old_request_id": request_id,
-            "replacement_request_id": replacement_id,
-        })[:24]
         targets = {
             "generation_requests": _target("output/generation_requests.json", requests_data),
             "generation_manifest": _target("output/generation_manifest.json", manifest),
@@ -718,6 +898,7 @@ def replay_unresolved_request(
             "project_id": project_id,
             "old_request_id": request_id,
             "replacement_request_id": replacement_id,
+            "replay_genesis_sha256": replay_genesis_sha256,
             "targets": targets,
         }
         _publish_unresolved_replay_transaction(paths, transaction, fault_injector=_fault_injector)
@@ -1286,8 +1467,8 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
     return isinstance(attempt, dict) and attempt.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
 
 
-def _first_unresolved(project_id: str, requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
-    malformed = _first_invalid_request_replacement(project_id, entries, requests)
+def _first_unresolved(paths, project_id: str, requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
+    malformed = _first_invalid_request_replacement(paths, project_id, entries, requests)
     if malformed is not None:
         return malformed
     for request in requests:
@@ -1428,7 +1609,7 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
 
 def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list[dict], entries: dict[str, dict],
                           executor: "FlowExecutor") -> tuple[bool, str | None, int]:
-    blocker = _first_unresolved(project_id, requests, entries)
+    blocker = _first_unresolved(paths, project_id, requests, entries)
     if blocker is None:
         return True, None, 0
     request, entry = blocker
@@ -1526,7 +1707,7 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
         entry = entries.get(request_id)
         if not request or not _unresolved_flow_entry(entry):
             raise FlowError("GENERATION_RECONCILIATION_INVALID")
-        earliest = _first_unresolved(project_id, requests, entries)
+        earliest = _first_unresolved(paths, project_id, requests, entries)
         if earliest and earliest[0]["request_id"] == request_id:
             released, blocked_request_id, count = _reconcile_unresolved(
                 paths, project_id, manifest, requests, entries, executor
@@ -1597,7 +1778,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
-        malformed = _first_invalid_request_replacement(project_id, entries, requests)
+        malformed = _first_invalid_request_replacement(paths, project_id, entries, requests)
         if malformed is not None:
             return {"selected": len(selected), "new_submissions": 0, "paused": False,
                     "blocked": True, "blocked_request_id": malformed[0]["request_id"],
@@ -1622,7 +1803,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             try: paused = read_json(control_path).get("pause_requested") is True
             except Exception: paused = False
             if paused: break
-            blocker = _first_unresolved(project_id, requests, entries)
+            blocker = _first_unresolved(paths, project_id, requests, entries)
             if blocker is not None:
                 blocked_request_id = blocker[0]["request_id"]
                 break
@@ -1673,7 +1854,22 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 _record_attempt_provider_state(attempt, executor.generate)
-                state = "AMBIGUOUS" if error.failure_class in UNRESOLVED_FLOW_FAILURES else ("NOT_DISPATCHED" if error.failure_class in {"FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "OUTPUT_ATTRIBUTION_NOT_QUIESCENT"} else ("AUTH_REQUIRED" if error.failure_class == "FLOW_AUTH_REQUIRED" else ("FAILED_PERMANENT" if error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"} else "FAILED_RETRYABLE")))
+                safe_pre_dispatch_candidate = error.failure_class in {
+                    "FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED",
+                    "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                }
+                if safe_pre_dispatch_candidate and _proven_safe_pre_dispatch_attempt(attempt):
+                    state = "NOT_DISPATCHED"
+                elif safe_pre_dispatch_candidate or error.failure_class in UNRESOLVED_FLOW_FAILURES:
+                    # Error labels and a missing job ID are not dispatch proof.
+                    # Preserve a serial barrier until persisted evidence resolves it.
+                    state = "AMBIGUOUS"
+                elif error.failure_class == "FLOW_AUTH_REQUIRED":
+                    state = "AUTH_REQUIRED"
+                elif error.failure_class in {"FLOW_PROJECT_MISMATCH", "FLOW_CAPABILITY_UNAVAILABLE", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"}:
+                    state = "FAILED_PERMANENT"
+                else:
+                    state = "FAILED_RETRYABLE"
                 attempt.update({"status":state, "failure_class":error.failure_class, "diagnostic":str(error), "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})

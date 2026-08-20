@@ -144,7 +144,13 @@ class FlowTests(unittest.TestCase):
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]
-            def no_dispatch(*_): calls.append(1); raise FlowError("FLOW_NOT_DISPATCHED")
+            class NoDispatch:
+                dispatch_confirmed = False
+                last_settings = {"activation": {"input_dispatched": False},
+                                 "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                 "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                def __call__(self, *_): calls.append(1); raise FlowError("FLOW_NOT_DISPATCHED")
+            no_dispatch=NoDispatch()
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_dispatch)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
@@ -153,7 +159,13 @@ class FlowTests(unittest.TestCase):
     def test_verified_pre_dispatch_activation_failure_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]
-            def no_activation(*_): calls.append(1); raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
+            class NoActivation:
+                dispatch_confirmed = False
+                last_settings = {"activation": {"input_dispatched": False},
+                                 "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                 "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                def __call__(self, *_): calls.append(1); raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
+            no_activation=NoActivation()
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_activation)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
@@ -347,7 +359,7 @@ class FlowTests(unittest.TestCase):
                     self.calls+=1
                     state="PRE_DISPATCH_FAILURE" if self.calls==1 else "CONFIRMED"
                     self.dispatch_confirmed=self.calls>1
-                    self.last_settings={"activation":{"activation_time":f"time-{self.calls}","interaction_method":"CDP_TRUSTED_POINTER","interaction_version":2},"composer_ready_state":{"prompt_committed":True,"reference_state":{"committed":True},"generate_enabled":True},"dispatch_confirmation_state":state,"dispatch_confirmation_signal":"input_not_dispatched" if self.calls==1 else "new_attributable_output","provider_job_id":None,"attribution_state":"NOT_ATTEMPTED" if self.calls==1 else "CONFIRMED","attribution_method":"fixture_provider_lineage" if self.calls>1 else None,"attribution_method_version":"fixture/1","attributed_provider_identity":{"identity":"fixture:output"} if self.calls>1 else None,"candidate_delta_count":1 if self.calls>1 else 0,"candidate_identities":[{"identity":"fixture:output"}] if self.calls>1 else [],"attribution_confirmation_timestamp":f"time-{self.calls}" if self.calls>1 else None}
+                    self.last_settings={"activation":{"activation_time":f"time-{self.calls}","interaction_method":"CDP_TRUSTED_POINTER","interaction_version":2,"input_dispatched":self.calls>1},"composer_ready_state":{"prompt_committed":True,"reference_state":{"committed":True},"generate_enabled":True},"dispatch_confirmation_state":state,"dispatch_confirmation_signal":"input_not_dispatched" if self.calls==1 else "new_attributable_output","provider_job_id":None,"attribution_state":"NOT_ATTEMPTED" if self.calls==1 else "CONFIRMED","attribution_method":"fixture_provider_lineage" if self.calls>1 else None,"attribution_method_version":"fixture/1","attributed_provider_identity":{"identity":"fixture:output"} if self.calls>1 else None,"candidate_delta_count":1 if self.calls>1 else 0,"candidate_identities":[{"identity":"fixture:output"}] if self.calls>1 else [],"attribution_confirmation_timestamp":f"time-{self.calls}" if self.calls>1 else None}
                     if self.calls==1: raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED")
                     from PIL import Image
                     destination.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"blue").save(destination,"PNG"); return destination
