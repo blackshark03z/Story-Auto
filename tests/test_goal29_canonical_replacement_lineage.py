@@ -78,6 +78,23 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
         current = replace_qc_rejected_asset(runtime.root, config.project_id, intermediate, reason="mandatory QC rejection")
         return intermediate, current["replacement_request_id"]
 
+    def _replay_then_qc_then_replay(self, runtime, config, paths):
+        intermediate, qc_child = self._replay_then_qc_replace(runtime, config, paths)
+        manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+        entry = next(item for item in manifest["requests"] if item["request_id"] == qc_child)
+        entry.update({
+            "status": "AMBIGUOUS", "failure_class": "FLOW_DISPATCH_UNCERTAIN",
+            "attempts": [{"attempt": 1, "status": "AMBIGUOUS", "dispatch_confirmed": True,
+                          "dispatch_confirmation_state": "CONFIRMED", "attribution_state": "UNCERTAIN"}],
+        })
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+        descendant = replay_unresolved_request(
+            runtime.root, config.project_id, qc_child,
+            reason="confirmed unresolved composition fixture", acknowledge_previous_dispatch_or_cost_may_have_occurred=True,
+            acknowledge_previous_output_ownership_unresolved=True, acknowledge_replacement_may_consume_provider_credit=True,
+        )["replacement_request_id"]
+        return intermediate, qc_child, descendant
+
     @staticmethod
     def _state(paths):
         requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
@@ -117,6 +134,67 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
                 execute=True, request_ids={current}, max_requests=1,
             )
             self.assertEqual((result["blocked"], result["new_submissions"], calls), (False, 1, [current]))
+
+    def test_replay_qc_replay_chain_resolves_only_final_descendant(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            middle, qc_child, descendant = self._replay_then_qc_then_replay(runtime, config, paths)
+            requests, entries = self._state(paths)
+            self.assertTrue(_abandoned_unresolved_entry_valid(paths, config.project_id, entries[self.ANCESTOR], requests, entries))
+            self.assertTrue(_qc_rejected_asset_replacement_valid(paths, config.project_id, entries[middle], requests, entries))
+            self.assertTrue(_abandoned_unresolved_entry_valid(paths, config.project_id, entries[qc_child], requests, entries))
+            self.assertEqual(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries), descendant)
+            self.assertIsNone(_first_invalid_request_replacement(paths, config.project_id, entries, requests))
+            for request_id in (self.ANCESTOR, middle, qc_child):
+                self.assertFalse(_unresolved_flow_entry(entries[request_id]))
+                self.assertFalse(_provider_generation_retry_authorized(entries[request_id]))
+            current_request = next(item for item in requests if item["request_id"] == descendant)
+            self.assertTrue(_provider_generation_retry_authorized(entries[descendant]))
+            self.assertTrue(_runnable(current_request, entries))
+
+            fake_boundary_calls: list[str] = []
+            def fake_provider(request, _refs, destination: Path):
+                fake_boundary_calls.append(request["request_id"])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (1280, 720), "teal").save(destination, "PNG")
+                return destination
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), fake_provider),
+                execute=True, request_ids={descendant}, max_requests=1,
+            )
+            self.assertEqual((result["blocked"], result["attention"], result["new_submissions"], fake_boundary_calls),
+                             (False, None, 1, [descendant]))
+
+    def test_composed_chain_negative_matrix_fails_closed(self):
+        def missing_child_transaction(paths, _requests, entries, _middle, qc_child, _descendant):
+            transaction_id = entries[_descendant]["replay_creation_transaction_id"]
+            paths.artifact_path(f"output/unresolved_replay_transactions/{transaction_id}.committed.json").unlink()
+
+        mutations = {
+            "broken_a_to_b": lambda _p, _r, entries, _b, _c, _d: entries[self.ANCESTOR].update({"replacement_request_id": "req_wrong"}),
+            "broken_b_to_c": lambda _p, _r, entries, middle, _c, _d: entries[middle].update({"replacement_request_id": "req_wrong"}),
+            "broken_c_to_d": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"replacement_request_id": "req_wrong"}),
+            "missing_child_transaction": missing_child_transaction,
+            "wrong_replacement_of": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"replacement_of": "req_wrong"}),
+            "wrong_replacement_reason": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"replacement_reason": "WRONG_REASON"}),
+            "logical_visual_mismatch": lambda _p, requests, _e, _b, _c, descendant: next(item for item in requests if item["request_id"] == descendant).update({"shot_id": "wrong-shot"}),
+            "duplicate_competing_child": lambda _p, requests, _e, _b, _c, descendant: requests.append(dict(next(item for item in requests if item["request_id"] == descendant))),
+            "a_to_b_to_a_cycle": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"status": "ABANDONED_UNRESOLVED", "replacement_request_id": self.ANCESTOR}),
+            "self_cycle": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"status": "ABANDONED_UNRESOLVED", "replacement_request_id": qc_child}),
+            "descendant_to_ancestor_cycle": lambda _p, _r, entries, middle, qc_child, _d: entries[qc_child].update({"status": "ABANDONED_UNRESOLVED", "replacement_request_id": middle}),
+            "corrupted_parent_history": lambda _p, _r, entries, middle, _c, _d: entries[middle]["attempts"].append({"attempt": 99}),
+            "unsupported_transition": lambda _p, _r, entries, _b, qc_child, _d: entries[qc_child].update({"status": "UNSUPPORTED_REPLACEMENT"}),
+            "ambiguous_current_descendant": lambda _p, _r, entries, _b, _c, descendant: entries[descendant].update({"status": "AMBIGUOUS"}),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                runtime, config, paths = self._project(root)
+                middle, qc_child, descendant = self._replay_then_qc_then_replay(runtime, config, paths)
+                requests, entries = self._state(paths)
+                mutate(paths, requests, entries, middle, qc_child, descendant)
+                self.assertIsNone(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries))
 
     def test_broken_edges_missing_or_wrong_logical_descendant_fail_closed(self):
         mutations = {

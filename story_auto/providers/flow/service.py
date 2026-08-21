@@ -60,6 +60,11 @@ UNRESOLVED_REPLAY_GENESIS_SCHEMA = "story-auto-unresolved-replay-genesis/1.0.0"
 QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA = "story-auto-qc-rejected-asset-replacement-transaction/1.0.0"
 QC_REJECTED_ASSET_REPLACED_STATUS = "QC_REJECTED_ASSET_REPLACED"
 QC_REJECTED_ASSET_REPLACEMENT_REASON = "QC_REJECTED_ASSET_REPLACEMENT"
+CANONICAL_REPLACEMENT_PARENT_STATUSES = {
+    SUPERSEDED_AMBIGUOUS_STATUS,
+    ABANDONED_UNRESOLVED_STATUS,
+    QC_REJECTED_ASSET_REPLACED_STATUS,
+}
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
     "generation_requests": "output/generation_requests.json",
@@ -160,6 +165,27 @@ def _valid_selected(paths, entry):
 def _json_sha256(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _historical_replacement_parent(entry: dict | None) -> bool:
+    """A child absent from the live queue must itself prove a canonical edge."""
+    return isinstance(entry, dict) and entry.get("status") in CANONICAL_REPLACEMENT_PARENT_STATUSES
+
+
+def _manifest_identity_matches_request(entry: dict | None, request: dict | None) -> bool:
+    """Bind a historical manifest entry to its committed request identity."""
+    if not isinstance(entry, dict) or not isinstance(request, dict):
+        return False
+    prompt = request.get("prompt")
+    return (
+        entry.get("request_id") == request.get("request_id")
+        and entry.get("request_identity_sha256") == request.get("fingerprint")
+        and isinstance(prompt, str)
+        and entry.get("prompt_sha256") == hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        and entry.get("related_identity") == (request.get("shot_id") or request.get("entity_id"))
+        and entry.get("media_type") == request.get("media_type")
+        and entry.get("provider") == request.get("provider")
+    )
 
 
 def _legacy_epoch_classification(project_id: str, request_id: str) -> dict | None:
@@ -612,9 +638,11 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         return False
     if event.get("attempts_sha256") != _json_sha256(entry.get("attempts")):
         return False
-    replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
+    replacement_matches = [request for request in requests if request.get("request_id") == replacement_id]
+    replacement = replacement_matches[0] if len(replacement_matches) == 1 else None
     replacement_entry = entries.get(replacement_id)
-    if not isinstance(replacement_entry, dict) or replacement_id == request_id:
+    if (not isinstance(replacement_entry, dict) or replacement_id == request_id
+            or len(replacement_matches) > 1):
         return False
     resolved_transaction = _unresolved_replay_transaction(paths, project_id, request_id, replacement_id)
     if resolved_transaction is None:
@@ -668,9 +696,11 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         )
         if expected != stored_genesis:
             return False
-    elif replacement_entry.get("status") != QC_REJECTED_ASSET_REPLACED_STATUS:
-        # A replay child may leave the live request queue only through the
-        # independently verified mandatory-QC replacement path.
+    elif not _historical_replacement_parent(replacement_entry):
+        # A missing live child is safe only when it is itself a historical
+        # canonical parent. Its outgoing edge is checked independently by the
+        # descendant resolver; this incoming edge remains its own transaction
+        # proof rather than a claim that the child is still live.
         return False
     if ("replay_genesis_sha256" in transaction
             and transaction.get("replay_genesis_sha256") != genesis_sha256):
@@ -678,7 +708,9 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
     attempts = replacement_entry.get("attempts")
     if not isinstance(attempts, list) or any(not isinstance(attempt, dict) for attempt in attempts):
         return False
-    if replacement_entry.get("selected_asset") is not None and replacement_entry.get("status") not in {"SUCCEEDED", "QC_PENDING", QC_REJECTED_ASSET_REPLACED_STATUS}:
+    if not isinstance(replacement, dict):
+        return _manifest_identity_matches_request(replacement_entry, stored_replacement)
+    if replacement_entry.get("selected_asset") is not None and replacement_entry.get("status") not in {"SUCCEEDED", "QC_PENDING"}:
         return False
     if replacement_entry.get("status") == "PENDING":
         return attempts == []
@@ -687,7 +719,7 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         # both the current activation proof and a verified retained timeline,
         # exactly as the retry, queue, and execution gates do.
         return bool(attempts) and attempts[-1].get("status") == "NOT_DISPATCHED" and canonical_no_dispatch_proof(attempts[-1])
-    return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED", QC_REJECTED_ASSET_REPLACED_STATUS}
+    return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
 
 
 def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str, dict],
@@ -1547,10 +1579,14 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
     stored_replacement = next((item for item in stored_requests if item.get("request_id") == replacement_id), None)
     stored_replacement_entry = next((item for item in stored_manifest if item.get("request_id") == replacement_id), None)
     duplicate_requests = [item for item in requests if item.get("replacement_of") == entry.get("request_id")
-                          and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON]
+                          and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+                          # A later replay of this exact QC child retains older
+                          # metadata for audit lineage, but its direct parent is
+                          # the replay target, not this QC parent.
+                          and item.get("replays_unresolved_request_id") != replacement_id]
     duplicate_entries = [item for item in entries.values() if item.get("replacement_of") == entry.get("request_id")
                          and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON]
-    return bool(
+    immutable_edge = bool(
         isinstance(event, dict)
         and event.get("event") == QC_REJECTED_ASSET_REPLACEMENT_REASON
         and event.get("old_request_id") == entry.get("request_id")
@@ -1561,26 +1597,35 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
         and stored_old.get("attempts") == entry.get("attempts")
         and stored_old.get("selected_asset") == entry.get("selected_asset")
         and stored_old.get("failure_class") == entry.get("failure_class")
-        and isinstance(replacement, dict)
         and isinstance(stored_replacement, dict)
-        and _qc_replacement_genesis_projection(replacement) is not None
-        and _qc_replacement_genesis_projection(replacement) == _qc_replacement_genesis_projection(stored_replacement)
         and isinstance(replacement_entry, dict)
         and replacement_entry.get("replacement_of") == entry.get("request_id")
         and replacement_entry.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
         and isinstance(replacement_entry.get("attempts"), list)
         and all(isinstance(attempt, dict) for attempt in replacement_entry["attempts"])
-        and replacement_entry.get("status") in {
-            "PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS", "FAILED_RETRYABLE", "QC_PENDING", "SUCCEEDED",
-            "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED",
-        }
         and isinstance(stored_replacement_entry, dict)
         and stored_replacement_entry.get("attempts") == []
         and stored_replacement_entry.get("provider_submissions") == 0
         and stored_replacement_entry.get("selected_asset") is None
         and stored_replacement_entry.get("attribution_claim") == "NONE"
-        and len(duplicate_requests) == 1
         and len(duplicate_entries) == 1
+    )
+    if not immutable_edge:
+        return False
+    if isinstance(replacement, dict):
+        return (
+            len(duplicate_requests) == 1
+            and _qc_replacement_genesis_projection(replacement) is not None
+            and _qc_replacement_genesis_projection(replacement) == _qc_replacement_genesis_projection(stored_replacement)
+            and replacement_entry.get("status") in {
+                "PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS", "FAILED_RETRYABLE", "QC_PENDING", "SUCCEEDED",
+                "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED",
+            }
+        )
+    return (
+        not duplicate_requests
+        and _historical_replacement_parent(replacement_entry)
+        and _manifest_identity_matches_request(replacement_entry, stored_replacement)
     )
 
 
@@ -1926,7 +1971,11 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
 def _unresolved_flow_entry(entry: dict | None) -> bool:
     if not isinstance(entry, dict):
         return False
-    if entry.get("status") in {SUPERSEDED_AMBIGUOUS_STATUS, ABANDONED_UNRESOLVED_STATUS}:
+    if entry.get("status") in {
+        SUPERSEDED_AMBIGUOUS_STATUS,
+        ABANDONED_UNRESOLVED_STATUS,
+        QC_REJECTED_ASSET_REPLACED_STATUS,
+    }:
         return False
     if entry.get("status") in {"SUCCEEDED", "QC_PENDING"}:
         return False

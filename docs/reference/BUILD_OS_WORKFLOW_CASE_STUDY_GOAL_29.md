@@ -38,3 +38,32 @@ No Build OS implementation was modified for these findings.
 `unpersisted_os_findings=0`
 
 `unpersisted_orchestration_findings=0`
+
+## Revision 2 composition correction
+
+- Title: Valid transitions require explicit composition proof.
+- Classification: `PRODUCT ARCHITECTURE / SPEC / WORKFLOW`.
+- Verified external-R3 gap: the initial transitive resolver could walk an
+  `A -> B -> C` chain, but the replay validator accepted a missing child only
+  when that child was QC-replaced, while the QC validator required its child to
+  remain in the live request list. A valid `A -> B -> C -> D` chain therefore
+  resurrected a historical barrier when `C` was replayed to `D`.
+- Reusable rule: edge validity is independent from child liveness. Each edge
+  verifies its own committed transaction/genesis and immutable manifest
+  identity; only the resolver decides whether the final descendant is current.
+
+Revision 2 supports composition across every existing canonical replacement
+parent status without special-casing a particular child type. A child missing
+from the live queue is accepted only when it is itself a canonical historical
+parent, whose outgoing edge is then independently verified. Corrupt edges,
+unsupported transitions, duplicate current children, cycles, and an ambiguous
+current descendant still fail closed.
+
+The offline regression preserves the historical chain rather than flattening
+it: `A --replay--> B --QC replacement--> C --replay--> D`. It proves that only
+`D` reaches the fake provider boundary; no production runtime artifact or
+provider call is involved.
+
+Deferred Build OS lesson: transition-composition and lineage-closure scenarios
+should be required during future recovery-plan assurance. Broad synthesis
+remains deferred until Story Auto ships.
