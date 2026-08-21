@@ -189,6 +189,9 @@ class LockTests(unittest.TestCase):
         exited = self._WindowsProbe(handle=9, exit_code=0)
         self.assertFalse(_windows_process_is_alive(21136, probe=exited))
         self.assertEqual(exited.closed, [9])
+        indeterminate = self._WindowsProbe(handle=11, exit_code=None)
+        self.assertTrue(_windows_process_is_alive(21136, probe=indeterminate))
+        self.assertEqual(indeterminate.closed, [11])
 
     def test_windows_path_never_invokes_os_kill(self) -> None:
         with patch.object(lock_module.os, "name", "nt"), patch.object(lock_module, "_windows_process_is_alive", return_value=False) as native, patch.object(lock_module.os, "kill") as kill:
@@ -221,6 +224,15 @@ class LockTests(unittest.TestCase):
                 with patch.object(lock_module, "_process_is_alive", return_value=owner_live):
                     with self.assertRaises(ProjectLockedError):
                         ProjectLock(runtime, project_id, stale_after_seconds=1, clock=lambda now=now: now).acquire()
+
+    def test_indeterminate_owner_lock_is_not_stolen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = RuntimeLayout.from_root(directory).ensure()
+            stale = runtime.locks / "prj_indeterminate.lock"
+            atomic_write_json(stale, {"project_id": "prj_indeterminate", "pid": 21136, "hostname": __import__("socket").gethostname(), "created_at": 0})
+            with patch.object(lock_module, "_process_is_alive", return_value=True):
+                with self.assertRaises(ProjectLockedError):
+                    ProjectLock(runtime, "prj_indeterminate", stale_after_seconds=1, clock=lambda: 2).acquire()
 
     def test_one_writer_release_and_stale_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -31,6 +31,20 @@ runtime: the Windows probe reports dead, `_stale()` reports true, and normal
 `ProjectLock.acquire()` recovers the isolated lock.  It never touches the
 actual Trial A lock.
 
+## Revision 2 R3 delta
+
+The first revision covered exceptions and unknown probe paths, but omitted one
+distinct branch: successful `OpenProcess` followed by a failed
+`GetExitCodeProcess`.  The native wrapper represents that failed exit-code
+query as `None`; revision 1 compared it with `STILL_ACTIVE`, accidentally
+classifying the indeterminate result as dead.  Revision 2 treats `None` as
+alive, closes the already-opened handle, and proves that even an old same-host
+lock is not stolen while owner liveness is indeterminate.
+
+Bounded workflow lesson: R3 for small deterministic fixes should prioritize
+invariant-complete branch coverage and delta review, without multiplying
+lifecycle ceremony after the bounded defect is understood.
+
 Trial A safety was preserved: `req_4b8dba2869afe1e12a52` remained PENDING with
 zero attempts and zero provider submissions.  No Flow or provider action was
 taken.

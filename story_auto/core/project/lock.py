@@ -80,6 +80,8 @@ def _windows_process_is_alive(pid: int, *, probe=None) -> bool:
             return True
         try:
             code = native.exit_code(handle)
+            if code is None:
+                return True
             return code == _STILL_ACTIVE
         finally:
             native.close_handle(handle)
