@@ -57,6 +57,9 @@ LEGACY_EPOCH_CLASSIFICATIONS = {
 SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-legacy-supersession-transaction/1.0.0"
 UNRESOLVED_REPLAY_TRANSACTION_SCHEMA = "story-auto-unresolved-replay-transaction/1.0.0"
 UNRESOLVED_REPLAY_GENESIS_SCHEMA = "story-auto-unresolved-replay-genesis/1.0.0"
+QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA = "story-auto-qc-rejected-asset-replacement-transaction/1.0.0"
+QC_REJECTED_ASSET_REPLACED_STATUS = "QC_REJECTED_ASSET_REPLACED"
+QC_REJECTED_ASSET_REPLACEMENT_REASON = "QC_REJECTED_ASSET_REPLACEMENT"
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
     "generation_requests": "output/generation_requests.json",
@@ -439,6 +442,8 @@ def _transaction_error(schema_version: str) -> str:
         return "LEGACY_SUPERSESSION_RECOVERY_INVALID"
     if schema_version == UNRESOLVED_REPLAY_TRANSACTION_SCHEMA:
         return "UNRESOLVED_REPLAY_RECOVERY_INVALID"
+    if schema_version == QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA:
+        return "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
     return "FLOW_REPLACEMENT_RECOVERY_INVALID"
 
 
@@ -447,6 +452,8 @@ def _transaction_spec(paths, schema_version: str) -> tuple[Path, str]:
         return _supersession_directory(paths), "LEGACY_SUPERSESSION_RECOVERY_INVALID"
     if schema_version == UNRESOLVED_REPLAY_TRANSACTION_SCHEMA:
         return _unresolved_replay_directory(paths), "UNRESOLVED_REPLAY_RECOVERY_INVALID"
+    if schema_version == QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA:
+        return paths.artifact_path("output/qc_rejected_asset_replacement_transactions"), "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
     raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
 
 
@@ -486,7 +493,8 @@ def _prepared_transactions(paths, project_id: str, *,
 
 def _validate_transaction_targets(transaction: dict, *, schema_version: str | None = None) -> None:
     schema = schema_version or transaction.get("schema_version")
-    if schema not in {SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA}:
+    if schema not in {SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+                      QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA}:
         raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
     error_code = _transaction_error(schema)
     targets = transaction.get("targets")
@@ -657,6 +665,9 @@ def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str
         if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
                 and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
+        if (entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
+                and not _qc_rejected_asset_replacement_valid(entry, requests, entries)):
+            return {"request_id": entry.get("request_id")}, entry
     return None
 
 
@@ -739,6 +750,12 @@ def _recover_pending_unresolved_replays(paths, project_id: str) -> dict[str, dic
     )
 
 
+def _recover_pending_qc_rejected_asset_replacements(paths, project_id: str) -> dict[str, dict]:
+    return _recover_replacement_transactions(
+        paths, project_id, schema_version=QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA
+    )
+
+
 def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
                                    replacement_request_id: str) -> tuple[dict, dict] | None:
     """Find the one committed creation transaction for a replay epoch."""
@@ -768,9 +785,11 @@ def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
 def _recover_pending_request_replacements(paths, project_id: str) -> dict[str, dict]:
     recovered = _recover_pending_supersessions(paths, project_id)
     replayed = _recover_pending_unresolved_replays(paths, project_id)
-    if set(recovered).intersection(replayed):
+    qc_replaced = _recover_pending_qc_rejected_asset_replacements(paths, project_id)
+    if set(recovered).intersection(replayed) or set(recovered).intersection(qc_replaced) or set(replayed).intersection(qc_replaced):
         raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
     recovered.update(replayed)
+    recovered.update(qc_replaced)
     return recovered
 
 
@@ -1371,22 +1390,158 @@ def reopen_uncertain_temporal_qc(runtime_root: Path | str, project_id: str, requ
         atomic_write_json(path, manifest)
 
 
-def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str) -> None:
-    """Make exactly one selected request runnable again without erasing history."""
+def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:
+    """Recognize the narrow historical state that requires a fresh epoch."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("selected_asset"), dict):
+        return False
+    if entry.get("status") != "FAILED_RETRYABLE" or entry.get("replacement_of"):
+        return False
+    failure = entry.get("failure_class")
+    reviews = entry.get("quality_reviews")
+    qc_rejected = (isinstance(failure, str) and failure.endswith("_QC_REJECTED")) or (
+        isinstance(reviews, list) and any(isinstance(item, dict) and item.get("status") == "REJECTED" for item in reviews)
+    )
+    if not qc_rejected:
+        return False
+    attempts = entry.get("attempts")
+    selected_attempt = entry["selected_asset"].get("attempt")
+    return (isinstance(attempts, list) and any(
+        isinstance(attempt, dict) and attempt.get("attempt") == selected_attempt
+        and attempt.get("attribution_state") == "CONFIRMED"
+        for attempt in attempts
+    ))
+
+
+def _qc_rejected_asset_replacement_valid(entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
+    if entry.get("status") != QC_REJECTED_ASSET_REPLACED_STATUS or not isinstance(entry.get("selected_asset"), dict):
+        return False
+    replacement_id = entry.get("replacement_request_id")
+    events = entry.get("qc_replacement_events")
+    if not isinstance(replacement_id, str) or not isinstance(events, list) or len(events) != 1:
+        return False
+    event = events[0] if isinstance(events[0], dict) else None
+    replacement = next((item for item in requests if item.get("request_id") == replacement_id), None)
+    replacement_entry = entries.get(replacement_id)
+    return bool(
+        isinstance(event, dict)
+        and event.get("event") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+        and event.get("old_request_id") == entry.get("request_id")
+        and event.get("replacement_request_id") == replacement_id
+        and event.get("attempts_sha256") == _json_sha256(entry.get("attempts"))
+        and event.get("selected_asset_sha256") == entry["selected_asset"].get("sha256")
+        and isinstance(replacement, dict)
+        and replacement.get("replacement_of") == entry.get("request_id")
+        and replacement.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+        and isinstance(replacement_entry, dict)
+        and replacement_entry.get("replacement_of") == entry.get("request_id")
+        and replacement_entry.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+        and replacement_entry.get("attempts") == []
+        and replacement_entry.get("provider_submissions") == 0
+        and replacement_entry.get("selected_asset") is None
+        and replacement_entry.get("attribution_claim") == "NONE"
+    )
+
+
+def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str,
+                              _fault_injector: Callable[[str], None] | None = None) -> dict:
+    """Atomically replace one owned mandatory-QC-rejected asset without reopening it."""
+    if not isinstance(reason, str) or not reason.strip():
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_REASON_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        recovered = _recover_pending_qc_rejected_asset_replacements(paths, project_id)
+        manifest_path, manifest = _manifest(paths, project_id)
+        requests_path = paths.artifact_path("output/generation_requests.json")
+        try:
+            requests_data = read_json(requests_path)
+            requests = requests_data.get("requests") if isinstance(requests_data, dict) else None
+        except Exception as error:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_INVALID") from error
+        if not isinstance(requests, list):
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_INVALID")
+        entries = {item.get("request_id"): item for item in manifest.get("requests", []) if isinstance(item, dict)}
+        old_request = next((item for item in requests if item.get("request_id") == request_id), None)
+        old_entry = entries.get(request_id)
+        if not isinstance(old_request, dict):
+            completed = recovered.get(request_id)
+            if isinstance(old_entry, dict) and completed and _qc_rejected_asset_replacement_valid(old_entry, requests, entries):
+                return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
+                        "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": True}
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_ALREADY_COMPLETED")
+        if not _owned_mandatory_qc_rejection(old_entry):
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+        attempts_sha256 = _json_sha256(old_entry["attempts"])
+        selected_sha256 = old_entry["selected_asset"].get("sha256")
+        nonce = uuid.uuid4().hex
+        epoch = int(old_request.get("replacement_epoch", 0)) + 1
+        replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
+        if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_IDENTITY_COLLISION")
+        replacement = dict(old_request)
+        replacement.update({"request_id": replacement_id, "fingerprint": replacement_fingerprint,
+                            "replaces_request_id": request_id, "replacement_of": request_id,
+                            "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
+                            "replacement_epoch": epoch, "epoch_nonce": nonce})
+        position = requests.index(old_request)
+        requests[position] = replacement
+        _migrate_request_references(requests_data, request_id, replacement_id)
+        media_plan_path = paths.artifact_path("output/media_plan.json")
+        media_plan = read_json(media_plan_path) if media_plan_path.is_file() else None
+        media_plan_changed = isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, replacement_id)
+        at = _now()
+        event = {"at": at, "event": QC_REJECTED_ASSET_REPLACEMENT_REASON, "operator_reason": reason.strip(),
+                 "old_request_id": request_id, "replacement_request_id": replacement_id,
+                 "old_failure_class": old_entry.get("failure_class"), "attempts_sha256": attempts_sha256,
+                 "selected_asset_sha256": selected_sha256, "historical_provider_dispatch": "CONFIRMED",
+                 "historical_attribution": "CONFIRMED"}
+        old_entry.setdefault("qc_replacement_events", []).append(event)
+        old_entry.update({"status": QC_REJECTED_ASSET_REPLACED_STATUS, "replacement_request_id": replacement_id,
+                          "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON, "updated_at": at})
+        manifest["requests"].append({"request_id": replacement_id, "request_identity_sha256": replacement_fingerprint,
+                                     "related_identity": replacement.get("shot_id") or replacement.get("entity_id"),
+                                     "media_type": replacement["media_type"], "provider": replacement.get("provider", "google_flow"),
+                                     "prompt_sha256": hashlib.sha256(replacement["prompt"].encode("utf-8")).hexdigest(),
+                                     "reference_asset_hashes": [], "attempts": [], "provider_submissions": 0,
+                                     "selected_asset": None, "attribution_claim": "NONE", "status": "PENDING", "created_at": at,
+                                     "replaces_request_id": request_id, "replacement_of": request_id,
+                                     "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
+                                     "replacement_epoch": epoch, "epoch_nonce": nonce})
+        if _json_sha256(old_entry.get("attempts")) != attempts_sha256 or old_entry["selected_asset"].get("sha256") != selected_sha256:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_APPEND_ONLY_VIOLATION")
+        transaction_id = "qc-rejected-asset-replacement-" + _json_sha256({"project_id": project_id, "old_request_id": request_id, "replacement_request_id": replacement_id})[:24]
+        targets = {"generation_requests": _target("output/generation_requests.json", requests_data),
+                   "generation_manifest": _target("output/generation_manifest.json", manifest)}
+        if media_plan_changed: targets["media_plan"] = _target("output/media_plan.json", media_plan)
+        transaction = {"schema_version": QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA, "state": "PREPARED",
+                       "transaction_id": transaction_id, "project_id": project_id, "old_request_id": request_id,
+                       "replacement_request_id": replacement_id, "targets": targets}
+        _publish_replacement_transaction(paths, transaction, fault_injector=_fault_injector)
+        return {"old_request_id": request_id, "replacement_request_id": replacement_id,
+                "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": False}
+
+
+def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str) -> dict | None:
+    """Route QC-rejected owned assets to replacement; retain proven no-dispatch retries."""
     if not isinstance(reason, str) or not reason.strip(): raise FlowError("REGENERATION_REASON_REQUIRED")
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
         if not entry or entry.get("status") in {"GENERATING", "AMBIGUOUS"}: raise FlowError("REGENERATION_NOT_ALLOWED")
-        raw_attempt, _ = _successful_raw_image(paths, entry)
-        retry_local = raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES
-        action = "RETRY_LOCAL_POSTPROCESS" if retry_local else "REGENERATE"
-        entry.setdefault("operator_actions", []).append({"action":action,"reason":reason.strip(),"at":_now()})
-        entry.update({"status":"FAILED_RETRYABLE",
-                      "failure_class":entry.get("failure_class") if retry_local else "OPERATOR_REGENERATION",
-                      "updated_at":_now()})
-        atomic_write_json(path, manifest)
+        if _owned_mandatory_qc_rejection(entry):
+            # Release before the replacement operation takes its own project lock.
+            pass
+        else:
+            raw_attempt, _ = _successful_raw_image(paths, entry)
+            retry_local = raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES
+            action = "RETRY_LOCAL_POSTPROCESS" if retry_local else "REGENERATE"
+            entry.setdefault("operator_actions", []).append({"action":action,"reason":reason.strip(),"at":_now()})
+            entry.update({"status":"FAILED_RETRYABLE",
+                          "failure_class":entry.get("failure_class") if retry_local else "OPERATOR_REGENERATION",
+                          "updated_at":_now()})
+            atomic_write_json(path, manifest)
+            return
+    return replace_qc_rejected_asset(runtime_root, project_id, request_id, reason=reason)
 
 def reopen_verified_pre_dispatch_failure(runtime_root: Path | str, project_id: str, request_id: str) -> None:
     """Only reopen an attempt already proven safe by the canonical authority."""

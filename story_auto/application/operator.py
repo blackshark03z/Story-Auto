@@ -440,8 +440,9 @@ class OperatorService:
         current=next((item for group in self.media_items(project_id).values() for item in group if item.get("request",{}).get("request_id")==request_id),None)
         if not current: raise OperatorServiceError("request not found")
         if current.get("status")=="AMBIGUOUS": raise OperatorServiceError("MANUAL_LOCAL_OVERRIDE_AMBIGUOUS_BLOCKED")
-        queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
-        adopt_manual_recovery(self.runtime.root,project_id,request_id,Path(source),settings={"source":"operator_replacement"},attribution="operator-selected local file")
+        regeneration=queue_regeneration(self.runtime.root,project_id,request_id,reason="operator local asset replacement")
+        target_request_id=regeneration.get("replacement_request_id",request_id) if isinstance(regeneration,dict) else request_id
+        adopt_manual_recovery(self.runtime.root,project_id,target_request_id,Path(source),settings={"source":"operator_replacement"},attribution="operator-selected local file")
         return self.media_items(project_id)
 
     def supersede_ambiguous_request(self, project_id: str, request_id: str, *, reason: str,
