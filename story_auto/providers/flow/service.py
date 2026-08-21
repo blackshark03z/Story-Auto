@@ -666,7 +666,7 @@ def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str
                 and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
         if (entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
-                and not _qc_rejected_asset_replacement_valid(entry, requests, entries)):
+                and not _qc_rejected_asset_replacement_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
     return None
 
@@ -1412,7 +1412,60 @@ def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:
     ))
 
 
-def _qc_rejected_asset_replacement_valid(entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
+def _qc_replacement_genesis_projection(request: dict) -> dict | None:
+    """The request facts fixed at replacement creation, excluding runtime state."""
+    required = ("request_id", "fingerprint", "prompt", "purpose", "media_type", "provider", "replacement_of",
+                "replacement_reason", "epoch_nonce")
+    if not isinstance(request, dict) or any(not isinstance(request.get(key), str) or not request[key] for key in required):
+        return None
+    if request.get("replacement_reason") != QC_REJECTED_ASSET_REPLACEMENT_REASON:
+        return None
+    if not isinstance(request.get("replacement_epoch"), int) or request["replacement_epoch"] < 1:
+        return None
+    for key in ("depends_on", "reference_asset_ids"):
+        if not isinstance(request.get(key), list) or any(not isinstance(item, str) or not item for item in request[key]):
+            return None
+    return {
+        "request_id": request["request_id"], "fingerprint": request["fingerprint"], "prompt": request["prompt"],
+        "purpose": request["purpose"], "shot_id": request.get("shot_id"), "entity_id": request.get("entity_id"),
+        "media_type": request["media_type"], "provider": request["provider"], "output_count": request.get("output_count", 1),
+        "execution_tier": request.get("execution_tier"), "depends_on": list(request["depends_on"]),
+        "reference_asset_ids": list(request["reference_asset_ids"]), "replacement_of": request["replacement_of"],
+        "replacement_reason": request["replacement_reason"], "replacement_epoch": request["replacement_epoch"],
+        "epoch_nonce": request["epoch_nonce"],
+    }
+
+
+def _qc_rejected_asset_replacement_transaction(paths, project_id: str, old_request_id: str,
+                                                replacement_request_id: str) -> tuple[dict, dict] | None:
+    """Find exactly one receipt-verified immutable creation transaction."""
+    matches = []
+    for _path, transaction in _prepared_transactions(
+            paths, project_id, schema_version=QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA):
+        if (transaction.get("old_request_id") != old_request_id
+                or transaction.get("replacement_request_id") != replacement_request_id):
+            continue
+        transaction_id = transaction.get("transaction_id")
+        if not isinstance(transaction_id, str):
+            return None
+        _prepared, committed_path = _transaction_paths(
+            paths, transaction_id, schema_version=QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA
+        )
+        try:
+            receipt = read_json(committed_path)
+        except Exception:
+            return None
+        expected = {"schema_version": QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA, "state": "COMMITTED",
+                    "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+        if receipt != expected:
+            return None
+        matches.append((transaction, receipt))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, requests: list[dict],
+                                         entries: dict[str, dict]) -> bool:
+    """Verify immutable QC-replacement genesis, never a permanently pristine runtime entry."""
     if entry.get("status") != QC_REJECTED_ASSET_REPLACED_STATUS or not isinstance(entry.get("selected_asset"), dict):
         return False
     replacement_id = entry.get("replacement_request_id")
@@ -1422,6 +1475,21 @@ def _qc_rejected_asset_replacement_valid(entry: dict, requests: list[dict], entr
     event = events[0] if isinstance(events[0], dict) else None
     replacement = next((item for item in requests if item.get("request_id") == replacement_id), None)
     replacement_entry = entries.get(replacement_id)
+    resolved_transaction = _qc_rejected_asset_replacement_transaction(
+        paths, project_id, entry.get("request_id"), replacement_id
+    )
+    if resolved_transaction is None:
+        return False
+    transaction, _receipt = resolved_transaction
+    stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
+    stored_manifest = transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+    stored_old = next((item for item in stored_manifest if item.get("request_id") == entry.get("request_id")), None)
+    stored_replacement = next((item for item in stored_requests if item.get("request_id") == replacement_id), None)
+    stored_replacement_entry = next((item for item in stored_manifest if item.get("request_id") == replacement_id), None)
+    duplicate_requests = [item for item in requests if item.get("replacement_of") == entry.get("request_id")
+                          and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON]
+    duplicate_entries = [item for item in entries.values() if item.get("replacement_of") == entry.get("request_id")
+                         and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON]
     return bool(
         isinstance(event, dict)
         and event.get("event") == QC_REJECTED_ASSET_REPLACEMENT_REASON
@@ -1429,16 +1497,30 @@ def _qc_rejected_asset_replacement_valid(entry: dict, requests: list[dict], entr
         and event.get("replacement_request_id") == replacement_id
         and event.get("attempts_sha256") == _json_sha256(entry.get("attempts"))
         and event.get("selected_asset_sha256") == entry["selected_asset"].get("sha256")
+        and isinstance(stored_old, dict)
+        and stored_old.get("attempts") == entry.get("attempts")
+        and stored_old.get("selected_asset") == entry.get("selected_asset")
+        and stored_old.get("failure_class") == entry.get("failure_class")
         and isinstance(replacement, dict)
-        and replacement.get("replacement_of") == entry.get("request_id")
-        and replacement.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+        and isinstance(stored_replacement, dict)
+        and _qc_replacement_genesis_projection(replacement) is not None
+        and _qc_replacement_genesis_projection(replacement) == _qc_replacement_genesis_projection(stored_replacement)
         and isinstance(replacement_entry, dict)
         and replacement_entry.get("replacement_of") == entry.get("request_id")
         and replacement_entry.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
-        and replacement_entry.get("attempts") == []
-        and replacement_entry.get("provider_submissions") == 0
-        and replacement_entry.get("selected_asset") is None
-        and replacement_entry.get("attribution_claim") == "NONE"
+        and isinstance(replacement_entry.get("attempts"), list)
+        and all(isinstance(attempt, dict) for attempt in replacement_entry["attempts"])
+        and replacement_entry.get("status") in {
+            "PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS", "FAILED_RETRYABLE", "QC_PENDING", "SUCCEEDED",
+            "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED",
+        }
+        and isinstance(stored_replacement_entry, dict)
+        and stored_replacement_entry.get("attempts") == []
+        and stored_replacement_entry.get("provider_submissions") == 0
+        and stored_replacement_entry.get("selected_asset") is None
+        and stored_replacement_entry.get("attribution_claim") == "NONE"
+        and len(duplicate_requests) == 1
+        and len(duplicate_entries) == 1
     )
 
 
@@ -1464,7 +1546,8 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
         old_entry = entries.get(request_id)
         if not isinstance(old_request, dict):
             completed = recovered.get(request_id)
-            if isinstance(old_entry, dict) and completed and _qc_rejected_asset_replacement_valid(old_entry, requests, entries):
+            if (isinstance(old_entry, dict) and completed
+                    and _qc_rejected_asset_replacement_valid(paths, project_id, old_entry, requests, entries)):
                 return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
                         "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": True}
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_ALREADY_COMPLETED")
@@ -2172,6 +2255,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 # durable state remains NOT_STARTED.
                 attempt["provider_execution_state"] = "PROVIDER_BOUNDARY_ENTERED"
                 attempt["provider_boundary_entered_at"] = _now()
+                entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
                 atomic_write_json(path, manifest)
                 result = executor.run(request_context, refs, temp)
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True))

@@ -12,6 +12,7 @@ from story_auto.providers.flow.service import (
     FlowError,
     FlowExecutor,
     _provider_generation_retry_authorized,
+    _runnable,
     execute_generation,
     queue_regeneration,
     replace_qc_rejected_asset,
@@ -59,7 +60,7 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
         def generate(request, _refs, destination: Path):
             calls.append(request["request_id"])
             destination.parent.mkdir(parents=True, exist_ok=True)
-            Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+            Image.new("RGB", (1280, 720), "maroon" if request["request_id"] == "req_later" else "navy").save(destination, "PNG")
             return destination
         return FlowExecutor(FlowCapabilities(True, True, True, True, True, True), generate)
 
@@ -94,7 +95,12 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             self.assertEqual((generated["new_submissions"], calls), (1, [replacement_id]))
             report = {"results": {key: "PASS" for key in ("SKIN_REALISM", "LIGHTING_NATURALISM", "MATERIAL_REALISM", "COMPOSITION_NATURALISM", "AI_POLISH", "CONTINUITY", "TECHNICAL_VALIDITY")}, "visible_provider_watermark": False, "reviewer": "fixture", "alignment_classification": "PASS_DIRECT"}
             review_production_asset(runtime.root, config.project_id, replacement_id, report)
-            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][1]["status"], "SUCCEEDED")
+            post_qc = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][1]
+            self.assertEqual((post_qc["status"], post_qc["provider_submissions"]), ("SUCCEEDED", 1))
+            resumed = execute_generation(runtime.root, config.project_id, executor=self._executor(calls), execute=True, request_ids={replacement_id})
+            self.assertEqual((resumed["blocked"], resumed["new_submissions"], calls), (False, 0, [replacement_id]))
+            entries = {entry["request_id"]: entry for entry in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            self.assertTrue(_runnable(read_json(paths.artifact_path("output/generation_requests.json"))["requests"][1], entries))
 
     def test_replacement_epoch_cannot_start_an_unbounded_qc_replacement_loop(self):
         with tempfile.TemporaryDirectory() as root:
@@ -108,6 +114,32 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
             with self.assertRaisesRegex(FlowError, "QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE"):
                 replace_qc_rejected_asset(runtime.root, config.project_id, replacement_id, reason="must not loop")
+
+    def test_broken_immutable_lineage_history_or_duplicate_replacement_fails_closed(self):
+        mutations = {
+            "broken_lineage": lambda requests, manifest, replacement_id: requests[0].update({"replacement_of": "wrong"}),
+            "wrong_reason": lambda requests, manifest, replacement_id: requests[0].update({"replacement_reason": "WRONG_REASON"}),
+            "old_history": lambda requests, manifest, replacement_id: manifest["requests"][0]["attempts"].append({"attempt": 99}),
+            "duplicate_replacement": lambda requests, manifest, replacement_id: requests.append({
+                **requests[0], "request_id": "req_duplicate", "fingerprint": "duplicate-fingerprint",
+            }),
+            "duplicate_manifest_replacement": lambda requests, manifest, replacement_id: manifest["requests"].append({
+                **manifest["requests"][1], "request_id": "req_duplicate_manifest",
+            }),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                runtime, config, paths, _old, _selected, _attempt = self._project(root)
+                replacement_id = replace_qc_rejected_asset(runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="mandatory QC")["replacement_request_id"]
+                requests_data = read_json(paths.artifact_path("output/generation_requests.json"))
+                manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+                mutate(requests_data["requests"], manifest, replacement_id)
+                atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests_data)
+                atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+                calls: list[str] = []
+                result = execute_generation(runtime.root, config.project_id, executor=self._executor(calls), execute=True, request_ids={replacement_id})
+                self.assertTrue(result["blocked"])
+                self.assertEqual((result["attention"], calls), ("FLOW_GENERATION_RECONCILIATION_REQUIRED", []))
 
 
 if __name__ == "__main__":
