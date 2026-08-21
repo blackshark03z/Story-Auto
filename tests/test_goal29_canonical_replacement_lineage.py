@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,9 +12,11 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.service import (
     FlowExecutor,
     _abandoned_unresolved_entry_valid,
+    _direct_qc_replacement_child_ids,
     _first_invalid_request_replacement,
     _provider_generation_retry_authorized,
     _qc_rejected_asset_replacement_valid,
+    _json_sha256,
     _resolve_current_canonical_descendant,
     _runnable,
     _unresolved_flow_entry,
@@ -95,6 +98,23 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
         )["replacement_request_id"]
         return intermediate, qc_child, descendant
 
+    def _replay_then_qc_then_two_replays(self, runtime, config, paths):
+        middle, qc_child, first_descendant = self._replay_then_qc_then_replay(runtime, config, paths)
+        manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+        entry = next(item for item in manifest["requests"] if item["request_id"] == first_descendant)
+        entry.update({
+            "status": "AMBIGUOUS", "failure_class": "FLOW_DISPATCH_UNCERTAIN",
+            "attempts": [{"attempt": 1, "status": "AMBIGUOUS", "dispatch_confirmed": True,
+                          "dispatch_confirmation_state": "CONFIRMED", "attribution_state": "UNCERTAIN"}],
+        })
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+        final_descendant = replay_unresolved_request(
+            runtime.root, config.project_id, first_descendant,
+            reason="second confirmed unresolved composition fixture", acknowledge_previous_dispatch_or_cost_may_have_occurred=True,
+            acknowledge_previous_output_ownership_unresolved=True, acknowledge_replacement_may_consume_provider_credit=True,
+        )["replacement_request_id"]
+        return middle, qc_child, first_descendant, final_descendant
+
     @staticmethod
     def _state(paths):
         requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
@@ -167,6 +187,69 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
             self.assertEqual((result["blocked"], result["attention"], result["new_submissions"], fake_boundary_calls),
                              (False, None, 1, [descendant]))
 
+    def test_qc_direct_edge_survives_two_replay_descendants(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            middle, qc_child, first_descendant, final_descendant = self._replay_then_qc_then_two_replays(runtime, config, paths)
+            requests, entries = self._state(paths)
+            self.assertEqual(_direct_qc_replacement_child_ids(paths, config.project_id, middle), [qc_child])
+            self.assertTrue(_qc_rejected_asset_replacement_valid(paths, config.project_id, entries[middle], requests, entries))
+            self.assertTrue(_abandoned_unresolved_entry_valid(paths, config.project_id, entries[qc_child], requests, entries))
+            self.assertTrue(_abandoned_unresolved_entry_valid(paths, config.project_id, entries[first_descendant], requests, entries))
+            self.assertEqual(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries), final_descendant)
+            self.assertIsNone(_first_invalid_request_replacement(paths, config.project_id, entries, requests))
+            for request_id in (self.ANCESTOR, middle, qc_child, first_descendant):
+                self.assertFalse(_unresolved_flow_entry(entries[request_id]))
+                self.assertFalse(_provider_generation_retry_authorized(entries[request_id]))
+            self.assertTrue(_runnable(next(item for item in requests if item["request_id"] == final_descendant), entries))
+
+            fake_boundary_calls: list[str] = []
+            def fake_provider(request, _refs, destination: Path):
+                fake_boundary_calls.append(request["request_id"])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (1280, 720), "purple").save(destination, "PNG")
+                return destination
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), fake_provider),
+                execute=True, request_ids={final_descendant}, max_requests=1,
+            )
+            self.assertEqual((result["blocked"], result["attention"], result["new_submissions"], fake_boundary_calls),
+                             (False, None, 1, [final_descendant]))
+
+    def test_two_receipt_proven_direct_qc_children_fail_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            middle, qc_child = self._replay_then_qc_replace(runtime, config, paths)
+            directory = paths.artifact_path("output/qc_rejected_asset_replacement_transactions")
+            source_path = next(directory.glob("*.prepared.json"))
+            competing = copy.deepcopy(read_json(source_path))
+            competing_id = "req_true_direct_qc_competitor"
+            competing_txn_id = "qc-rejected-asset-replacement-direct-competitor"
+
+            def replace_id(value):
+                if isinstance(value, dict):
+                    return {key: replace_id(competing_id if item == qc_child else item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [replace_id(competing_id if item == qc_child else item) for item in value]
+                return value
+
+            competing = replace_id(competing)
+            competing["transaction_id"] = competing_txn_id
+            for target in competing["targets"].values():
+                target["sha256"] = _json_sha256(target["value"])
+            atomic_write_json(directory / f"{competing_txn_id}.prepared.json", competing)
+            atomic_write_json(directory / f"{competing_txn_id}.committed.json", {
+                "schema_version": competing["schema_version"], "state": "COMMITTED", "transaction_id": competing_txn_id,
+                "prepared_sha256": _json_sha256(competing),
+            })
+
+            requests, entries = self._state(paths)
+            self.assertEqual(_direct_qc_replacement_child_ids(paths, config.project_id, middle), [qc_child, competing_id])
+            self.assertFalse(_qc_rejected_asset_replacement_valid(paths, config.project_id, entries[middle], requests, entries))
+            self.assertIsNone(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries))
+
     def test_composed_chain_negative_matrix_fails_closed(self):
         def missing_child_transaction(paths, _requests, entries, _middle, qc_child, _descendant):
             transaction_id = entries[_descendant]["replay_creation_transaction_id"]
@@ -213,7 +296,7 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
                 expected_invalid = self.ANCESTOR if name == "old_history_mutated" else intermediate
                 self.assertEqual(_first_invalid_request_replacement(paths, config.project_id, entries, requests)[0]["request_id"], expected_invalid)
 
-    def test_competing_replacement_and_cycles_fail_closed(self):
+    def test_unproven_ancestry_metadata_is_not_a_competing_edge_and_cycles_fail_closed(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root)
             intermediate, current = self._replay_then_qc_replace(runtime, config, paths)
@@ -221,7 +304,7 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
             duplicate = dict(next(item for item in requests if item["request_id"] == current))
             duplicate.update({"request_id": "req_competing", "fingerprint": "competing", "replacement_of": intermediate})
             requests.append(duplicate)
-            self.assertIsNone(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries))
+            self.assertEqual(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries), current)
 
             requests.pop()
             entries[current].update({"status": "ABANDONED_UNRESOLVED", "replacement_request_id": self.ANCESTOR})

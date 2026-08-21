@@ -67,3 +67,25 @@ provider call is involved.
 Deferred Build OS lesson: transition-composition and lineage-closure scenarios
 should be required during future recovery-plan assurance. Broad synthesis
 remains deferred until Story Auto ships.
+
+## Revision 3 direct-edge correction
+
+- Title: ancestry metadata is not direct transition proof.
+- Classification: `PRODUCT ARCHITECTURE / SPEC / WORKFLOW`.
+- Verified external-R3 gap: a QC child can later be replayed multiple times.
+  Those descendants retain the QC ancestry fields copied from their immediate
+  predecessor, which must not make them competing direct QC children of the
+  original rejected request.
+- Reusable rule: direct QC-child detection is based exclusively on a
+  receipt-verified QC creation transaction whose immutable parent event and
+  child genesis name that exact parent and child. Copied request fields are
+  ancestry metadata only.
+
+Revision 3 proves `A -> B -> C -> D -> E` without flattening the historical
+edges: the one receipt-proven direct QC child of `B` is `C`; `D` and `E` are
+replay descendants, even when they preserve `B`'s QC ancestry. Two separately
+receipt-proven direct QC transactions for the same parent deny resolution.
+
+Deferred Build OS lesson: assurance should distinguish ancestry metadata from
+direct transition proof and compose transition checks across deeper canonical
+lineage. No Build OS implementation is modified here.

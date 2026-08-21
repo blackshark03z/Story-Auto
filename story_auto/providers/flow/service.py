@@ -727,7 +727,12 @@ def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str
     invalid = _first_invalid_superseded(paths, project_id, entries, requests)
     if invalid is not None:
         return invalid
+    for request in requests:
+        if isinstance(request, dict) and not _qc_ancestry_metadata_has_direct_origin(paths, project_id, request):
+            return request, entries.get(request.get("request_id"), {"request_id": request.get("request_id")})
     for entry in entries.values():
+        if not _qc_ancestry_metadata_has_direct_origin(paths, project_id, entry):
+            return {"request_id": entry.get("request_id")}, entry
         if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
                 and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
@@ -1555,6 +1560,89 @@ def _qc_rejected_asset_replacement_transaction(paths, project_id: str, old_reque
     return matches[0] if len(matches) == 1 else None
 
 
+def _direct_qc_replacement_child_ids(paths, project_id: str, old_request_id: str) -> list[str] | None:
+    """Return receipt-proven *direct* QC children, never copied ancestry fields.
+
+    A replay inherits the request it replaces, including its prior QC ancestry.
+    That ancestry is useful audit data, but it is not evidence that the replay
+    was directly created by the older QC transition.  The committed QC creation
+    transaction records the only immutable parent -> child operation boundary.
+    """
+    children: list[str] = []
+    try:
+        transactions = _prepared_transactions(
+            paths, project_id, schema_version=QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA
+        )
+    except FlowError:
+        return None
+    for _path, transaction in transactions:
+        if transaction.get("old_request_id") != old_request_id:
+            continue
+        transaction_id = transaction.get("transaction_id")
+        child_id = transaction.get("replacement_request_id")
+        if (not isinstance(transaction_id, str) or not transaction_id
+                or not isinstance(child_id, str) or not child_id or child_id == old_request_id):
+            return None
+        _prepared, committed_path = _transaction_paths(
+            paths, transaction_id, schema_version=QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA
+        )
+        try:
+            receipt = read_json(committed_path)
+        except Exception:
+            return None
+        expected_receipt = {
+            "schema_version": QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA,
+            "state": "COMMITTED",
+            "transaction_id": transaction_id,
+            "prepared_sha256": _json_sha256(transaction),
+        }
+        if receipt != expected_receipt:
+            return None
+        stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
+        stored_manifest = transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+        stored_child = next((item for item in stored_requests if item.get("request_id") == child_id), None)
+        stored_parent = next((item for item in stored_manifest if item.get("request_id") == old_request_id), None)
+        events = stored_parent.get("qc_replacement_events") if isinstance(stored_parent, dict) else None
+        if (not isinstance(stored_child, dict)
+                or _qc_replacement_genesis_projection(stored_child) is None
+                or stored_child.get("replacement_of") != old_request_id
+                or stored_child.get("replacement_reason") != QC_REJECTED_ASSET_REPLACEMENT_REASON
+                or not isinstance(events, list)
+                or not any(isinstance(event, dict)
+                           and event.get("event") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+                           and event.get("old_request_id") == old_request_id
+                           and event.get("replacement_request_id") == child_id
+                           for event in events)):
+            return None
+        children.append(child_id)
+    return children
+
+
+def _qc_ancestry_metadata_has_direct_origin(paths, project_id: str, item: dict) -> bool:
+    """Reject orphaned QC ancestry fields without treating descendants as duplicates."""
+    parent_id = item.get("replacement_of")
+    reason = item.get("replacement_reason")
+    # Historical QC parents record the reason of their outgoing edge but do
+    # not themselves carry incoming QC ancestry.
+    if parent_id is None:
+        return True
+    if (not isinstance(parent_id, str) or not parent_id
+            or reason != QC_REJECTED_ASSET_REPLACEMENT_REASON
+            or not isinstance(item.get("request_id"), str) or not item["request_id"]):
+        return False
+    direct_children = _direct_qc_replacement_child_ids(paths, project_id, parent_id)
+    if direct_children is None:
+        return False
+    if item["request_id"] in direct_children:
+        return True
+    # A descendant may retain older QC ancestry, but must prove its own
+    # immediate replay edge. This is lineage-integrity checking, not duplicate
+    # direct-child detection.
+    replay_parent = item.get("replays_unresolved_request_id")
+    return (isinstance(replay_parent, str) and bool(replay_parent)
+            and _unresolved_replay_transaction(paths, project_id, replay_parent, item["request_id"]) is not None)
+
+
 def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, requests: list[dict],
                                          entries: dict[str, dict]) -> bool:
     """Verify immutable QC-replacement genesis, never a permanently pristine runtime entry."""
@@ -1578,14 +1666,7 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
     stored_old = next((item for item in stored_manifest if item.get("request_id") == entry.get("request_id")), None)
     stored_replacement = next((item for item in stored_requests if item.get("request_id") == replacement_id), None)
     stored_replacement_entry = next((item for item in stored_manifest if item.get("request_id") == replacement_id), None)
-    duplicate_requests = [item for item in requests if item.get("replacement_of") == entry.get("request_id")
-                          and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
-                          # A later replay of this exact QC child retains older
-                          # metadata for audit lineage, but its direct parent is
-                          # the replay target, not this QC parent.
-                          and item.get("replays_unresolved_request_id") != replacement_id]
-    duplicate_entries = [item for item in entries.values() if item.get("replacement_of") == entry.get("request_id")
-                         and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON]
+    direct_children = _direct_qc_replacement_child_ids(paths, project_id, entry.get("request_id"))
     immutable_edge = bool(
         isinstance(event, dict)
         and event.get("event") == QC_REJECTED_ASSET_REPLACEMENT_REASON
@@ -1608,14 +1689,13 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
         and stored_replacement_entry.get("provider_submissions") == 0
         and stored_replacement_entry.get("selected_asset") is None
         and stored_replacement_entry.get("attribution_claim") == "NONE"
-        and len(duplicate_entries) == 1
+        and direct_children == [replacement_id]
     )
     if not immutable_edge:
         return False
     if isinstance(replacement, dict):
         return (
-            len(duplicate_requests) == 1
-            and _qc_replacement_genesis_projection(replacement) is not None
+            _qc_replacement_genesis_projection(replacement) is not None
             and _qc_replacement_genesis_projection(replacement) == _qc_replacement_genesis_projection(stored_replacement)
             and replacement_entry.get("status") in {
                 "PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS", "FAILED_RETRYABLE", "QC_PENDING", "SUCCEEDED",
@@ -1623,8 +1703,7 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
             }
         )
     return (
-        not duplicate_requests
-        and _historical_replacement_parent(replacement_entry)
+        _historical_replacement_parent(replacement_entry)
         and _manifest_identity_matches_request(replacement_entry, stored_replacement)
     )
 
