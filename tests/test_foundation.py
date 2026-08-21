@@ -12,7 +12,8 @@ from story_auto.core.artifacts import ArtifactWriteError, atomic_write_json, ato
 from story_auto.core.checkpoint import CheckpointStore, FingerprintError, canonical_json, fingerprint
 from story_auto.core.content import ContentValidationError, narrations_equivalent, narration_hash, parse_content_markdown, plan_chunks, validate_reconstruction
 from story_auto.core.project import ProjectConfig, ProjectPathError, ProjectPaths, ProjectValidationError, RuntimeLayout, create_project, load_project
-from story_auto.core.project.lock import ProjectLock, ProjectLockedError
+from story_auto.core.project import lock as lock_module
+from story_auto.core.project.lock import ProjectLock, ProjectLockedError, _process_is_alive, _windows_process_is_alive
 from story_auto.core.retry import retry
 from story_auto.pipeline import run_content_stage
 
@@ -145,6 +146,82 @@ class ProjectContractTests(unittest.TestCase):
 
 
 class LockTests(unittest.TestCase):
+    class _WindowsProbe:
+        def __init__(self, *, handle=1, error=0, exit_code=259, raises: Exception | None = None) -> None:
+            self.handle, self.error, self.code, self.raises = handle, error, exit_code, raises
+            self.closed: list[int] = []
+
+        def open_process(self, pid: int):
+            if self.raises:
+                raise self.raises
+            return self.handle
+
+        def last_error(self) -> int:
+            return self.error
+
+        def exit_code(self, handle: int) -> int | None:
+            if self.raises:
+                raise self.raises
+            return self.code
+
+        def close_handle(self, handle: int) -> None:
+            self.closed.append(handle)
+
+    def test_process_probe_keeps_posix_semantics(self) -> None:
+        self.assertFalse(_process_is_alive(-1))
+        with patch.object(lock_module.os, "name", "posix"), patch.object(lock_module.os, "kill") as kill:
+            self.assertTrue(_process_is_alive(42))
+            kill.assert_called_once_with(42, 0)
+        with patch.object(lock_module.os, "name", "posix"), patch.object(lock_module.os, "kill", side_effect=ProcessLookupError):
+            self.assertFalse(_process_is_alive(42))
+        with patch.object(lock_module.os, "name", "posix"), patch.object(lock_module.os, "kill", side_effect=PermissionError):
+            self.assertTrue(_process_is_alive(42))
+
+    def test_windows_native_probe_classifies_liveness_and_closes_handles(self) -> None:
+        missing = self._WindowsProbe(handle=0, error=87)
+        self.assertFalse(_windows_process_is_alive(21136, probe=missing))
+        self.assertEqual(missing.closed, [])
+        self.assertTrue(_windows_process_is_alive(21136, probe=self._WindowsProbe(handle=0, error=5)))
+        self.assertTrue(_windows_process_is_alive(21136, probe=self._WindowsProbe(raises=RuntimeError("unknown"))))
+        live = self._WindowsProbe(handle=7, exit_code=259)
+        self.assertTrue(_windows_process_is_alive(21136, probe=live))
+        self.assertEqual(live.closed, [7])
+        exited = self._WindowsProbe(handle=9, exit_code=0)
+        self.assertFalse(_windows_process_is_alive(21136, probe=exited))
+        self.assertEqual(exited.closed, [9])
+
+    def test_windows_path_never_invokes_os_kill(self) -> None:
+        with patch.object(lock_module.os, "name", "nt"), patch.object(lock_module, "_windows_process_is_alive", return_value=False) as native, patch.object(lock_module.os, "kill") as kill:
+            self.assertFalse(_process_is_alive(21136))
+        native.assert_called_once_with(21136)
+        kill.assert_not_called()
+
+    def test_windows_stale_positive_pid_recovers_without_runtime_lock_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = RuntimeLayout.from_root(directory).ensure()
+            stale = runtime.locks / "prj_21136.lock"
+            atomic_write_json(stale, {"project_id": "prj_21136", "pid": 21136, "hostname": __import__("socket").gethostname(), "created_at": 0})
+            with patch.object(lock_module, "_process_is_alive", return_value=False) as alive:
+                lock = ProjectLock(runtime, "prj_21136", stale_after_seconds=1, clock=lambda: 2)
+                self.assertTrue(lock._stale())
+                lock.acquire().release()
+            alive.assert_called_with(21136)
+
+    def test_lock_keeps_live_nonstale_and_foreign_owners(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = RuntimeLayout.from_root(directory).ensure()
+            host = __import__("socket").gethostname()
+            cases = [
+                ("prj_live", {"project_id": "prj_live", "pid": 21136, "hostname": host, "created_at": 0}, True, 2),
+                ("prj_fresh", {"project_id": "prj_fresh", "pid": -1, "hostname": host, "created_at": 1.5}, False, 2),
+                ("prj_foreign", {"project_id": "prj_foreign", "pid": -1, "hostname": "another-host", "created_at": 0}, False, 2),
+            ]
+            for project_id, metadata, owner_live, now in cases:
+                atomic_write_json(runtime.locks / f"{project_id}.lock", metadata)
+                with patch.object(lock_module, "_process_is_alive", return_value=owner_live):
+                    with self.assertRaises(ProjectLockedError):
+                        ProjectLock(runtime, project_id, stale_after_seconds=1, clock=lambda now=now: now).acquire()
+
     def test_one_writer_release_and_stale_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = RuntimeLayout.from_root(directory)

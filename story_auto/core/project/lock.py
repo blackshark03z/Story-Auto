@@ -13,13 +13,85 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from .paths import RuntimeLayout
 
 
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_ERROR_ACCESS_DENIED = 5
+_ERROR_INVALID_PARAMETER = 87
+_STILL_ACTIVE = 259
+
+
 class ProjectLockedError(RuntimeError):
     failure_class = "PROJECT_LOCKED"
+
+
+class _WindowsProcessProbe:
+    """Read-only Win32 owner-liveness probe used only on Windows."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self._ctypes = ctypes
+        self._wintypes = wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._open_process = kernel32.OpenProcess
+        self._open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self._open_process.restype = wintypes.HANDLE
+        self._get_exit_code = kernel32.GetExitCodeProcess
+        self._get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        self._get_exit_code.restype = wintypes.BOOL
+        self._close_handle = kernel32.CloseHandle
+        self._close_handle.argtypes = [wintypes.HANDLE]
+        self._close_handle.restype = wintypes.BOOL
+
+    def open_process(self, pid: int):
+        return self._open_process(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+
+    def last_error(self) -> int:
+        return int(self._ctypes.get_last_error())
+
+    def exit_code(self, handle) -> int | None:
+        code = self._wintypes.DWORD()
+        if not self._get_exit_code(handle, self._ctypes.byref(code)):
+            return None
+        return int(code.value)
+
+    def close_handle(self, handle) -> None:
+        self._close_handle(handle)
+
+
+def _windows_process_is_alive(pid: int, *, probe=None) -> bool:
+    """Return False only when Win32 proves a Windows process is dead.
+
+    Windows does not support POSIX ``kill(pid, 0)`` probe semantics.  Unknown
+    results deliberately remain alive so a possibly-live project lock cannot
+    be stolen.
+    """
+    if pid <= 0:
+        return False
+    try:
+        native = probe or _WindowsProcessProbe()
+        handle = native.open_process(pid)
+        if not handle:
+            error = native.last_error()
+            if error == _ERROR_INVALID_PARAMETER:
+                return False
+            if error == _ERROR_ACCESS_DENIED:
+                return True
+            return True
+        try:
+            code = native.exit_code(handle)
+            return code == _STILL_ACTIVE
+        finally:
+            native.close_handle(handle)
+    except Exception:
+        return True
 
 
 def _process_is_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_process_is_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
