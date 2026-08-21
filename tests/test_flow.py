@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 import hashlib
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,7 +14,7 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 adopt_exact_flow_recovery, adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
-                                                review_production_asset)
+                                                reopen_false_positive_production_qc, review_production_asset)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
@@ -73,6 +74,24 @@ class FlowTests(unittest.TestCase):
             calls.append((request["request_id"], refs)); path.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB", (1280, 720), "navy").save(path, "PNG"); return path
         cap=FlowCapabilities(True,True,True,True,True,True)
         return FlowExecutor(cap,generate), calls
+    def _production_report(self, *, failed_field=None, reviewer="operator", **extra):
+        report={"results":{key:("FAIL" if key==failed_field else "PASS") for key in
+                           ("SKIN_REALISM","LIGHTING_NATURALISM","MATERIAL_REALISM","COMPOSITION_NATURALISM","AI_POLISH","CONTINUITY","TECHNICAL_VALIDITY")},
+                "visible_provider_watermark":False,"reviewer":reviewer}
+        report.update(extra)
+        return report
+    def _goal37_rejected_fixture(self, root, *, request_id="req_2ed7c6b9c1ce863d8e9d"):
+        runtime,cfg,paths=self._project(root); executor,calls=self._executor()
+        requests=read_json(paths.artifact_path("output/generation_requests.json"))
+        request=next(item for item in requests["requests"] if item["request_id"]=="ref")
+        request.update({"request_id":request_id,"fingerprint":request_id+"hash","execution_tier":"STANDARD_PRODUCTION"})
+        next(item for item in requests["requests"] if item["request_id"]=="shot")["depends_on"]=[request_id]
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+        execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={request_id})
+        with self.assertRaisesRegex(FlowError,"NATURALNESS_QC_REJECTED"):
+            review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report(failed_field="AI_POLISH"))
+        entry=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
+        return runtime,cfg,paths,executor,calls,entry
     def test_fail_closed_composer(self):
         dom=DOM(); FlowComposer(dom).submit("complete prompt", references=[], media_type="IMAGE"); self.assertTrue(dom.controls[0].clicked)
         for dom in (DOM(0),DOM(2),DOM(1,2)):
@@ -431,6 +450,104 @@ class FlowTests(unittest.TestCase):
             reviewed=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual(reviewed["quality_reviews"][-1]["failure_class"], "VISIBLE_PROVIDER_WATERMARK")
             self.assertEqual(len(reviewed["attempts"]),1)
+
+    def test_goal37_false_positive_reopen_fixture_preserves_rejection_and_requires_normal_qc(self):
+        """Sanitized exact-style Trial A fixture; no live project or provider is used."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,executor,calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"
+            original_rejection=dict(rejected["quality_reviews"][-1])
+            asset_sha=rejected["selected_asset"]["sha256"]
+            event=reopen_false_positive_production_qc(
+                runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                reviewer="tech-lead",reason="false positive; re-review the identical confirmed asset",
+            )
+            reopened=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
+            self.assertEqual(reopened["quality_reviews"][-1],original_rejection)
+            self.assertEqual((reopened["status"],reopened["failure_class"],reopened["selected_asset"]["sha256"],
+                              reopened["selected_asset"]["production_qc"]),("QC_PENDING",None,asset_sha,"PENDING"))
+            self.assertEqual((event["disposition"],event["request_id"],event["selected_asset_sha256"],
+                              event["superseded_rejection_index"],event["rejection_event_sha256"]),
+                             ("FALSE_POSITIVE_REOPENED",request_id,asset_sha,0,hashlib.sha256(
+                                 json.dumps(original_rejection,ensure_ascii=False,sort_keys=True,separators=(",", ":")).encode("utf-8")).hexdigest()))
+            resumed=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={request_id})
+            self.assertEqual((resumed["new_submissions"],len(calls)),(0,1))
+            review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report())
+            final=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
+            self.assertEqual(final["status"],"SUCCEEDED")
+
+    def test_goal37_reopen_can_fail_again_under_ordinary_qc(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                reviewer="tech-lead",reason="bounded false-positive appeal")
+            with self.assertRaisesRegex(FlowError,"NATURALNESS_QC_REJECTED"):
+                review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report(failed_field="CONTINUITY"))
+            entry=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
+            self.assertEqual((entry["status"],entry["failure_class"],len(entry["quality_reviews"])),
+                             ("FAILED_RETRYABLE","NATURALNESS_QC_REJECTED",2))
+
+    def test_goal37_reopen_denies_wrong_sha_missing_or_corrupt_review_and_double_reopen(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256="0"*64,
+                                                    reviewer="tech-lead",reason="wrong binding")
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry["quality_reviews"][-1].pop("selected_asset_sha256")
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="corrupt history")
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,_paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                reviewer="tech-lead",reason="bounded appeal")
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="second appeal")
+
+    def test_goal37_reopen_denies_non_naturalness_invalid_bytes_and_current_replacement(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry["failure_class"]="VISIBLE_PROVIDER_WATERMARK"; entry["quality_reviews"][-1]["failure_class"]="VISIBLE_PROVIDER_WATERMARK"
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="wrong failure")
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            paths.artifact_path(rejected["selected_asset"]["path"]).write_bytes(b"not an image")
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="invalid bytes")
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            requests=read_json(paths.artifact_path("output/generation_requests.json")); requests["requests"].append(
+                {"request_id":"replacement-current","replacement_of":request_id,"purpose":"REFERENCE","media_type":"IMAGE"})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="current replacement exists")
+
+    def test_goal37_reopen_keeps_shot_alignment_required(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,executor,_calls,_rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"
+            requests=read_json(paths.artifact_path("output/generation_requests.json")); request=next(item for item in requests["requests"] if item["request_id"]==request_id)
+            request.update({"purpose":"SHOT","shot_id":"sh_0001"}); atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            entry=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
+            reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=entry["selected_asset"]["sha256"],
+                                                reviewer="tech-lead",reason="re-review exact shot")
+            with self.assertRaisesRegex(FlowError,"VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED"):
+                review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report())
 
     def test_atmospheric_qc_requires_explicitly_planned_atmospheric_shot(self):
         with tempfile.TemporaryDirectory() as root:

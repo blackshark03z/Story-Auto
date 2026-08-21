@@ -5,6 +5,7 @@ from .service import (FlowError, FlowExecutor, adopt_exact_flow_recovery, adopt_
                       reconcile_local_assets, reconcile_unresolved_flow_attempt, recover_interrupted_pre_dispatch_attempt,
                       replay_unresolved_request,
                       reject_selected_asset, reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reopen_verified_pre_dispatch_failure,
+                      reopen_false_positive_production_qc,
                       reuse_exact_flow_asset,
                       review_temporal_asset)
 from .session import FlowCapabilities, FlowRuntime, launch_dedicated_session, preflight
@@ -12,6 +13,6 @@ from .session import FlowCapabilities, FlowRuntime, launch_dedicated_session, pr
 __all__ = ["FlowCapabilities", "FlowError", "FlowExecutor", "FlowRuntime", "adopt_exact_flow_recovery", "adopt_manual_recovery",
            "execute_generation", "invalidate_asset_attribution", "launch_dedicated_session", "preflight", "reconcile_local_assets",
            "reconcile_unresolved_flow_attempt",
-           "recover_interrupted_pre_dispatch_attempt", "reject_selected_asset", "reopen_uncertain_temporal_qc", "reopen_verified_false_dispatch", "reopen_verified_pre_dispatch_failure",
+           "recover_interrupted_pre_dispatch_attempt", "reject_selected_asset", "reopen_uncertain_temporal_qc", "reopen_verified_false_dispatch", "reopen_verified_pre_dispatch_failure", "reopen_false_positive_production_qc",
            "replay_unresolved_request",
            "reuse_exact_flow_asset", "review_temporal_asset"]

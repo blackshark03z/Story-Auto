@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,21 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 
 
 class OperatorApplicationTests(unittest.TestCase):
+    def test_goal37_reopen_is_available_through_operator_surface(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root); app.create_project(project_id="prj_goal37",content="# Appeal\n\n## Narration\n\nTest.\n")
+            paths,_=app._project("prj_goal37")
+            asset=paths.artifact_path("assets/selected.png"); asset.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"navy").save(asset,"PNG")
+            digest=hashlib.sha256(asset.read_bytes()).hexdigest(); request_id="req_2ed7c6b9c1ce863d8e9d"
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[{"request_id":request_id,"purpose":"REFERENCE","media_type":"IMAGE","prompt":"fixture"}]})
+            rejection={"reviewed_at":"2026-08-21T00:00:00Z","status":"REJECTED","failure_class":"NATURALNESS_QC_REJECTED",
+                       "report":{"reviewer":"operator"},"selected_asset_path":"assets/selected.png","selected_asset_sha256":digest}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":"prj_goal37","requests":[
+                {"request_id":request_id,"media_type":"IMAGE","status":"FAILED_RETRYABLE","failure_class":"NATURALNESS_QC_REJECTED","attempts":[],"selected_asset":{"path":"assets/selected.png","sha256":digest,"production_qc":"REJECTED"},"quality_reviews":[rejection]}]})
+            media=app.reopen_false_positive_production_qc("prj_goal37",request_id,expected_asset_sha256=digest,
+                                                           reviewer="tech-lead",reason="bounded appeal")
+            item=next(value for value in media["references"] if value["request"]["request_id"]==request_id)
+            self.assertEqual((item["status"],item["selected_asset"]["production_qc"],len(item["quality_reviews"])),("QC_PENDING","PENDING",1))
     def test_project_content_status_and_shared_state(self):
         with tempfile.TemporaryDirectory() as root:
             app=OperatorService(root)

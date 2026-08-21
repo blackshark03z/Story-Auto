@@ -1428,7 +1428,14 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
                     if not shot.get("atmospheric"):
                         raise MediaQualityError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
         except MediaQualityError as error:
-            entry.setdefault("quality_reviews", []).append({"reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class, "report": report})
+            # Bind every new rejection to the selected bytes.  A later appeal
+            # can then prove it is asking to re-review this asset, not a
+            # different file substituted after the original decision.
+            entry.setdefault("quality_reviews", []).append({
+                "reviewed_at": _now(), "status": "REJECTED", "failure_class": error.failure_class,
+                "report": report, "selected_asset_path": entry["selected_asset"].get("path"),
+                "selected_asset_sha256": entry["selected_asset"].get("sha256"),
+            })
             entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": _now()})
             atomic_write_json(path, manifest)
             raise FlowError(error.failure_class) from error
@@ -1444,6 +1451,72 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         entry.update({"status": "SUCCEEDED" if temporal_ready else "QC_PENDING",
                       "failure_class": None if temporal_ready else "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def reopen_false_positive_production_qc(runtime_root: Path | str, project_id: str, request_id: str,
+                                        *, expected_asset_sha256: str, reviewer: str, reason: str) -> dict:
+    """Append a narrowly bound appeal event, then return identical bytes to QC.
+
+    This never authorizes Flow execution and never changes the rejected review.
+    It is deliberately restricted to an exact naturalness-QC rejection whose
+    persisted review already binds the decision to the selected asset.
+    """
+    if (not isinstance(expected_asset_sha256, str)
+            or len(expected_asset_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_asset_sha256.lower())
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or not isinstance(reason, str) or not reason.strip()):
+        raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        matches = [item for item in manifest["requests"] if isinstance(item, dict) and item.get("request_id") == request_id]
+        if len(matches) != 1:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        entry = matches[0]
+        selected = entry.get("selected_asset")
+        if (entry.get("status") != "FAILED_RETRYABLE"
+                or entry.get("failure_class") != "NATURALNESS_QC_REJECTED"
+                or not isinstance(selected, dict)
+                or selected.get("sha256") != expected_asset_sha256.lower()
+                or not _valid_selected(paths, entry)):
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        reviews = entry.get("quality_reviews")
+        events = entry.get("qc_false_positive_reopen_events")
+        if not isinstance(reviews, list) or not reviews or (events is not None and not isinstance(events, list)) or events:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        rejection_index = len(reviews) - 1
+        rejection = reviews[rejection_index]
+        if (not isinstance(rejection, dict) or rejection.get("status") != "REJECTED"
+                or rejection.get("failure_class") != "NATURALNESS_QC_REJECTED"
+                or rejection.get("selected_asset_path") != selected.get("path")
+                or rejection.get("selected_asset_sha256") != expected_asset_sha256.lower()):
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        try:
+            requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
+        except Exception as error:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID") from error
+        current = [item for item in requests if isinstance(item, dict) and item.get("request_id") == request_id]
+        if len(current) != 1:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        descendants = [
+            item for item in [*requests, *manifest["requests"]] if isinstance(item, dict)
+            and item.get("request_id") != request_id
+            and (item.get("replacement_of") == request_id or item.get("replaces_request_id") == request_id)
+        ]
+        if entry.get("replacement_request_id") or descendants:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        event = {
+            "at": _now(), "disposition": "FALSE_POSITIVE_REOPENED", "reviewer": reviewer.strip(),
+            "reason": reason.strip(), "request_id": request_id, "selected_asset_path": selected.get("path"),
+            "selected_asset_sha256": expected_asset_sha256.lower(), "superseded_rejection_index": rejection_index,
+            "rejection_event_sha256": _json_sha256(rejection),
+        }
+        entry.setdefault("qc_false_positive_reopen_events", []).append(event)
+        selected["production_qc"] = "PENDING"
+        entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(path, manifest)
+        return event
 
 
 def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id: str, report: dict) -> None:
