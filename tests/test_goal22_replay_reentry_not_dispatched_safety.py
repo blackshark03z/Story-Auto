@@ -257,7 +257,9 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
             generator._persist_candidate_observation_before_acquisition(
                 phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
                 surface={"global_pending_count": 0}, observation=observation,
-                dispatch=DispatchEvidenceTracker(), activation={"input_dispatched": True},
+                dispatch=DispatchEvidenceTracker(), activation={"input_dispatched": True,
+                                                                "activation_verified": True,
+                                                                "provider_acceptance_transition": True},
             )
             settings = generator.last_settings
             self.assertEqual((settings["dispatch_confirmation_state"], settings["attribution_state"],
@@ -302,7 +304,9 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
             persisted = generator._persist_candidate_observation_before_acquisition(
                 phase="POST_DISPATCH", media_type="IMAGE", baseline=[], current=[candidate],
                 surface={"global_pending_count": 0}, observation=observation,
-                dispatch=dispatch, activation={"input_dispatched": True},
+                dispatch=dispatch, activation={"input_dispatched": True,
+                                               "activation_verified": True,
+                                               "provider_acceptance_transition": True},
             )
             self.assertFalse(generator._is_reference_input_echo(
                 self._image_bytes(reverse=True),

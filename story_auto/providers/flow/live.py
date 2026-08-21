@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import secrets
 import shutil
 import tempfile
 import time
@@ -493,11 +494,14 @@ class _Control:
         except Exception:
             pass
         self.dom.page.command("Page.bringToFront")
+        self.dom.page.assert_locator_activation_available()
         receipt = {
             "activation_time": datetime.now(timezone.utc).isoformat(),
-            "interaction_method": "CDP_TRUSTED_POINTER",
-            "interaction_version": 2,
+            "interaction_method": "PLAYWRIGHT_LOCATOR",
+            "interaction_version": 3,
             "target_resolved_at_activation": False,
+            "activation_attempted": False,
+            "activation_verified": False,
             "input_dispatched": False,
             "trusted_click_seen": False,
         }
@@ -509,19 +513,27 @@ class _Control:
         if len(controls) != 1 or not controls[0].get("enabled"):
             raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate was not uniquely ready at activation")
         receipt["target_resolved_at_activation"] = True
-        installed = self.dom.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);if(!editor)return false;let p=editor.parentElement,control=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){control=xs[0];break}if(xs.length>1)return false;p=p.parentElement}if(!control)return false;window.__storyAutoFlowActivationV2=[];for(const name of ['pointerdown','mousedown','pointerup','mouseup','click'])control.addEventListener(name,e=>window.__storyAutoFlowActivationV2.push({type:e.type,isTrusted:e.isTrusted,button:e.button,buttons:e.buttons,pointerType:e.pointerType||null,defaultPrevented:e.defaultPrevented}),true);return true})()""")
+        activation_token = secrets.token_hex(16)
+        installed = self.dom.page.evaluate("""(()=>{const token=%s;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);if(!editor)return false;let p=editor.parentElement,control=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){control=xs[0];break}if(xs.length>1)return false;p=p.parentElement}if(!control)return false;control.setAttribute('data-story-auto-flow-activation',token);window.__storyAutoFlowActivationV3=[];for(const name of ['pointerdown','mousedown','pointerup','mouseup','click'])control.addEventListener(name,e=>window.__storyAutoFlowActivationV3.push({type:e.type,isTrusted:e.isTrusted,button:e.button,buttons:e.buttons,pointerType:e.pointerType||null,defaultPrevented:e.defaultPrevented}),true);return true})()""" % __import__('json').dumps(activation_token))
         if not installed:
             raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate target changed before input")
         try:
-            self.dom.page.click(float(controls[0]["x"]), float(controls[0]["y"]))
+            # This is the one activation authority for the attempt.  Never
+            # fall back to raw CDP coordinates after it begins.
+            receipt["activation_attempted"] = True
+            self.dom.page.locator_click(
+                "[data-story-auto-flow-activation=%s]" % __import__('json').dumps(activation_token),
+            )
             receipt["input_dispatched"] = True
         except Exception as error:
             receipt["transport_error"] = type(error).__name__
+            receipt["input_dispatched"] = bool(receipt["activation_attempted"])
             raise FlowError("FLOW_DISPATCH_UNCERTAIN", "native activation transport failed after input began") from error
         time.sleep(.25)
-        events = self.dom.page.evaluate("window.__storyAutoFlowActivationV2||[]") or []
+        events = self.dom.page.evaluate("window.__storyAutoFlowActivationV3||[]") or []
         receipt["event_types"] = [item.get("type") for item in events]
         receipt["trusted_click_seen"] = any(item.get("type") == "click" and item.get("isTrusted") is True for item in events)
+        receipt["activation_verified"] = receipt["trusted_click_seen"]
         self.dom.last_activation_receipt = receipt
         return receipt
 
@@ -537,6 +549,8 @@ class DispatchEvidenceTracker:
         self.confirmation_count = 0
 
     def observe(self, *, input_dispatched: bool, trusted_click_seen: bool = False,
+                activation_verified: bool = False,
+                provider_acceptance_transition: bool = False,
                 prompt_transition: bool = False, attributable_job: bool = False,
                 attributable_output: bool = False, provider_job_id: str | None = None,
                 durable_job_identity: str | None = None,
@@ -548,10 +562,12 @@ class DispatchEvidenceTracker:
         durable_identity = str(provider_job_id or durable_job_identity or "").strip()
         if provider_job_id and durable_evidence_serialized:
             signal = "provider_job_id"
-        elif attributable_output:
-            signal = "new_attributable_output"
-        elif attributable_job and durable_identity and durable_evidence_serialized:
-            signal = "durable_attributable_job_identity"
+        elif (activation_verified and provider_acceptance_transition
+              and attributable_output and durable_evidence_serialized):
+            signal = "verified_activation_provider_ui_output"
+        elif (activation_verified and provider_acceptance_transition and attributable_job
+              and durable_identity and durable_evidence_serialized):
+            signal = "verified_activation_provider_ui_job"
         if signal:
             if self.state != "CONFIRMED": self.confirmation_count += 1
             self.state, self.signal = "CONFIRMED", signal
@@ -567,11 +583,30 @@ class DispatchEvidenceTracker:
         elif not input_dispatched:
             self.state, self.signal = "PRE_DISPATCH_FAILURE", "input_not_dispatched"
             self.signal_state = "NONE"
-        elif self.state != "CONFIRMED" and (trusted_click_seen or prompt_transition):
+        elif self.state != "CONFIRMED" and (trusted_click_seen or prompt_transition
+                                             or attributable_output):
             self.state = "UNCERTAIN"
-            self.signal = "composer_transition_after_activation" if prompt_transition else "trusted_click_only"
+            if attributable_output:
+                self.signal = "unverified_activation_provider_surface_activity"
+            else:
+                self.signal = "composer_transition_after_activation" if prompt_transition else "trusted_click_only"
             self.signal_state = "SIGNAL_OBSERVED"
         return self.state
+
+    def restore_verified_confirmation(self, durable_identity: str, *, evidence_poll_sequence: int | None = None) -> None:
+        """Restore an already-verified historical causal acceptance binding.
+
+        Reconciliation never re-derives dispatch from a new card.  Its caller
+        must first verify the prior immutable decision binding.
+        """
+        if not isinstance(durable_identity, str) or not durable_identity.strip():
+            raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "missing durable historical dispatch identity")
+        self.state = "CONFIRMED"
+        self.signal = "verified_persisted_request_causal_acceptance"
+        self.signal_state = "DISPATCH_CONFIRMED"
+        self.durable_identity = durable_identity.strip()
+        self.evidence_poll_sequence = evidence_poll_sequence
+        self.confirmation_count = 1
 
 
 def dispatch_timeout_failure(dispatch: DispatchEvidenceTracker) -> str:
@@ -861,6 +896,8 @@ class LiveFlowGenerator:
             "attribution_evidence_state": observation.state if observation is not None else "NOT_ATTEMPTED",
             "lineage_card_id": lineage_card_id,
             "input_dispatched": bool((activation or {}).get("input_dispatched")),
+            "activation_verified": bool((activation or {}).get("activation_verified")),
+            "provider_acceptance_transition": bool((activation or {}).get("provider_acceptance_transition")),
         }
         persisted = self._poll_timeline.append(value)
         # A dispatch transition may use this poll only after the exact persisted
@@ -871,6 +908,8 @@ class LiveFlowGenerator:
             if durable_output_identity:
                 dispatch.observe(
                     input_dispatched=bool((activation or {}).get("input_dispatched", True)),
+                    activation_verified=bool((activation or {}).get("activation_verified")),
+                    provider_acceptance_transition=bool((activation or {}).get("provider_acceptance_transition")),
                     attributable_output=True,
                     durable_evidence_serialized=True,
                     evidence_poll_sequence=persisted["poll_sequence"],
@@ -880,14 +919,20 @@ class LiveFlowGenerator:
             elif durable_job_identity:
                 dispatch.observe(
                     input_dispatched=bool((activation or {}).get("input_dispatched", True)),
+                    activation_verified=bool((activation or {}).get("activation_verified")),
+                    provider_acceptance_transition=bool((activation or {}).get("provider_acceptance_transition")),
                     attributable_job=True,
                     durable_job_identity=durable_job_identity,
                     durable_evidence_serialized=True,
                     evidence_poll_sequence=persisted["poll_sequence"],
                 )
-        if (bind_authoritative_output
-                and (durable_output_identity or (durable_job_identity and dispatch is not None
-                                                  and dispatch.state == "CONFIRMED"))):
+        # A surface delta is durable observation evidence, not a dispatch
+        # decision.  It may be bound only after the causal dispatch rule has
+        # actually reached CONFIRMED.  This prevents a late foreign card from
+        # becoming a serialized request-acceptance authority.
+        if (bind_authoritative_output and dispatch is not None
+                and dispatch.state == "CONFIRMED"
+                and (durable_output_identity or durable_job_identity)):
             resulting_dispatch_state = dispatch.state if dispatch is not None else "NOT_CONFIRMED"
             resulting_signal = dispatch.signal if dispatch is not None else None
             resulting_signal_state = dispatch.signal_state if dispatch is not None else "NONE"
@@ -957,6 +1002,11 @@ class LiveFlowGenerator:
                                                                   observation,
                                                                   dispatch: DispatchEvidenceTracker) -> None:
         """Bind CONFIRMED only after every required exclusion has passed."""
+        if dispatch.state != "CONFIRMED":
+            raise FlowError(
+                "FLOW_DISPATCH_UNCERTAIN",
+                "candidate observation cannot establish attribution before causal dispatch confirmation",
+            )
         durable_identity = provider_identity(observation.candidate) or None
         binding = self._poll_timeline.append_decision_binding(
             persisted,
@@ -1197,6 +1247,7 @@ class LiveFlowGenerator:
             dispatch.observe(
                 input_dispatched=bool(activation.get("input_dispatched")),
                 trusted_click_seen=bool(activation.get("trusted_click_seen")),
+                activation_verified=bool(activation.get("activation_verified")),
             )
             attribution = RequestAttributionTracker(
                 baseline_records, media_type=request["media_type"],
@@ -1225,9 +1276,12 @@ class LiveFlowGenerator:
                 )
                 if prompt_transition:
                     self.last_settings["composer_transition_seen"] = True
+                    activation["provider_acceptance_transition"] = True
                     dispatch.observe(
                         input_dispatched=bool(activation.get("input_dispatched")),
                         trusted_click_seen=bool(activation.get("trusted_click_seen")),
+                        activation_verified=bool(activation.get("activation_verified")),
+                        provider_acceptance_transition=True,
                         prompt_transition=True,
                     )
                 surface = dom.provider_surface()
@@ -1281,6 +1335,18 @@ class LiveFlowGenerator:
                         baseline=baseline_records, current=current, surface=surface,
                         observation=observation, dispatch=dispatch, activation=activation,
                     )
+                    if dispatch.state != "CONFIRMED":
+                        # Preserve the candidate as provider-surface activity,
+                        # but do not fetch, attribute, or promote it while the
+                        # activation/acceptance chain remains unproven.
+                        self._record_observation(observation)
+                        self._sync_dispatch_state(dispatch)
+                        self.last_settings.update({
+                            "candidate_acquisition_state": "BLOCKED_PENDING_CAUSAL_DISPATCH",
+                            "attribution_state": "UNCERTAIN",
+                        })
+                        time.sleep(.5)
+                        continue
                     if request["media_type"] == "IMAGE" and reference_hashes:
                         data = self._fetch_bytes(page, candidate["url"])
                         if self._is_reference_input_echo(data, reference_hashes):
@@ -1364,11 +1430,7 @@ class LiveFlowGenerator:
         activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {"input_dispatched": True}
         prior_durable_identity = verified_binding.get("durable_identity_used")
         if attempt.get("dispatch_confirmed") is True and isinstance(prior_durable_identity, str) and prior_durable_identity:
-            dispatch.observe(
-                input_dispatched=True, attributable_job=True,
-                durable_job_identity=prior_durable_identity,
-                durable_evidence_serialized=True,
-            )
+            dispatch.restore_verified_confirmation(prior_durable_identity)
         elif attempt.get("dispatch_confirmed") is True:
             dispatch.observe(input_dispatched=True, attributable_job=True)
         page = CdpPage.open(self.runtime)

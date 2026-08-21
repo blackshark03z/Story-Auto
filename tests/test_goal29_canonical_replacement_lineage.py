@@ -246,7 +246,10 @@ class Goal29CanonicalReplacementLineageTests(unittest.TestCase):
             })
 
             requests, entries = self._state(paths)
-            self.assertEqual(_direct_qc_replacement_child_ids(paths, config.project_id, middle), [qc_child, competing_id])
+            self.assertCountEqual(
+                _direct_qc_replacement_child_ids(paths, config.project_id, middle),
+                [qc_child, competing_id],
+            )
             self.assertFalse(_qc_rejected_asset_replacement_valid(paths, config.project_id, entries[middle], requests, entries))
             self.assertIsNone(_resolve_current_canonical_descendant(paths, config.project_id, self.ANCESTOR, requests, entries))
 

@@ -82,7 +82,7 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         raw = generator._record_poll(
             phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline, current=pending,
             surface={"records": pending, "global_pending_count": 1}, stable_polls=0,
-            observation=pending_observation, dispatch=dispatch, activation={"input_dispatched": True},
+            observation=pending_observation, dispatch=dispatch, activation={"input_dispatched": True, "activation_verified": True, "provider_acceptance_transition": True},
         )
         self.assertEqual(raw["dispatch_evidence_state"], "UNCERTAIN")
         first_binding = generator.last_settings["provider_poll_authoritative_binding"]
@@ -96,7 +96,7 @@ class Goal20PollEvidenceTests(unittest.TestCase):
             generator._record_poll(
                 phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline, current=current,
                 surface={"records": current, "global_pending_count": 0}, stable_polls=exact.stable_polls,
-                observation=exact, dispatch=dispatch, activation={"input_dispatched": True},
+                observation=exact, dispatch=dispatch, activation={"input_dispatched": True, "activation_verified": True, "provider_acceptance_transition": True},
             )
         generator._record_observation(exact)
         generator.last_settings["attributed_provider_identity"] = {"identity": "asset:new"}
@@ -315,6 +315,8 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         self.assertEqual(
             tracker.observe(
                 input_dispatched=True,
+                activation_verified=True,
+                provider_acceptance_transition=True,
                 attributable_job=True,
                 durable_job_identity="card:stable-provider-card",
                 durable_evidence_serialized=True,
@@ -340,7 +342,7 @@ class Goal20PollEvidenceTests(unittest.TestCase):
                     phase="POST_DISPATCH", media_type="IMAGE", baseline=baseline,
                     current=current, surface={"records": current, "global_pending_count": 0},
                     stable_polls=observation.stable_polls, observation=observation,
-                    dispatch=dispatch, activation={"input_dispatched": True},
+                    dispatch=dispatch, activation={"input_dispatched": True, "activation_verified": True, "provider_acceptance_transition": True},
                 )
             self.assertEqual(observation.state, "CONFIRMED")
             self.assertEqual(dispatch.state, "CONFIRMED")

@@ -34,14 +34,15 @@ class DOM:
     def media_candidates(self): return []
 
 class NativePage:
-    def __init__(self): self.clicked = None; self.commands=[]; self.keys=[]; self.evaluations=0
+    def __init__(self): self.locator_selector = None; self.commands=[]; self.keys=[]; self.evaluations=0
     def evaluate(self, _):
         self.evaluations += 1
         if self.evaluations == 1: return [{"enabled":True,"x":30,"y":40}]
         if self.evaluations == 2: return True
         return [{"type":"pointerdown","isTrusted":True},{"type":"click","isTrusted":True}]
     def command(self, method, params=None): self.commands.append(method); return {"windowId":1} if method=="Browser.getWindowForTarget" else {}
-    def click(self, x, y): self.clicked=(x,y)
+    def assert_locator_activation_available(self): pass
+    def locator_click(self, selector): self.locator_selector=selector
     def key(self, key, *, code=None): self.keys.append((key,code))
 
 class Inspector:
@@ -105,12 +106,12 @@ class FlowTests(unittest.TestCase):
             def choose_mode(self, _): raise AssertionError("mode menu must remain closed")
         dom=ModeDom(); FlowComposer(dom).submit("p", references=[], media_type="IMAGE", mode_already_configured=True)
         self.assertTrue(dom.controls[0].clicked)
-    def test_live_generate_control_reresolves_and_uses_one_trusted_pointer_activation(self):
+    def test_live_generate_control_reresolves_and_uses_one_locator_activation(self):
         from story_auto.providers.flow.live import _Control
         page=NativePage(); receipt=_Control(type("D",(),{"page":page})(),{"enabled":True,"x":10,"y":20}).click()
-        self.assertEqual(page.clicked,(30,40)); self.assertEqual(page.keys,[])
+        self.assertIn("data-story-auto-flow-activation", page.locator_selector); self.assertEqual(page.keys,[])
         self.assertEqual(page.commands,["Browser.getWindowForTarget","Browser.setWindowBounds","Page.bringToFront"])
-        self.assertEqual((receipt["interaction_method"],receipt["interaction_version"],receipt["trusted_click_seen"]),("CDP_TRUSTED_POINTER",2,True))
+        self.assertEqual((receipt["interaction_method"],receipt["interaction_version"],receipt["trusted_click_seen"],receipt["activation_verified"]),("PLAYWRIGHT_LOCATOR",3,True,True))
 
     def test_click_acknowledgement_alone_is_dispatch_uncertain(self):
         tracker=DispatchEvidenceTracker()
@@ -123,6 +124,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,legacy_ack_present=False),"UNCERTAIN")
         self.assertEqual(tracker.signal_state,"SIGNAL_OBSERVED")
         self.assertEqual(tracker.observe(input_dispatched=True,attributable_job=True,
+                                         activation_verified=True,provider_acceptance_transition=True,
                                          durable_job_identity="card:provider-card-1",
                                          durable_evidence_serialized=True,
                                          evidence_poll_sequence=3),"CONFIRMED")
@@ -136,10 +138,13 @@ class FlowTests(unittest.TestCase):
 
     def test_later_reconciliation_converts_uncertain_to_confirmed_without_activation(self):
         tracker=DispatchEvidenceTracker()
-        tracker.observe(input_dispatched=True,prompt_transition=True)
+        tracker.observe(input_dispatched=True,prompt_transition=True,
+                        activation_verified=True,provider_acceptance_transition=True)
         self.assertEqual(tracker.state,"UNCERTAIN")
-        tracker.observe(input_dispatched=True,attributable_output=True)
-        self.assertEqual((tracker.state,tracker.signal,tracker.confirmation_count),("CONFIRMED","new_attributable_output",1))
+        tracker.observe(input_dispatched=True,attributable_output=True,
+                        activation_verified=True,provider_acceptance_transition=True,
+                        durable_evidence_serialized=True)
+        self.assertEqual((tracker.state,tracker.signal,tracker.confirmation_count),("CONFIRMED","verified_activation_provider_ui_output",1))
 
     def test_not_dispatched_remains_runnable(self):
         with tempfile.TemporaryDirectory() as root:

@@ -79,3 +79,57 @@ class CdpPage:
         self.command("Input.dispatchMouseEvent", {"type":"mouseMoved", "x":x, "y":y})
         self.command("Input.dispatchMouseEvent", {"type":"mousePressed", "x":x, "y":y, "button":"left", "clickCount":1})
         self.command("Input.dispatchMouseEvent", {"type":"mouseReleased", "x":x, "y":y, "button":"left", "clickCount":1})
+
+    def assert_locator_activation_available(self) -> None:
+        """Fail before input if the supported exact-control transport is absent."""
+        try:
+            from playwright.sync_api import sync_playwright  # noqa: F401
+        except Exception as error:
+            raise FlowSessionError(
+                "FLOW_CAPABILITY_UNAVAILABLE",
+                "Playwright locator activation is unavailable",
+            ) from error
+
+    def locator_click(self, selector: str, *, timeout_ms: int = 5000) -> None:
+        """Click one current project control through Playwright actionability.
+
+        This attaches to the already-selected dedicated Chrome instance.  It
+        deliberately offers no coordinate or second-transport fallback: once
+        called, the caller must treat any failure as a possibly dispatched
+        activation.
+        """
+        self.assert_locator_activation_available()
+        if self.runtime is None:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "locator activation requires a Flow runtime")
+        browser = None
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.connect_over_cdp(self.runtime.cdp_url)
+                pages = [
+                    page
+                    for context in browser.contexts
+                    for page in context.pages
+                    if str(page.url).startswith(self.runtime.project_url)
+                ]
+                if len(pages) != 1:
+                    raise FlowSessionError(
+                        "FLOW_PROJECT_MISMATCH",
+                        f"expected one Flow project page for locator activation, found {len(pages)}",
+                    )
+                target = pages[0].locator(selector)
+                if target.count() != 1:
+                    raise FlowSessionError(
+                        "FLOW_UI_CHANGED",
+                        "exact Flow Generate locator did not resolve uniquely",
+                    )
+                target.click(timeout=timeout_ms)
+        except FlowSessionError:
+            raise
+        except Exception as error:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "Playwright locator activation failed") from error
+        finally:
+            # A CDP-attached browser is owned by Story Auto's dedicated Chrome,
+            # not this short Playwright client.  Let Playwright disconnect with
+            # its context instead of closing the remote browser.
+            del browser
