@@ -14,7 +14,16 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
-from story_auto.core.visual import MediaQualityError, validate_production_qc
+from story_auto.core.visual import (
+    CAPTION_SAFE_PROMPT_VERSION,
+    MediaQualityError,
+    ambient_prompt_directive,
+    caption_safe_composition_intent,
+    caption_safe_effective_prompt,
+    compile_ambient_image_prompt,
+    default_visual_policy,
+    validate_production_qc,
+)
 from .postprocess import (
     PROCESSOR_NAME,
     PROCESSOR_VERSION,
@@ -1522,6 +1531,18 @@ def _qc_replacement_genesis_projection(request: dict) -> dict | None:
     for key in ("depends_on", "reference_asset_ids"):
         if not isinstance(request.get(key), list) or any(not isinstance(item, str) or not item for item in request[key]):
             return None
+    prompt_construction = request.get("prompt_construction")
+    if prompt_construction is not None:
+        if not isinstance(prompt_construction, dict):
+            return None
+        expected_prompt_sha256 = hashlib.sha256(request["prompt"].encode("utf-8")).hexdigest()
+        if (
+            prompt_construction.get("version") != CAPTION_SAFE_PROMPT_VERSION
+            or not isinstance(prompt_construction.get("source"), str)
+            or not isinstance(prompt_construction.get("historical_prompt_sha256"), str)
+            or prompt_construction.get("effective_prompt_sha256") != expected_prompt_sha256
+        ):
+            return None
     return {
         "request_id": request["request_id"], "fingerprint": request["fingerprint"], "prompt": request["prompt"],
         "purpose": request["purpose"], "shot_id": request.get("shot_id"), "entity_id": request.get("entity_id"),
@@ -1530,6 +1551,40 @@ def _qc_replacement_genesis_projection(request: dict) -> dict | None:
         "reference_asset_ids": list(request["reference_asset_ids"]), "replacement_of": request["replacement_of"],
         "replacement_reason": request["replacement_reason"], "replacement_epoch": request["replacement_epoch"],
         "epoch_nonce": request["epoch_nonce"],
+        **({"prompt_construction": dict(prompt_construction)} if prompt_construction is not None else {}),
+    }
+
+
+def _current_caption_safe_qc_replacement_prompt(request: dict) -> tuple[str, dict]:
+    """Build a new QC epoch from current safe semantics, never by rewriting history."""
+    historical_prompt = request.get("prompt")
+    if not isinstance(historical_prompt, str) or not historical_prompt.strip():
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_INVALID")
+    source = "CURRENT_CAPTION_SAFE_SANITIZATION"
+    brief = request.get("visual_brief")
+    style_id = request.get("ambient_style")
+    if isinstance(brief, dict) or isinstance(style_id, str):
+        if not isinstance(brief, dict) or not isinstance(style_id, str) or not style_id:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_PROMPT_RECONSTRUCTION_INVALID")
+        try:
+            prompt = compile_ambient_image_prompt(
+                brief,
+                default_visual_policy(),
+                style_directive=ambient_prompt_directive(style_id),
+            )
+        except (ValueError, TypeError) as error:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_PROMPT_RECONSTRUCTION_INVALID") from error
+        source = "CURRENT_AMBIENT_PROMPT_CONSTRUCTION"
+    else:
+        try:
+            prompt = caption_safe_effective_prompt(historical_prompt)
+        except ValueError as error:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_PROMPT_RECONSTRUCTION_INVALID") from error
+    return prompt, {
+        "version": CAPTION_SAFE_PROMPT_VERSION,
+        "source": source,
+        "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest(),
+        "effective_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
     }
 
 
@@ -1782,13 +1837,22 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
         attempts_sha256 = _json_sha256(old_entry["attempts"])
         selected_sha256 = old_entry["selected_asset"].get("sha256")
+        historical_prompt = old_request["prompt"]
+        replacement_prompt, prompt_construction = _current_caption_safe_qc_replacement_prompt(old_request)
         nonce = uuid.uuid4().hex
         epoch = int(old_request.get("replacement_epoch", 0)) + 1
         replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
         if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_IDENTITY_COLLISION")
         replacement = dict(old_request)
+        if isinstance(replacement.get("visual_brief"), dict):
+            replacement_brief = dict(replacement["visual_brief"])
+            composition = replacement_brief.get("composition_intent")
+            if isinstance(composition, str):
+                replacement_brief["composition_intent"] = caption_safe_composition_intent(composition)
+            replacement["visual_brief"] = replacement_brief
         replacement.update({"request_id": replacement_id, "fingerprint": replacement_fingerprint,
+                            "prompt": replacement_prompt, "prompt_construction": prompt_construction,
                             "replaces_request_id": request_id, "replacement_of": request_id,
                             "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
                             "replacement_epoch": epoch, "epoch_nonce": nonce})
@@ -1800,13 +1864,18 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
         media_plan_changed = isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, replacement_id)
         at = _now()
         event = {"at": at, "event": QC_REJECTED_ASSET_REPLACEMENT_REASON, "operator_reason": reason.strip(),
-                 "old_request_id": request_id, "replacement_request_id": replacement_id,
-                 "old_failure_class": old_entry.get("failure_class"), "attempts_sha256": attempts_sha256,
-                 "selected_asset_sha256": selected_sha256, "historical_provider_dispatch": "CONFIRMED",
-                 "historical_attribution": "CONFIRMED"}
+                  "old_request_id": request_id, "replacement_request_id": replacement_id,
+                  "old_failure_class": old_entry.get("failure_class"), "attempts_sha256": attempts_sha256,
+                  "selected_asset_sha256": selected_sha256, "historical_provider_dispatch": "CONFIRMED",
+                  "historical_attribution": "CONFIRMED",
+                  "historical_prompt": historical_prompt,
+                  "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest()}
         old_entry.setdefault("qc_replacement_events", []).append(event)
         old_entry.update({"status": QC_REJECTED_ASSET_REPLACED_STATUS, "replacement_request_id": replacement_id,
-                          "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON, "updated_at": at})
+                          "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
+                          "historical_prompt": historical_prompt,
+                          "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest(),
+                          "updated_at": at})
         manifest["requests"].append({"request_id": replacement_id, "request_identity_sha256": replacement_fingerprint,
                                      "related_identity": replacement.get("shot_id") or replacement.get("entity_id"),
                                      "media_type": replacement["media_type"], "provider": replacement.get("provider", "google_flow"),

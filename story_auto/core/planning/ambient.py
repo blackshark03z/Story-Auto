@@ -216,7 +216,7 @@ def _candidate(scene: dict[str, Any], index: int, count: int, continuity: dict[s
         "dominant_state": dominant_state,
         "important_object_or_motif": motif,
         "continuity_requirements": requirements,
-        "composition_intent": "clear subject hierarchy with restrained negative space for readable subtitles",
+        "composition_intent": "clear subject hierarchy with clean, uncluttered visual breathing room",
         "optional_supporting_context": "",
         "character_ids": character_ids,
         "location_ids": location_ids,

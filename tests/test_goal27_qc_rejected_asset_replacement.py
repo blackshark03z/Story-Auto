@@ -18,6 +18,7 @@ from story_auto.providers.flow.service import (
     replace_qc_rejected_asset,
     review_production_asset,
 )
+from story_auto.core.visual import EDITORIAL_OVERLAY_SAFETY_CONSTRAINT
 from story_auto.providers.flow.session import FlowCapabilities
 
 
@@ -85,7 +86,9 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             self.assertFalse(_provider_generation_retry_authorized(old_entry))
             self.assertEqual((replacement_entry["attempts"], replacement_entry["provider_submissions"], replacement_entry["selected_asset"], replacement_entry["attribution_claim"]), ([], 0, None, "NONE"))
             self.assertEqual((replacement_request["replacement_of"], replacement_request["replacement_reason"]), (self.OLD_REQUEST_ID, "QC_REJECTED_ASSET_REPLACEMENT"))
-            self.assertEqual((replacement_request["prompt"], replacement_request["shot_id"], replacement_request["purpose"]), (old_request["prompt"], old_request["shot_id"], old_request["purpose"]))
+            self.assertEqual((replacement_request["shot_id"], replacement_request["purpose"]), (old_request["shot_id"], old_request["purpose"]))
+            self.assertEqual(old_entry["historical_prompt"], old_request["prompt"])
+            self.assertIn(EDITORIAL_OVERLAY_SAFETY_CONSTRAINT, replacement_request["prompt"])
             self.assertEqual(requests[1]["depends_on"], [replacement_id])
             self.assertEqual(requests[1]["reference_asset_ids"], [replacement_id])
             self.assertTrue(_provider_generation_retry_authorized(replacement_entry))

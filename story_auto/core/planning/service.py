@@ -40,13 +40,13 @@ TIMELINE_PROMPT_VERSION = "story-auto-timeline-prompt/1.1.0"
 CONTINUITY_PROMPT_VERSION = "story-auto-continuity-prompt/1.0.0"
 SHOT_PROMPT_VERSION = "story-auto-shot-prompt/1.1.0"
 MEDIA_POLICY_VERSION = "story-auto-media-policy/1.0.0"
-GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.7.0"
+GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.8.0"
 SHOT_SCHEMA_VERSION = "story-auto-shot-plan/1.0.0"
 MEDIA_SCHEMA_VERSION = "story-auto-media-plan/1.0.0"
 REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
 AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/2.0.0"
 AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/2.0.0"
-AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.0.0"
+AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.1.0"
 
 class PlanningError(ValueError):
     def __init__(self, failure_class: str, detail: str = "") -> None:

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 VISUAL_POLICY_VERSION = "story-auto-visual-policy/1.4.0"
+CAPTION_SAFE_PROMPT_VERSION = "story-auto-caption-safe-prompt/1.0.0"
 FLOW_IMAGE_PROMPT_HARD_LIMIT = 1_200
 AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET = 1_100
 
@@ -41,6 +42,9 @@ _IMAGE_RENDERING = {
 }
 _ANTI_POLISH = (
     "Avoid retouching, wax, CGI, HDR, heavy bokeh, stylization, pristine surfaces, and symmetry."
+)
+EDITORIAL_OVERLAY_SAFETY_CONSTRAINT = (
+    "No overlay subtitles/captions, lower thirds, title cards, placeholders, or UI"
 )
 _FLOW_MARK_SAFE_AREA = (
     "Keep key details out of the bottom-right provider-mark safe area"
@@ -79,6 +83,30 @@ def validate_visual_policy(value: Any) -> None:
         raise ValueError("VISUAL_POLICY_INVALID")
 
 
+_EDITORIAL_OVERLAY_SPACE = re.compile(
+    r"\b(?:restrained\s+)?(?:negative\s+space|space|room|area)\s+"
+    r"(?:for|to accommodate)\s+(?:readable\s+)?"
+    r"(?:subtitles?|captions?|lower\s+thirds?|title\s+cards?|placeholder\s+(?:text|typography)|ui\s+overlays?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def caption_safe_composition_intent(value: str) -> str:
+    """Keep visual breathing room without directing editorial overlay rendering."""
+    cleaned = _EDITORIAL_OVERLAY_SPACE.sub("clean, uncluttered visual breathing room", value)
+    return re.sub(r"\s+", " ", cleaned).strip(" ,;:.")
+
+
+def caption_safe_effective_prompt(prompt: str) -> str:
+    """Remove editorial-overlay invitations and add the provider-facing prohibition."""
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("CAPTION_SAFE_PROMPT_INVALID")
+    cleaned = caption_safe_composition_intent(prompt)
+    if EDITORIAL_OVERLAY_SAFETY_CONSTRAINT.lower() not in cleaned.lower():
+        cleaned = ". ".join(part for part in (cleaned.rstrip(". "), EDITORIAL_OVERLAY_SAFETY_CONSTRAINT)) if cleaned else EDITORIAL_OVERLAY_SAFETY_CONSTRAINT
+    return cleaned.rstrip(". ") + "."
+
+
 def compile_image_prompt(intent: str, policy: dict[str, Any], *, continuity: str = "") -> str:
     validate_visual_policy(policy)
     parts = [intent.strip()]
@@ -87,11 +115,12 @@ def compile_image_prompt(intent: str, policy: dict[str, Any], *, continuity: str
     parts.append("Natural soft photo realism; practical light, soft rolloff, restrained color, natural skin and materials")
     parts.append("35-50 mm lens, contextual depth, asymmetry, grain")
     parts.append(_FLOW_MARK_SAFE_AREA)
+    parts.append(EDITORIAL_OVERLAY_SAFETY_CONSTRAINT)
     parts.append(_ANTI_POLISH)
     prompt = ". ".join(part.rstrip(". ") for part in parts if part) + "."
     if len(prompt) > FLOW_IMAGE_PROMPT_HARD_LIMIT:
         raise ValueError("FLOW_IMAGE_PROMPT_TOO_LONG")
-    return prompt
+    return caption_safe_effective_prompt(prompt)
 
 
 def _prompt_sentence(label: str, value: str) -> str:
@@ -129,13 +158,14 @@ def compile_ambient_image_prompt(
     ]
     composition = brief.get("composition_intent")
     if isinstance(composition, str) and composition.strip():
-        required.append(_prompt_sentence("Composition", composition))
+        required.append(_prompt_sentence("Composition", caption_safe_composition_intent(composition)))
     if requirements:
         required.append(_prompt_sentence("Continuity", "; ".join(item.strip().rstrip(". ") for item in requirements)))
     required.extend((
         _FLOW_MARK_SAFE_AREA + ".",
         _prompt_sentence("Ambient style", style_directive),
         "Natural soft realism; practical light, restrained color, natural skin and materials.",
+        EDITORIAL_OVERLAY_SAFETY_CONSTRAINT + ".",
         _ANTI_POLISH,
     ))
 
@@ -166,7 +196,7 @@ def compile_ambient_image_prompt(
         raise AmbientVisualBriefBudgetError(field, observed, AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET)
     if len(prompt) > FLOW_IMAGE_PROMPT_HARD_LIMIT:
         raise AmbientVisualBriefBudgetError("compiled_prompt", len(prompt), FLOW_IMAGE_PROMPT_HARD_LIMIT)
-    return prompt
+    return caption_safe_effective_prompt(prompt)
 
 
 def compile_video_prompt(
@@ -186,5 +216,6 @@ def compile_video_prompt(
         "Preserve the supplied reference image identity, environment, lighting, palette, and material treatment",
         "Restrained realistic motion; no floating, orbiting, sweeping, morphing, or artificial speed ramps",
         _FLOW_MARK_SAFE_AREA,
+        EDITORIAL_OVERLAY_SAFETY_CONSTRAINT,
     ]
-    return ". ".join(part.rstrip(". ") for part in parts) + "."
+    return caption_safe_effective_prompt(". ".join(part.rstrip(". ") for part in parts) + ".")
