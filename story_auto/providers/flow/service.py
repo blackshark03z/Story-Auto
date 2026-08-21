@@ -517,7 +517,7 @@ def _transaction_target(transaction: dict, name: str, *, schema_version: str | N
     return value
 
 
-def _superseded_entry_valid(project_id: str, entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
+def _superseded_entry_valid(paths, project_id: str, entry: dict, requests: list[dict], entries: dict[str, dict]) -> bool:
     if entry.get("status") != SUPERSEDED_AMBIGUOUS_STATUS or entry.get("selected_asset") is not None:
         return False
     request_id = entry.get("request_id")
@@ -542,15 +542,40 @@ def _superseded_entry_valid(project_id: str, entry: dict, requests: list[dict], 
         return False
     if event.get("reconciliation_events_sha256") != _json_sha256(entry.get("reconciliation_events")):
         return False
-    replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
     replacement_entry = entries.get(replacement_id)
-    return (isinstance(replacement, dict) and replacement.get("replaces_request_id") == entry.get("request_id")
-            and isinstance(replacement_entry, dict) and replacement_entry.get("replaces_request_id") == entry.get("request_id"))
+    if not isinstance(replacement_entry, dict) or replacement_entry.get("replaces_request_id") != request_id:
+        return False
+    resolved_transaction = _supersession_transaction(paths, project_id, request_id, replacement_id)
+    if resolved_transaction is None:
+        return False
+    transaction, _receipt = resolved_transaction
+    stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
+    stored_manifest = transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+    stored_replacement = next((item for item in stored_requests if item.get("request_id") == replacement_id), None)
+    stored_old = next((item for item in stored_manifest if item.get("request_id") == request_id), None)
+    stored_event = (stored_old.get("supersession_events") or [None])[-1] if isinstance(stored_old, dict) else None
+    if not isinstance(stored_replacement, dict) or stored_event != event:
+        return False
+    # This validates immutable legacy -> replacement evidence only.  The child
+    # may itself be a historical replacement whose canonical descendant owns the
+    # live queue state.
+    return (
+        replacement_entry.get("request_id") == replacement_id
+        and replacement_entry.get("replaces_request_id") == request_id
+        and replacement_entry.get("replacement_epoch") == stored_replacement.get("replacement_epoch")
+        and replacement_entry.get("epoch_nonce") == stored_replacement.get("epoch_nonce")
+        and replacement_entry.get("request_identity_sha256") == stored_replacement.get("fingerprint")
+        and replacement_entry.get("prompt_sha256") == hashlib.sha256(stored_replacement.get("prompt", "").encode("utf-8")).hexdigest()
+        and replacement_entry.get("related_identity") == (stored_replacement.get("shot_id") or stored_replacement.get("entity_id"))
+        and replacement_entry.get("media_type") == stored_replacement.get("media_type")
+        and replacement_entry.get("provider") == stored_replacement.get("provider")
+    )
 
 
-def _first_invalid_superseded(project_id: str, entries: dict[str, dict], requests: list[dict]) -> tuple[dict, dict] | None:
+def _first_invalid_superseded(paths, project_id: str, entries: dict[str, dict], requests: list[dict]) -> tuple[dict, dict] | None:
     for entry in entries.values():
-        if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS and not _superseded_entry_valid(project_id, entry, requests, entries):
+        if entry.get("status") == SUPERSEDED_AMBIGUOUS_STATUS and not _superseded_entry_valid(
+                paths, project_id, entry, requests, entries):
             return {"request_id": entry.get("request_id")}, entry
     return None
 
@@ -589,7 +614,7 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         return False
     replacement = next((request for request in requests if request.get("request_id") == replacement_id), None)
     replacement_entry = entries.get(replacement_id)
-    if not isinstance(replacement, dict) or not isinstance(replacement_entry, dict) or replacement_id == request_id:
+    if not isinstance(replacement_entry, dict) or replacement_id == request_id:
         return False
     resolved_transaction = _unresolved_replay_transaction(paths, project_id, request_id, replacement_id)
     if resolved_transaction is None:
@@ -603,12 +628,6 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
     stored_event = (stored_old.get("unresolved_replay_events") or [None])[-1] if isinstance(stored_old, dict) else None
     if not isinstance(stored_replacement, dict) or not isinstance(stored_event, dict):
         return False
-    expected = _replay_genesis_projection(
-        replacement=replacement,
-        queue_position=requests.index(replacement),
-        event=event,
-        transaction_id=transaction_id,
-    )
     stored_genesis = stored_event.get("replay_genesis")
     if not isinstance(stored_genesis, dict):
         # Goal 20 transactions predate the explicit projection.  Their committed
@@ -624,17 +643,34 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         return False
     genesis_sha256 = _json_sha256(stored_genesis)
     explicit_genesis = event.get("replay_genesis")
-    if (expected != stored_genesis
+    stored_request = stored_genesis.get("replacement_request") if isinstance(stored_genesis, dict) else None
+    if (not isinstance(stored_request, dict)
             or (isinstance(explicit_genesis, dict) and (
                 explicit_genesis != stored_genesis or event.get("replay_genesis_sha256") != genesis_sha256))
             or (isinstance(event.get("replay_genesis"), dict) and replacement_entry.get("replay_genesis_sha256") != genesis_sha256)
             or (isinstance(replacement_entry.get("replay_creation_transaction_id"), str)
                 and replacement_entry.get("replay_creation_transaction_id") != transaction_id)
             or replacement_entry.get("replays_unresolved_request_id") != request_id
-            or replacement_entry.get("replay_epoch") != stored_genesis.get("replay_epoch")
-            or replacement_entry.get("epoch_nonce") != stored_genesis.get("epoch_nonce")
-            or replacement_entry.get("request_identity_sha256") != stored_genesis["replacement_request"].get("request_identity_sha256")
-            or replacement_entry.get("prompt_sha256") != stored_genesis["replacement_request"].get("prompt_sha256")):
+            or replacement_entry.get("replay_epoch") != stored_request.get("replay_epoch")
+            or replacement_entry.get("epoch_nonce") != stored_request.get("epoch_nonce")
+            or replacement_entry.get("request_identity_sha256") != stored_request.get("request_identity_sha256")
+            or replacement_entry.get("prompt_sha256") != stored_request.get("prompt_sha256")
+            or replacement_entry.get("related_identity") != (stored_request.get("shot_id") or stored_request.get("entity_id"))
+            or replacement_entry.get("media_type") != stored_request.get("media_type")
+            or replacement_entry.get("provider") != stored_request.get("provider")):
+        return False
+    if isinstance(replacement, dict):
+        expected = _replay_genesis_projection(
+            replacement=replacement,
+            queue_position=requests.index(replacement),
+            event=event,
+            transaction_id=transaction_id,
+        )
+        if expected != stored_genesis:
+            return False
+    elif replacement_entry.get("status") != QC_REJECTED_ASSET_REPLACED_STATUS:
+        # A replay child may leave the live request queue only through the
+        # independently verified mandatory-QC replacement path.
         return False
     if ("replay_genesis_sha256" in transaction
             and transaction.get("replay_genesis_sha256") != genesis_sha256):
@@ -642,7 +678,7 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
     attempts = replacement_entry.get("attempts")
     if not isinstance(attempts, list) or any(not isinstance(attempt, dict) for attempt in attempts):
         return False
-    if replacement_entry.get("selected_asset") is not None and replacement_entry.get("status") not in {"SUCCEEDED", "QC_PENDING"}:
+    if replacement_entry.get("selected_asset") is not None and replacement_entry.get("status") not in {"SUCCEEDED", "QC_PENDING", QC_REJECTED_ASSET_REPLACED_STATUS}:
         return False
     if replacement_entry.get("status") == "PENDING":
         return attempts == []
@@ -651,14 +687,12 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
         # both the current activation proof and a verified retained timeline,
         # exactly as the retry, queue, and execution gates do.
         return bool(attempts) and attempts[-1].get("status") == "NOT_DISPATCHED" and canonical_no_dispatch_proof(attempts[-1])
-    # Normal execution states remain subject to the usual state machine.  They
-    # are deliberately not compared with the immutable creation projection.
-    return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
+    return replacement_entry.get("status") in {"GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE", "SUCCEEDED", "QC_PENDING", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED", QC_REJECTED_ASSET_REPLACED_STATUS}
 
 
 def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str, dict],
                                        requests: list[dict]) -> tuple[dict, dict] | None:
-    invalid = _first_invalid_superseded(project_id, entries, requests)
+    invalid = _first_invalid_superseded(paths, project_id, entries, requests)
     if invalid is not None:
         return invalid
     for entry in entries.values():
@@ -782,6 +816,32 @@ def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
     return matches[0] if len(matches) == 1 else None
 
 
+def _supersession_transaction(paths, project_id: str, old_request_id: str,
+                              replacement_request_id: str) -> tuple[dict, dict] | None:
+    """Find the one committed creation transaction for a legacy replacement epoch."""
+    matches = []
+    for _prepared_path, transaction in _prepared_transactions(
+            paths, project_id, schema_version=SUPERSESSION_TRANSACTION_SCHEMA):
+        if (transaction.get("old_request_id") == old_request_id
+                and transaction.get("replacement_request_id") == replacement_request_id):
+            transaction_id = transaction.get("transaction_id")
+            if not isinstance(transaction_id, str):
+                return None
+            _prepared, committed_path = _transaction_paths(
+                paths, transaction_id, schema_version=SUPERSESSION_TRANSACTION_SCHEMA
+            )
+            try:
+                receipt = read_json(committed_path)
+            except Exception:
+                return None
+            expected = {"schema_version": SUPERSESSION_TRANSACTION_SCHEMA, "state": "COMMITTED",
+                        "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+            if receipt != expected:
+                return None
+            matches.append((transaction, receipt))
+    return matches[0] if len(matches) == 1 else None
+
+
 def _recover_pending_request_replacements(paths, project_id: str) -> dict[str, dict]:
     recovered = _recover_pending_supersessions(paths, project_id)
     replayed = _recover_pending_unresolved_replays(paths, project_id)
@@ -821,7 +881,7 @@ def supersede_ambiguous_request(runtime_root: Path | str, project_id: str, reque
         old_entry = next((item for item in manifest.get("requests", []) if item.get("request_id") == request_id), None)
         if not isinstance(old_request, dict):
             completed = recovered.get(request_id)
-            if isinstance(old_entry, dict) and completed and _superseded_entry_valid(project_id, old_entry, requests, {item.get("request_id"): item for item in manifest.get("requests", [])}):
+            if isinstance(old_entry, dict) and completed and _superseded_entry_valid(paths, project_id, old_entry, requests, {item.get("request_id"): item for item in manifest.get("requests", [])}):
                 return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
                         "provider_submissions": 0, "status": SUPERSEDED_AMBIGUOUS_STATUS, "idempotent": True}
             raise FlowError("LEGACY_SUPERSESSION_ALREADY_SUPERSEDED")
@@ -1522,6 +1582,49 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
         and len(duplicate_requests) == 1
         and len(duplicate_entries) == 1
     )
+
+
+def _resolve_current_canonical_descendant(paths, project_id: str, request_id: str,
+                                          requests: list[dict], entries: dict[str, dict]) -> str | None:
+    """Resolve a current request only through independently proven replacement edges.
+
+    Historical epochs remain immutable evidence.  This resolver intentionally
+    preserves every immediate edge while allowing a valid child to have a later
+    canonical descendant.  Any missing edge proof, duplicate, cycle, or active
+    ambiguity denies resolution rather than reopening historical provider work.
+    """
+    request_by_id = {item.get("request_id"): item for item in requests if isinstance(item, dict)}
+    seen: set[str] = set()
+    current_id = request_id
+    while isinstance(current_id, str) and current_id and current_id not in seen:
+        seen.add(current_id)
+        entry = entries.get(current_id)
+        if not isinstance(entry, dict):
+            return None
+        status = entry.get("status")
+        if status == ABANDONED_UNRESOLVED_STATUS:
+            if not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries):
+                return None
+            child_id = entry.get("replacement_request_id")
+        elif status == QC_REJECTED_ASSET_REPLACED_STATUS:
+            if not _qc_rejected_asset_replacement_valid(paths, project_id, entry, requests, entries):
+                return None
+            child_id = entry.get("replacement_request_id")
+        elif status == SUPERSEDED_AMBIGUOUS_STATUS:
+            if not _superseded_entry_valid(paths, project_id, entry, requests, entries):
+                return None
+            child_id = entry.get("replacement_request_id")
+        else:
+            # Only a current request controls runnable and queue state.  An
+            # ambiguous descendant stays a fail-closed barrier, never a route
+            # to revive an ancestor.
+            if current_id not in request_by_id or status == "AMBIGUOUS":
+                return None
+            return current_id
+        if not isinstance(child_id, str) or not child_id or child_id in seen:
+            return None
+        current_id = child_id
+    return None
 
 
 def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str,
