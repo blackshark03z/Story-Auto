@@ -90,6 +90,16 @@ Build OS v1.22 is adopted **outside this repository**. The product repository co
 The CLI and application services are the canonical production path. Provider
 execution remains explicit; local render and resume do not call Flow.
 
+Install Story Auto's supported Python dependencies before using the CLI:
+
+```text
+python -m pip install -r requirements.txt
+```
+
+The Flow Generate transport uses Playwright only to attach over CDP to Story
+Auto's existing dedicated Chrome session. It does not launch a Playwright
+browser or require `playwright install` browser binaries.
+
 ```text
 python -m story_auto --runtime-root runtime new --project-id prj_example
 python -m story_auto --runtime-root runtime new --project-id prj_ambient_example --render-mode ambient_story --ambient-style quiet_verdict

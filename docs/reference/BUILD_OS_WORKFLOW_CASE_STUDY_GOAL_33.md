@@ -59,11 +59,31 @@ append-only recovery evidence.
 
 The preserved historical request `req_1757ad26a03ff73774b1` is never rewritten
 to `NOT_DISPATCHED`.  Its existing canonical unresolved replay child is
-`req_4b8dba2869afe1e12a52`; Goal 33 adds an offline compatibility fixture for
-the immutable old barrier and the child shape (zero attempts, zero provider
-submissions, no selected asset).  The fixture proves the old request cannot
-gain same-request retry authority and the fresh child remains the only
-provider-runnable epoch in a fake boundary.
+`req_4b8dba2869afe1e12a52`. Revision 2 captures a deterministic sanitized
+projection of the actual pair (`runtime_projection_sha256=
+65fc2e7fb7174b8b3c8caa1490a193c96d786d41029e78c6447d55e2d277bbc8`) and
+uses its exact persisted lineage shape: confirmed dispatch,
+`OUTPUT_ATTRIBUTION_UNCERTAIN`, unresolved attribution, and a pre-created
+receipt-backed replay. The primary regression never invokes replay creation.
+It proves the historical parent remains retry-denied, the child has zero
+attempts/zero submissions/no selected asset, and only that current child can
+reach a fake provider boundary. Corrupted genesis, altered links or identity,
+mutated parent history, a competing child, a non-pristine child, and cycles all
+fail closed without reopening the parent.
+
+Compatibility tests for state-machine fixes must reproduce the exact persisted
+historical state shape from which production resumes. A generic reconstruction
+using another failure state is not equivalent evidence.
+
+## Production dependency contract
+
+Goal 33 changed Generate activation to Python Playwright. Revision 2 makes it
+explicit in Story Auto's `requirements.txt` and adds an offline import smoke
+test. The supported installation command is `python -m pip install -r
+requirements.txt`. This needs no Playwright-managed browser download: Story
+Auto connects to its existing dedicated Chrome CDP session rather than
+launching a Playwright browser. The dependency is owned by Story Auto and is
+not inherited from Youtube Auto or an incidental developer site-package.
 
 ## Deferred Build OS finding
 

@@ -1,0 +1,6 @@
+# Story Auto's supported Python runtime dependencies.
+# Playwright attaches to the already-running dedicated Chrome through CDP;
+# do not run `playwright install` for Story Auto's Flow activation transport.
+Pillow>=10,<12
+websocket-client>=1.8,<2
+playwright>=1.40,<2
