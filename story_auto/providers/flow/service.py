@@ -1459,7 +1459,8 @@ def reopen_false_positive_production_qc(runtime_root: Path | str, project_id: st
 
     This never authorizes Flow execution and never changes the rejected review.
     It is deliberately restricted to an exact naturalness-QC rejection whose
-    persisted review already binds the decision to the selected asset.
+    persisted review either binds the selected asset directly or is a proven
+    pre-Goal37 legacy record with no intervening ownership-changing history.
     """
     if (not isinstance(expected_asset_sha256, str)
             or len(expected_asset_sha256) != 64
@@ -1489,8 +1490,7 @@ def reopen_false_positive_production_qc(runtime_root: Path | str, project_id: st
         rejection = reviews[rejection_index]
         if (not isinstance(rejection, dict) or rejection.get("status") != "REJECTED"
                 or rejection.get("failure_class") != "NATURALNESS_QC_REJECTED"
-                or rejection.get("selected_asset_path") != selected.get("path")
-                or rejection.get("selected_asset_sha256") != expected_asset_sha256.lower()):
+                or not isinstance(rejection.get("report"), dict)):
             raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
         try:
             requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
@@ -1506,17 +1506,95 @@ def reopen_false_positive_production_qc(runtime_root: Path | str, project_id: st
         ]
         if entry.get("replacement_request_id") or descendants:
             raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
+        binding_fields = (rejection.get("selected_asset_path"), rejection.get("selected_asset_sha256"))
+        if binding_fields == (selected.get("path"), expected_asset_sha256.lower()):
+            compatibility_mode = None
+            event_type = "QC_FALSE_POSITIVE_REOPENED"
+        elif binding_fields == (None, None) and _legacy_qc_rejection_binding_proven(entry, selected, rejection):
+            compatibility_mode = "LEGACY_PRE_GOAL37"
+            event_type = "LEGACY_QC_REJECTION_ASSET_BINDING_RECONCILED"
+        else:
+            raise FlowError("QC_FALSE_POSITIVE_REOPEN_INVALID")
         event = {
-            "at": _now(), "disposition": "FALSE_POSITIVE_REOPENED", "reviewer": reviewer.strip(),
+            "at": _now(), "event": event_type, "disposition": "FALSE_POSITIVE_REOPENED", "reviewer": reviewer.strip(),
             "reason": reason.strip(), "request_id": request_id, "selected_asset_path": selected.get("path"),
             "selected_asset_sha256": expected_asset_sha256.lower(), "superseded_rejection_index": rejection_index,
             "rejection_event_sha256": _json_sha256(rejection),
         }
+        if compatibility_mode is not None:
+            event["compatibility_mode"] = compatibility_mode
         entry.setdefault("qc_false_positive_reopen_events", []).append(event)
         selected["production_qc"] = "PENDING"
         entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now()})
         atomic_write_json(path, manifest)
         return event
+
+
+def _legacy_qc_rejection_binding_proven(entry: dict, selected: dict, rejection: dict) -> bool:
+    """Prove a pre-Goal37 unbound rejection still refers to these exact bytes.
+
+    Legacy reviews contain no asset identity.  They are eligible only when the
+    surrounding append-only state provides one unambiguous selected-provider
+    attempt and no state change that could have rebound the review to another
+    asset.  Absence is never treated as evidence where a required fact is
+    missing.
+    """
+    if not isinstance(rejection.get("reviewed_at"), str):
+        return False
+    try:
+        reviewed_at = datetime.fromisoformat(rejection["reviewed_at"].replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    attempts = entry.get("attempts")
+    selected_attempt = selected.get("source_provider_attempt", selected.get("attempt"))
+    if (not isinstance(attempts, list) or not isinstance(selected_attempt, int) or selected_attempt < 1
+            or selected.get("attempt") not in {None, selected_attempt}
+            or len(attempts) != selected_attempt or any(not isinstance(item, dict) for item in attempts)):
+        return False
+    attempt = attempts[-1] if attempts else None
+    if (not isinstance(attempt, dict) or attempt.get("attempt") != selected_attempt
+            or attempt.get("status") != "SUCCEEDED" or attempt.get("attribution_state") != "CONFIRMED"
+            or attempt.get("attribution_status") == "INVALIDATED"
+            or attempt.get("dispatch_origin") in {"operator_local_override", "human_exact_flow_recovery"}
+            or not isinstance(attempt.get("completed_at"), str)):
+        return False
+    try:
+        selected_at = datetime.fromisoformat(attempt["completed_at"].replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if selected_at > reviewed_at:
+        return False
+    if selected.get("postprocess_attempt") is None:
+        if attempt.get("asset_path") != selected.get("path") or attempt.get("asset_sha256") != selected.get("sha256"):
+            return False
+        if entry.get("postprocess_attempts") not in (None, []):
+            return False
+    else:
+        records = entry.get("postprocess_attempts")
+        processing_number = selected.get("postprocess_attempt")
+        if (not isinstance(processing_number, int) or not isinstance(records, list)
+                or len(records) != processing_number or not records or not isinstance(records[-1], dict)):
+            return False
+        processed = records[-1]
+        if (processed.get("status") != "SUCCEEDED"
+                or processed.get("source_provider_attempt") != selected_attempt
+                or processed.get("source_path") != attempt.get("asset_path")
+                or processed.get("source_sha256") != attempt.get("asset_sha256")
+                or processed.get("output_path") != selected.get("path")
+                or processed.get("output_sha256") != selected.get("sha256")
+                or not isinstance(processed.get("completed_at"), str)):
+            return False
+        try:
+            if datetime.fromisoformat(processed["completed_at"].replace("Z", "+00:00")) > reviewed_at:
+                return False
+        except ValueError:
+            return False
+    # Any one of these records proves that a later mutation/recovery can no
+    # longer be distinguished from the legacy review's original selected asset.
+    for key in ("attribution_invalidations", "manual_recovery_events", "asset_rebindings", "selected_asset_events"):
+        if entry.get(key) not in (None, []):
+            return False
+    return True
 
 
 def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id: str, report: dict) -> None:

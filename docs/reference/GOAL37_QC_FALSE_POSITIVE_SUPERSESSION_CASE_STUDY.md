@@ -25,6 +25,24 @@ The normal QC operation must still make the next pass or fail decision, with
 technical validation, visual-narration alignment, temporal video QC, and
 watermark rules intact.
 
+## Legacy-state compatibility
+
+Revision 2 adds a fail-closed compatibility proof for pre-Goal37 naturalness
+rejections that did not persist `selected_asset_path` or
+`selected_asset_sha256`. The old rejection is never edited. Reopen is possible
+only when the current selected bytes validate, the caller supplies the matching
+SHA-256, the latest review is the legacy naturalness rejection, and preserved
+attempt/postprocess history proves one confirmed selected asset with no later
+provider attempt, recovery, invalidation, rebinding, or replacement descendant.
+The new `LEGACY_QC_REJECTION_ASSET_BINDING_RECONCILED` event records that proof
+before returning the same bytes to ordinary QC.
+
+Backward-compatible state-machine changes must test the exact persisted legacy
+event shape production will resume from. A fixture created through the new
+implementation can silently include fields unavailable in historical state and
+hide a migration/compatibility defect. Risk-tiered review workflows should make
+legacy-state compatibility an explicit check for state-transition changes.
+
 ## Workflow and Build OS lesson
 
 Review and approval state machines need a bounded append-only supersession path.

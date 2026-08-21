@@ -92,6 +92,26 @@ class FlowTests(unittest.TestCase):
             review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report(failed_field="AI_POLISH"))
         entry=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
         return runtime,cfg,paths,executor,calls,entry
+    def _goal37_legacy_rejected_fixture(self, root, *, request_id="req_2ed7c6b9c1ce863d8e9d"):
+        """Pre-Goal37 persisted shape: no rejection asset-binding fields."""
+        from PIL import Image
+        runtime,cfg,paths=self._project(root); executor,calls=self._executor()
+        requests=read_json(paths.artifact_path("output/generation_requests.json"))
+        request=next(item for item in requests["requests"] if item["request_id"]=="ref")
+        request.update({"request_id":request_id,"fingerprint":request_id+"hash","execution_tier":"STANDARD_PRODUCTION"})
+        next(item for item in requests["requests"] if item["request_id"]=="shot")["depends_on"]=[request_id]
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+        rel=f"assets/image/{request_id}/attempt_001.png"; asset=paths.artifact_path(rel); asset.parent.mkdir(parents=True,exist_ok=True)
+        Image.new("RGB",(1280,720),"navy").save(asset,"PNG"); digest=hashlib.sha256(asset.read_bytes()).hexdigest()
+        rejection={"reviewed_at":"2026-08-21T00:01:00+00:00","status":"REJECTED","failure_class":"NATURALNESS_QC_REJECTED",
+                   "report":{"reviewer":"operator","results":{"AI_POLISH":"FAIL"}}}
+        self.assertNotIn("selected_asset_path",rejection); self.assertNotIn("selected_asset_sha256",rejection)
+        entry={"request_id":request_id,"media_type":"IMAGE","status":"FAILED_RETRYABLE","failure_class":"NATURALNESS_QC_REJECTED",
+               "provider_submissions":1,"attempts":[{"attempt":1,"status":"SUCCEEDED","attribution_state":"CONFIRMED",
+               "asset_path":rel,"asset_sha256":digest,"completed_at":"2026-08-21T00:00:00+00:00"}],
+               "selected_asset":{"path":rel,"sha256":digest,"attempt":1,"production_qc":"REJECTED"},"quality_reviews":[rejection]}
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
+        return runtime,cfg,paths,executor,calls,entry
     def test_fail_closed_composer(self):
         dom=DOM(); FlowComposer(dom).submit("complete prompt", references=[], media_type="IMAGE"); self.assertTrue(dom.controls[0].clicked)
         for dom in (DOM(0),DOM(2),DOM(1,2)):
@@ -475,6 +495,72 @@ class FlowTests(unittest.TestCase):
             review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report())
             final=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
             self.assertEqual(final["status"],"SUCCEEDED")
+
+    def test_goal37_r2_reopens_exact_pre_goal37_legacy_rejection_without_rewriting_it(self):
+        """The primary compatibility fixture is hand-shaped, never made by r1 QC code."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,executor,calls,fixture=self._goal37_legacy_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; original=dict(fixture["quality_reviews"][-1]); asset_sha=fixture["selected_asset"]["sha256"]
+            event=reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                       reviewer="tech-lead",reason="reconcile exact pre-Goal37 rejection binding")
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(entry["quality_reviews"][-1],original)
+            self.assertNotIn("selected_asset_path",entry["quality_reviews"][-1]); self.assertNotIn("selected_asset_sha256",entry["quality_reviews"][-1])
+            self.assertEqual((event["event"],event["compatibility_mode"],event["disposition"],event["selected_asset_sha256"]),
+                             ("LEGACY_QC_REJECTION_ASSET_BINDING_RECONCILED","LEGACY_PRE_GOAL37","FALSE_POSITIVE_REOPENED",asset_sha))
+            self.assertEqual((entry["status"],entry["selected_asset"]["sha256"],entry["selected_asset"]["production_qc"]),
+                             ("QC_PENDING",asset_sha,"PENDING"))
+            resumed=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={request_id})
+            self.assertEqual((resumed["new_submissions"],calls),(0,[]))
+            review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report())
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["status"],"SUCCEEDED")
+
+    def test_goal37_r2_legacy_reopen_negative_matrix_fails_closed(self):
+        def denied(mutator, expected_override=None):
+            with tempfile.TemporaryDirectory() as root:
+                runtime,cfg,paths,_executor,_calls,fixture=self._goal37_legacy_rejected_fixture(root)
+                entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+                expected=expected_override or mutator(paths,entry) or entry["selected_asset"]["sha256"]
+                atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
+                with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                    reopen_false_positive_production_qc(runtime.root,cfg.project_id,"req_2ed7c6b9c1ce863d8e9d",expected_asset_sha256=expected,
+                                                        reviewer="tech-lead",reason="negative legacy proof")
+        def changed_asset(paths, entry):
+            from PIL import Image
+            target=paths.artifact_path(entry["selected_asset"]["path"]); Image.new("RGB",(1280,720),"green").save(target,"PNG")
+            digest=hashlib.sha256(target.read_bytes()).hexdigest(); entry["selected_asset"]["sha256"]=digest; return digest
+        def invalid_bytes(paths, entry): paths.artifact_path(entry["selected_asset"]["path"]).write_bytes(b"not an image")
+        def later_attempt(_paths, entry):
+            entry["attempts"].append({"attempt":2,"status":"SUCCEEDED","attribution_state":"CONFIRMED","asset_path":"later.png","asset_sha256":"f"*64,"completed_at":"2026-08-21T00:02:00+00:00"})
+        def later_postprocess(_paths, entry):
+            entry["postprocess_attempts"]=[{"processing_attempt":2,"status":"SUCCEEDED","source_provider_attempt":1,"source_path":"raw.png","source_sha256":"a"*64,"output_path":"later.png","output_sha256":"b"*64,"completed_at":"2026-08-21T00:02:00+00:00"}]
+        def invalidated(_paths, entry): entry["attribution_invalidations"]=[{"invalidated_at":"2026-08-21T00:02:00+00:00"}]
+        def manual_rebound(_paths, entry): entry["manual_recovery_events"]=[{"at":"2026-08-21T00:02:00+00:00"}]
+        def later_approved(_paths, entry): entry["quality_reviews"].append({"reviewed_at":"2026-08-21T00:02:00+00:00","status":"APPROVED","report":{}})
+        def wrong_rejection(_paths, entry): entry["quality_reviews"][-1]["failure_class"]="VISIBLE_PROVIDER_WATERMARK"
+        def missing_history(_paths, entry): entry["quality_reviews"]=[]
+        def ambiguous(_paths, entry): entry["attempts"][-1]["attribution_state"]="UNCERTAIN"
+        for name,mutator in (("selected asset changed",changed_asset),("later provider attempt",later_attempt),
+                             ("later postprocess",later_postprocess),("attribution invalidation",invalidated),
+                             ("manual rebinding",manual_rebound),("later approved review",later_approved),
+                             ("latest rejection differs",wrong_rejection),("missing history",missing_history),("unresolved",ambiguous)):
+            with self.subTest(name=name): denied(mutator)
+        with self.subTest(name="selected sha mismatch"): denied(lambda _paths,_entry: None, expected_override="0"*64)
+        with self.subTest(name="selected bytes invalid"): denied(invalid_bytes)
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,_calls,fixture=self._goal37_legacy_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=fixture["selected_asset"]["sha256"]
+            requests=read_json(paths.artifact_path("output/generation_requests.json")); requests["requests"].append({"request_id":"r2-child","replacement_of":request_id})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="replacement descendant")
+            requests["requests"].pop(); atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                reviewer="tech-lead",reason="first bounded reconciliation")
+            with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
+                                                    reviewer="tech-lead",reason="double reconciliation")
 
     def test_goal37_reopen_can_fail_again_under_ordinary_qc(self):
         with tempfile.TemporaryDirectory() as root:
