@@ -98,7 +98,8 @@ class GeminiReasoningRouter:
     def reason(self, *, task: str, prompt: str, schema: dict[str, Any], tier: str,
                media: tuple[LLMMedia, ...] = (), prompt_version: str,
                schema_version: str, qc_policy_version: str = "NONE",
-               confidence_field: str | None = None, settings: dict[str, Any] | None = None) -> ReasoningResult:
+               confidence_field: str | None = None, settings: dict[str, Any] | None = None,
+               acceptance_validator: Callable[[dict[str, Any]], None] | None = None) -> ReasoningResult:
         if tier not in {"HARD", "BULK"}: raise ValueError("tier must be HARD or BULK")
         media_hashes = [{"label": m.label, "mime_type": m.mime_type,
                          "sha256": hashlib.sha256(m.data).hexdigest()} for m in media]
@@ -110,10 +111,19 @@ class GeminiReasoningRouter:
         cache = self.cache_dir / f"{input_hash}.json"
         if cache.is_file():
             saved = read_json(cache); _validate(saved["value"], schema)
-            return ReasoningResult(saved["value"], saved["model"], saved["credential_alias"],
-                                   saved["project_alias"], True, saved.get("fallback_count", 0), 0, input_hash)
+            rejection = self._acceptance_rejection(saved["value"], acceptance_validator)
+            if rejection is None:
+                return ReasoningResult(saved["value"], saved["model"], saved["credential_alias"],
+                                       saved["project_alias"], True, saved.get("fallback_count", 0), 0, input_hash)
+            self._record({"input_hash": input_hash, "task": task, "tier": tier,
+                          "status": "REJECTED", "source": "CACHE",
+                          "failure_class": rejection.failure_class,
+                          "prompt_version": prompt_version, "schema_version": schema_version,
+                          "qc_policy_version": qc_policy_version})
         models = list(HARD_MODELS if tier == "HARD" else BULK_MODELS)
         attempted: list[dict[str, str]] = []; request_count = 0
+        last_rejection: Exception | None = None
+        non_acceptance_failure = False
         fatal = {"GEMINI_INVALID_REQUEST", "GEMINI_SAFETY_REFUSAL"}
         for model in models:
             tried_projects: set[str] = set()
@@ -140,9 +150,24 @@ class GeminiReasoningRouter:
                     if tier == "BULK" and confidence_field and str(response.value.get(confidence_field, "")).upper() in {"LOW", "UNCERTAIN"}:
                         hard = self.reason(task=task, prompt=prompt, schema=schema, tier="HARD", media=media,
                             prompt_version=prompt_version, schema_version=schema_version,
-                            qc_policy_version=qc_policy_version, confidence_field=None, settings=settings)
+                            qc_policy_version=qc_policy_version, confidence_field=None, settings=settings,
+                            acceptance_validator=acceptance_validator)
                         return ReasoningResult(hard.value, hard.model, hard.credential_alias, hard.project_alias,
                                                hard.cache_hit, len(attempted) + hard.fallback_count, request_count + hard.request_count, input_hash)
+                    rejection = self._acceptance_rejection(response.value, acceptance_validator)
+                    if rejection is not None:
+                        last_rejection = rejection
+                        failure = rejection.failure_class
+                        self._record({"input_hash": input_hash, "task": task, "tier": tier,
+                                      "model": response.model, "credential_alias": credential.alias,
+                                      "project_alias": credential.project_alias, "status": "REJECTED",
+                                      "source": "PROVIDER", "failure_class": failure,
+                                      "media_hashes": media_hashes, "prompt_version": prompt_version,
+                                      "schema_version": schema_version,
+                                      "qc_policy_version": qc_policy_version})
+                        attempted.append({"model": model, "project_alias": credential.project_alias,
+                                          "failure_class": failure})
+                        continue
                     saved = {"value": response.value, "model": response.model,
                              "credential_alias": credential.alias, "project_alias": credential.project_alias,
                              "fallback_count": len(attempted), "identity": identity}
@@ -158,6 +183,7 @@ class GeminiReasoningRouter:
                     failure = error.failure_class
                 except GeminiProviderError as error:
                     failure = error.failure_class
+                non_acceptance_failure = True
                 attempted.append({"model": model, "project_alias": credential.project_alias, "failure_class": failure})
                 if failure == "GEMINI_CREDENTIAL_MISSING" and credential.project_alias.startswith("project-unknown-key-"):
                     unknown_project_attempts = max(0, unknown_project_attempts - 1)
@@ -171,7 +197,23 @@ class GeminiReasoningRouter:
                 if failure == "GEMINI_INVALID_REQUEST": raise RouterError(failure)
         self._record({"input_hash": input_hash, "task": task, "tier": tier, "status": "FAILED",
                       "failure_class": "GEMINI_ROUTING_EXHAUSTED", "attempts": attempted})
+        if last_rejection is not None and not non_acceptance_failure:
+            raise last_rejection
         raise RouterError("GEMINI_ROUTING_EXHAUSTED")
+
+    @staticmethod
+    def _acceptance_rejection(value: dict[str, Any],
+                              validator: Callable[[dict[str, Any]], None] | None) -> Exception | None:
+        if validator is None:
+            return None
+        try:
+            validator(value)
+        except Exception as error:
+            failure_class = getattr(error, "failure_class", None)
+            if not isinstance(failure_class, str) or not failure_class:
+                raise
+            return error
+        return None
 
     def probe_models(self, *, tier: str = "HARD") -> list[dict[str, Any]]:
         models = HARD_MODELS if tier == "HARD" else BULK_MODELS

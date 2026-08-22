@@ -120,8 +120,11 @@ def validate_motion_plan(plan: dict[str, Any], *, original_action: str) -> None:
 
 def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[dict[str, Any], ReasoningResult]:
     prompt = "Decompose this production VIDEO intent into physically plausible cinematic states. Default to one meaningful action per generated clip. Split high-risk contact mechanics with cuts. Natural stillness is valid. Return JSON only. Intent:\n" + json.dumps(intent, ensure_ascii=False, sort_keys=True)
+    def accept_motion_plan(plan: dict[str, Any]) -> None:
+        validate_motion_plan(plan, original_action=str(intent.get("action", "")))
     result = router.reason(task="motion_planning", prompt=prompt, schema=MOTION_SCHEMA, tier="HARD",
-        prompt_version="motion-planner/1.0.0", schema_version=MOTION_PLAN_VERSION)
+        prompt_version="motion-planner/1.0.0", schema_version=MOTION_PLAN_VERSION,
+        acceptance_validator=accept_motion_plan)
     validate_motion_plan(result.value, original_action=str(intent.get("action", "")))
     return result.value, result
 
