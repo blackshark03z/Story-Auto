@@ -21,6 +21,7 @@ HIGH_RISK_TERMS = ("door", "handle", "pick up", "put down", "tool", "piano", "in
                    "finger", "sit", "stand", "pass", "hand", "walk")
 TEMPORAL_REJECTS = {"REJECT_ACTION_LOGIC", "REJECT_ANATOMY", "REJECT_LOOP",
                     "REJECT_IDENTITY", "REJECT_BACKGROUND"}
+TERMINAL_TEMPORAL_FAILURES = TEMPORAL_REJECTS | {"USABLE_TEMPORAL_WINDOW_INVALID"}
 
 HOOK_SCHEMA = {"type": "object", "required": ["beats"], "properties": {"beats": {"type": "array", "minItems": 2, "items": {
     "type": "object", "required": ["start", "end", "new_information", "active_subject", "action", "location",
@@ -183,7 +184,16 @@ def combine_temporal_qc(video_result: dict[str, Any], frames_result: dict[str, A
     defects = list(video_result.get("defects", [])) + list(frames_result.get("defects", []))
     start = max(float(video_result.get("usable_start", 0)), float(frames_result.get("usable_start", 0)))
     end = min(float(video_result.get("usable_end", duration)), float(frames_result.get("usable_end", duration)))
-    if state == "PASS_WITH_USABLE_WINDOW": validate_usable_window(start, end, duration=duration, target_duration=target_duration)
+    if state == "PASS_WITH_USABLE_WINDOW":
+        try:
+            validate_usable_window(start, end, duration=duration, target_duration=target_duration)
+        except GeminiQCError as error:
+            # The validator remains the authority.  A window that cannot
+            # carry the requested shot is a terminal asset failure, not an
+            # exception that leaves the selected bytes indefinitely pending.
+            if error.failure_class != "USABLE_TEMPORAL_WINDOW_INVALID":
+                raise
+            state = error.failure_class
     if any(str(x.get("severity", "")).upper() == "SEVERE" for x in defects) and state not in TEMPORAL_REJECTS:
         raise GeminiQCError("TEMPORAL_HARD_GATE_CONTRADICTION")
     return {"schema_version": TEMPORAL_QC_VERSION, "state": state, "usable_start": start, "usable_end": end,

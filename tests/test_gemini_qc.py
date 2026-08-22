@@ -73,6 +73,19 @@ def test_valid_usable_window_is_selected_deterministically():
     assert result["eligible"] and result["usable_end"] == 4
 
 
+def test_short_usable_window_becomes_terminal_temporal_rejection_without_weakening_validation():
+    result = combine_temporal_qc(
+        temporal("PASS_TEMPORAL", start=0, end=8),
+        temporal("PASS_WITH_USABLE_WINDOW", start=0, end=2.5),
+        duration=8,
+        target_duration=2.970833,
+    )
+    assert result["state"] == "USABLE_TEMPORAL_WINDOW_INVALID"
+    assert not result["eligible"]
+    with pytest.raises(GeminiQCError, match="USABLE_TEMPORAL_WINDOW_INVALID"):
+        validate_usable_window(0, 2.5, duration=8, target_duration=2.970833)
+
+
 def test_temporal_false_positive_review_epoch_changes_both_qc_cache_identities(tmp_path):
     class Router:
         def __init__(self): self.calls=[]

@@ -20,8 +20,8 @@ from story_auto.core.planning.qc_corrective import (
     plan_qc_corrective_intent,
 )
 from story_auto.core.planning.service import PlanningError, validate_generation_requests
-from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, plan_motion,
-                                       sample_dense_frames, temporal_video_qc)
+from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, TERMINAL_TEMPORAL_FAILURES,
+                                       plan_motion, sample_dense_frames, temporal_video_qc)
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
@@ -1670,9 +1670,15 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
         if not entry or entry.get("media_type") != "VIDEO" or entry.get("status") not in {"QC_PENDING", "SUCCEEDED"} or not isinstance(selected, dict):
             raise FlowError("TEMPORAL_VIDEO_QC_INVALID")
         state = report.get("state")
-        if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW", "REJECT_ACTION_LOGIC", "REJECT_ANATOMY", "REJECT_LOOP", "REJECT_IDENTITY", "REJECT_BACKGROUND", "UNCERTAIN"}:
+        if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW", *TERMINAL_TEMPORAL_FAILURES, "UNCERTAIN"}:
             raise FlowError("TEMPORAL_VIDEO_QC_INVALID")
-        review = {"reviewed_at": _now(), "report": report}
+        review = {
+            "reviewed_at": _now(), "report": report,
+            "selected_asset_path": selected.get("path"),
+            "selected_asset_sha256": selected.get("sha256"),
+            "selected_attempt": selected.get("attempt"),
+            "media_sha256": selected.get("sha256"),
+        }
         review_epoch = selected.get("active_temporal_review_epoch")
         if review_epoch is not None:
             frame_evidence = report.get("frame_evidence")
@@ -1684,14 +1690,9 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
                     or any(not isinstance(item, dict) or not isinstance(item.get("sha256"), str)
                            or len(item["sha256"]) != 64 for item in frame_evidence)):
                 raise FlowError("TEMPORAL_VIDEO_QC_FRESH_EVIDENCE_INVALID")
-            review.update({
-                "review_epoch": review_epoch,
-                "selected_asset_path": selected.get("path"),
-                "selected_asset_sha256": selected.get("sha256"),
-                "selected_attempt": selected.get("attempt"),
-                "media_sha256": selected.get("sha256"),
-                "frame_evidence": frame_evidence,
-            })
+            review.update({"review_epoch": review_epoch, "frame_evidence": frame_evidence})
+        elif isinstance(report.get("frame_evidence"), list):
+            review["frame_evidence"] = report["frame_evidence"]
         selected.setdefault("temporal_reviews", []).append(review)
         if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW"} or not report.get("eligible"):
             failure = "TEMPORAL_VIDEO_QC_UNCERTAIN" if state == "UNCERTAIN" else state
@@ -2754,7 +2755,8 @@ def _video_temporal_qc_rejected(entry: dict | None) -> bool:
     reviews = selected.get("temporal_reviews")
     latest = reviews[-1] if isinstance(reviews, list) and reviews else None
     report = latest.get("report") if isinstance(latest, dict) else None
-    return isinstance(report, dict) and str(report.get("state", "")).startswith("REJECT_")
+    return (isinstance(report, dict)
+            and str(report.get("state", "")) in TERMINAL_TEMPORAL_FAILURES)
 
 
 def _latest_temporal_qc_rejection(entry: dict) -> dict:

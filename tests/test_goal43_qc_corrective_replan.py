@@ -470,6 +470,27 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertEqual(again["correction_request_id"], correction_id)
             self.assertEqual(len(router.calls), 2)
 
+    def test_short_usable_window_temporal_rejection_is_eligible_for_full_replan(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, media_type="VIDEO")
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            entry = next(item for item in manifest["requests"] if item["request_id"] == self.ROOT)
+            entry.update({"failure_class": "USABLE_TEMPORAL_WINDOW_INVALID", "quality_reviews": []})
+            entry["selected_asset"].update({
+                "temporal_qc": "REJECTED",
+                "temporal_reviews": [{"report": {
+                    "state": "USABLE_TEMPORAL_WINDOW_INVALID", "eligible": False,
+                    "usable_start": 0.0, "usable_end": 2.5,
+                }}],
+                "production_qc": "PENDING",
+            })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            result = qc_corrective_replan(runtime.root, config.project_id, self.ROOT,
+                                          reason="target duration exceeds usable temporal window", router=_FullReplanRouter())
+            correction = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                              if item["request_id"] == result["correction_request_id"])
+            self.assertEqual(correction["corrective_replan_provenance"]["correction_mode"], "FULL_REPLAN")
+
     def test_correction_fails_closed_without_confirmed_current_qc_rejection(self):
         mutations = {
             "unconfirmed attribution": lambda entry: entry["attempts"][0].update({"attribution_state": "UNCERTAIN"}),

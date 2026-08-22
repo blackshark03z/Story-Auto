@@ -575,6 +575,29 @@ class FlowTests(unittest.TestCase):
                              (event["review_epoch"],False,digest,1))
             self.assertEqual(review["frame_evidence"],[{"index":1,"timestamp":.5,"sha256":"a"*64}])
 
+    def test_short_usable_window_is_bound_terminal_temporal_rejection_and_not_provider_runnable(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,request_id,digest,_original=self._temporal_false_positive_fixture(root)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry.update({"status":"QC_PENDING","failure_class":None})
+            entry["selected_asset"].update({"temporal_qc":"PENDING","production_qc":"PENDING","temporal_reviews":[]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            report={"state":"USABLE_TEMPORAL_WINDOW_INVALID","eligible":False,"usable_start":0.0,"usable_end":2.5,
+                    "request_id":request_id,"attempt":1,"media_sha256":digest,
+                    "frame_evidence":[{"index":1,"timestamp":.5,"sha256":"a"*64}],
+                    "notes":"required target 2.970833 exceeds usable 2.5 seconds"}
+            with self.assertRaisesRegex(FlowError,"USABLE_TEMPORAL_WINDOW_INVALID"):
+                review_temporal_asset(runtime.root,cfg.project_id,request_id,report)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            review=entry["selected_asset"]["temporal_reviews"][-1]
+            self.assertEqual((entry["status"],entry["failure_class"],entry["selected_asset"]["temporal_qc"],
+                              entry["selected_asset"]["production_qc"]),
+                             ("FAILED_RETRYABLE","USABLE_TEMPORAL_WINDOW_INVALID","REJECTED","PENDING"))
+            self.assertEqual((review["selected_asset_sha256"],review["selected_attempt"],review["media_sha256"]),
+                             (digest,1,digest))
+            from story_auto.providers.flow.service import _provider_generation_retry_authorized
+            self.assertFalse(_provider_generation_retry_authorized(entry))
+
     def test_goal37_r2_reopens_exact_pre_goal37_legacy_rejection_without_rewriting_it(self):
         """The primary compatibility fixture is hand-shaped, never made by r1 QC code."""
         with tempfile.TemporaryDirectory() as root:
