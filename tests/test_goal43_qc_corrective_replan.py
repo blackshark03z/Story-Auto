@@ -5,6 +5,8 @@ import tempfile
 import unittest
 
 from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.gemini_qc import MOTION_PLAN_VERSION
+from story_auto.core.planning.service import validate_generation_requests
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.visual import default_visual_policy
 from story_auto.providers.flow.service import (
@@ -27,7 +29,7 @@ class _FixtureRouter:
         self.calls.append(kwargs)
         value = {
             "subject": "Elias Venn",
-            "action": "holds a sealed official envelope with his thumb over the unbroken wax seal",
+            "action": "continues examining the sealed official envelope and runs his thumb over the unbroken wax seal",
             "location": "the dim kitchen inside Marrow Bay Lighthouse",
             "composition_intent": "direct continuation from sh_0006 part 1 at the same kitchen table",
             "continuity_requirements": [
@@ -36,8 +38,8 @@ class _FixtureRouter:
             ],
             "exclusions": [
                 "no lantern room",
-                "no lighthouse lens",
-                "no ocean-facing gallery or relocation away from the kitchen",
+                "no great lighthouse lens",
+                "no ocean-facing gallery or tower/gallery relocation",
             ],
             "selected_reference_entity_ids": [],
             "semantic_delta": [
@@ -57,7 +59,7 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
     ROOT = "req_9bf6057af18642d39faf"
     REF = "req_elias_lantern_reference"
 
-    def _project(self, root: str):
+    def _project(self, root: str, *, media_type: str = "IMAGE"):
         runtime = RuntimeLayout.from_root(root)
         config = ProjectConfig("prj_goal43_trial_b_fixture")
         paths = create_project(runtime, config)
@@ -82,7 +84,7 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             "fingerprint": "trial-b-root-fingerprint",
             "purpose": "SHOT",
             "shot_id": "sh_0006",
-            "media_type": "IMAGE",
+            "media_type": media_type,
             "provider": "google_flow",
             "prompt": "Elias Venn at Marrow Bay Lighthouse with an official envelope",
             "visual_policy": policy,
@@ -96,6 +98,22 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             "target_end": 48.0,
             "target_duration": 8.0,
         }
+        if media_type == "VIDEO":
+            request["motion_risk_analysis"] = {
+                "schema_version": MOTION_PLAN_VERSION,
+                "source_request_id": self.ROOT,
+                "physical_complexity": "LOW",
+                "anatomy_risk": "LOW",
+                "looping_risk": "LOW",
+                "interaction_objects": ["sealed official envelope", "wax seal"],
+                "hand_object_contact": "Elias keeps his thumb on the unbroken wax seal",
+                "atomic_clip": {
+                    "start_state": "Elias studies the sealed official envelope at the kitchen table",
+                    "action": "Elias examines the sealed official envelope and runs his thumb over the unbroken wax seal",
+                    "end_state": "the envelope remains sealed in Elias's hands",
+                    "natural_stillness": "Elias pauses with the unbroken wax seal visible",
+                },
+            }
         continuity = {
             "schema_version": "story-auto-continuity-bible/1.0.0",
             "project_id": config.project_id,
@@ -124,7 +142,7 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             "schema_version": "story-auto-media-plan/1.0.0",
             "project_id": config.project_id,
             "render_mode": "hybrid_hook",
-            "shots": [{"shot_id": "sh_0006", "media_type": "IMAGE", "target_duration": 8.0,
+            "shots": [{"shot_id": "sh_0006", "media_type": media_type, "target_duration": 8.0,
                        "selected_request_id": self.ROOT}],
         }
         atomic_write_json(paths.artifact_path("output/shot_plan.json"), {
@@ -135,13 +153,20 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             "schema_version": "story-auto-generation-requests/1.0.0",
             "project_id": config.project_id,
             "requests": [reference, request],
+            **({"motion_plan_version": MOTION_PLAN_VERSION} if media_type == "VIDEO" else {}),
         })
         root_selected = {"path": "assets/image/root.png", "sha256": "a" * 64, "attempt": 1,
                          "production_qc": "REJECTED"}
+        if media_type == "VIDEO":
+            root_selected["temporal_qc"] = "APPROVED"
         root_attempt = {"attempt": 1, "status": "SUCCEEDED", "dispatch_confirmed": True,
                         "attribution_state": "CONFIRMED", "provider_job_id": "root-job"}
+        results = {"CONTINUITY": "FAIL"}
+        if media_type == "VIDEO":
+            results.update({"SKIN_REALISM": "PASS", "LIGHTING_NATURALISM": "PASS", "MATERIAL_REALISM": "PASS",
+                            "COMPOSITION_NATURALISM": "PASS", "AI_POLISH": "PASS", "TECHNICAL_VALIDITY": "PASS"})
         root_review = {"status": "REJECTED", "failure_class": "NATURALNESS_QC_REJECTED",
-                       "report": {"results": {"CONTINUITY": "FAIL"},
+                       "report": {"results": results,
                                   "reason": "Generated lantern room instead of the dim kitchen"}}
         atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
             "schema_version": "story-auto-generation-manifest/1.0.0",
@@ -152,7 +177,7 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
                  "prompt_sha256": reference["fingerprint"], "reference_asset_hashes": [], "attempts": [],
                  "status": "SUCCEEDED", "selected_asset": {"path": "assets/image/elias-lantern.png", "sha256": "c" * 64}},
                 {"request_id": self.ROOT, "request_identity_sha256": request["fingerprint"],
-                 "related_identity": "sh_0006", "media_type": "IMAGE", "provider": "google_flow",
+                 "related_identity": "sh_0006", "media_type": media_type, "provider": "google_flow",
                  "prompt_sha256": "root-prompt", "reference_asset_hashes": [], "attempts": [root_attempt],
                  "provider_submissions": 1, "status": "FAILED_RETRYABLE",
                  "failure_class": "NATURALNESS_QC_REJECTED", "selected_asset": root_selected,
@@ -161,9 +186,9 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
         })
         return runtime, config, paths
 
-    def test_sh_0006_append_only_structured_correction_removes_conflicting_reference(self):
+    def _assert_sh_0006_append_only_correction(self, media_type: str):
         with tempfile.TemporaryDirectory() as root:
-            runtime, config, paths = self._project(root)
+            runtime, config, paths = self._project(root, media_type=media_type)
             epoch1 = replace_qc_rejected_asset(
                 runtime.root, config.project_id, self.ROOT, reason="first mandatory QC replacement")
             epoch1_id = epoch1["replacement_request_id"]
@@ -181,6 +206,12 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
                                      "report": {"results": {"CONTINUITY": "FAIL"},
                                                 "reason": "Lantern-room reference relocated the continuation"}}],
             })
+            if media_type == "VIDEO":
+                epoch1_entry["selected_asset"]["temporal_qc"] = "APPROVED"
+                epoch1_entry["quality_reviews"][0]["report"]["results"].update({
+                    "SKIN_REALISM": "PASS", "LIGHTING_NATURALISM": "PASS", "MATERIAL_REALISM": "PASS",
+                    "COMPOSITION_NATURALISM": "PASS", "AI_POLISH": "PASS", "TECHNICAL_VALIDITY": "PASS",
+                })
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
             before = copy.deepcopy({item["request_id"]: item for item in manifest["requests"]})
             epoch1_request_before = copy.deepcopy(next(
@@ -204,12 +235,13 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
                 paths.artifact_path("output/generation_manifest.json"))["requests"]}
             correction_id = result["correction_request_id"]
             correction = next(item for item in requests if item["request_id"] == correction_id)
+            self.assertEqual(correction["media_type"], media_type)
             self.assertNotIn(self.ROOT, {item["request_id"] for item in requests})
             self.assertNotIn(epoch1_id, {item["request_id"] for item in requests})
             lowered = correction["prompt"].lower()
             for required in ("dim kitchen", "continuation", "sealed", "unbroken wax seal"):
                 self.assertIn(required, lowered)
-            for exclusion in ("no lantern room", "no lighthouse lens", "no ocean-facing gallery"):
+            for exclusion in ("no lantern room", "no great lighthouse lens", "no ocean-facing gallery", "tower/gallery relocation"):
                 self.assertIn(exclusion, lowered)
             self.assertEqual(correction["reference_asset_ids"], [])
             self.assertEqual(correction["depends_on"], [])
@@ -229,6 +261,16 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertEqual(entries[epoch1_id]["status"], QC_CORRECTIVE_REPLANNED_STATUS)
             self.assertTrue(_provider_generation_retry_authorized(entries[correction_id]))
             self.assertTrue(_runnable(correction, entries))
+            if media_type == "VIDEO":
+                self.assertEqual(correction["motion_risk_analysis"], epoch1_request_before["motion_risk_analysis"])
+                self.assertEqual(correction["corrective_motion_evidence"]["scope"], "CONTINUITY_ONLY")
+                self.assertIn("One visible action only", correction["prompt"])
+                self.assertIn("Physically causal motion", correction["prompt"])
+                validate_generation_requests(
+                    read_json(paths.artifact_path("output/generation_requests.json")),
+                    read_json(paths.artifact_path("output/media_plan.json")),
+                    read_json(paths.artifact_path("output/continuity_bible.json")),
+                )
             self.assertEqual(
                 _resolve_current_canonical_descendant(paths, config.project_id, self.ROOT, requests, entries),
                 correction_id,
@@ -241,6 +283,12 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertTrue(again["idempotent"])
             self.assertEqual(again["correction_request_id"], correction_id)
             self.assertEqual(len(router.calls), 1)
+
+    def test_sh_0006_image_correction_preserves_image_support(self):
+        self._assert_sh_0006_append_only_correction("IMAGE")
+
+    def test_sh_0006_video_correction_preserves_approved_motion_evidence(self):
+        self._assert_sh_0006_append_only_correction("VIDEO")
 
     def test_correction_fails_closed_without_confirmed_current_qc_rejection(self):
         mutations = {

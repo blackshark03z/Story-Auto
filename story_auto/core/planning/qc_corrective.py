@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
-from story_auto.core.visual import compile_image_prompt, default_visual_policy, validate_visual_policy
+from story_auto.core.gemini_qc import compile_flow_motion_prompt, validate_motion_plan
+from story_auto.core.visual import (caption_safe_effective_prompt, compile_image_prompt,
+                                    default_visual_policy, validate_visual_policy)
 from story_auto.providers.llm import GeminiReasoningRouter, ReasoningResult
 
 
@@ -64,7 +67,7 @@ def plan_qc_corrective_intent(
 ) -> tuple[dict[str, Any], ReasoningResult]:
     """Ask the established router for structured semantics, never a provider side effect."""
     prompt = (
-        "Correct one terminal QC-rejected IMAGE generation intent. Use only the supplied canonical sources. "
+        "Correct one terminal QC-rejected SHOT generation intent (IMAGE or VIDEO). Use only the supplied canonical sources. "
         "Repair the latest QC contradiction materially; do not merely paraphrase the rejected prompt. "
         "Choose only reference entity IDs whose visual context supports the corrected continuity, and remove "
         "any conflicting reference. State exclusions that make the rejected relocation or contradiction impossible. "
@@ -129,3 +132,75 @@ def compile_qc_corrected_image_request(
         "corrected_semantic_intent": dict(corrected_intent),
     })
     return rewritten
+
+
+def _motion_words(value: str) -> set[str]:
+    return {item for item in re.findall(r"[a-z0-9]+", value.lower()) if len(item) > 2}
+
+
+def compile_qc_corrected_video_request(
+    prior_request: dict[str, Any],
+    corrected_intent: dict[str, Any],
+    *,
+    reference_request_by_entity: dict[str, str],
+) -> dict[str, Any]:
+    """Keep approved atomic mechanics while correcting VIDEO continuity semantics."""
+    if prior_request.get("purpose") != "SHOT" or prior_request.get("media_type") != "VIDEO":
+        raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_MEDIA_UNSUPPORTED")
+    validate_qc_corrective_intent(corrected_intent, reference_entity_ids=set(reference_request_by_entity))
+    evidence = prior_request.get("motion_risk_analysis")
+    clip = evidence.get("atomic_clip") if isinstance(evidence, dict) else None
+    required = ("schema_version", "source_request_id", "physical_complexity", "anatomy_risk", "looping_risk",
+                "interaction_objects", "hand_object_contact", "atomic_clip")
+    if (not isinstance(evidence, dict) or any(field not in evidence for field in required)
+            or not isinstance(clip, dict)):
+        raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_VIDEO_MOTION_EVIDENCE_INVALID")
+    try:
+        validate_motion_plan({"atomic_clips": [clip]}, original_action=str(clip.get("action", "")))
+        duration = float(prior_request.get("target_duration", 0))
+        if duration <= 0:
+            raise ValueError("invalid duration")
+    except (ValueError, TypeError) as error:
+        raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_VIDEO_MOTION_EVIDENCE_INVALID") from error
+    if not (_motion_words(str(clip.get("action", ""))) & _motion_words(corrected_intent["action"])):
+        raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_VIDEO_MOTION_NOT_APPLICABLE")
+    selected_entities = list(corrected_intent["selected_reference_entity_ids"])
+    continuity = "; ".join(item.strip() for item in corrected_intent["continuity_requirements"])
+    exclusions = "; ".join(item.strip() for item in corrected_intent["exclusions"])
+    base = compile_flow_motion_prompt(
+        subject=corrected_intent["subject"], location=corrected_intent["location"], clip=clip, duration=duration,
+    ).rstrip(". ")
+    prompt = caption_safe_effective_prompt(
+        f"{base}. Corrective continuity: Location: {corrected_intent['location'].strip()}. "
+        f"Direct continuation: {continuity}. Required semantic action: {corrected_intent['action'].strip()}. "
+        f"Exclude: {exclusions}."
+    )
+    rewritten = dict(prior_request)
+    rewritten.update({
+        "prompt": prompt,
+        "reference_asset_ids": selected_entities,
+        "depends_on": [reference_request_by_entity[item] for item in selected_entities],
+        "corrected_semantic_intent": dict(corrected_intent),
+        "motion_risk_analysis": dict(evidence),
+        "corrective_motion_evidence": {
+            "preserved_from_request_id": prior_request["request_id"],
+            "temporal_qc": "APPROVED",
+            "scope": "CONTINUITY_ONLY",
+        },
+    })
+    return rewritten
+
+
+def compile_qc_corrected_request(
+    prior_request: dict[str, Any],
+    corrected_intent: dict[str, Any],
+    *,
+    reference_request_by_entity: dict[str, str],
+) -> dict[str, Any]:
+    if prior_request.get("media_type") == "IMAGE":
+        return compile_qc_corrected_image_request(
+            prior_request, corrected_intent, reference_request_by_entity=reference_request_by_entity)
+    if prior_request.get("media_type") == "VIDEO":
+        return compile_qc_corrected_video_request(
+            prior_request, corrected_intent, reference_request_by_entity=reference_request_by_entity)
+    raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_MEDIA_UNSUPPORTED")

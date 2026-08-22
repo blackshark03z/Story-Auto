@@ -13,7 +13,7 @@ import uuid
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.planning.qc_corrective import (
     QCCorrectiveReplanError,
-    compile_qc_corrected_image_request,
+    compile_qc_corrected_request,
     plan_qc_corrective_intent,
 )
 from story_auto.core.planning.service import PlanningError, validate_generation_requests
@@ -1990,7 +1990,7 @@ def _qc_corrective_replan_genesis_projection(request: dict) -> dict | None:
             or any(not isinstance(request.get(key), str) or not request[key] for key in required)
             or request.get("correction_reason") != QC_CORRECTIVE_REPLAN_REASON
             or request.get("purpose") != "SHOT"
-            or request.get("media_type") != "IMAGE"
+            or request.get("media_type") not in {"IMAGE", "VIDEO"}
             or not isinstance(request.get("correction_epoch"), int)
             or request["correction_epoch"] < 1):
         return None
@@ -1998,6 +1998,8 @@ def _qc_corrective_replan_genesis_projection(request: dict) -> dict | None:
         if (not isinstance(request.get(key), list)
                 or any(not isinstance(item, str) or not item for item in request[key])):
             return None
+    if request["media_type"] == "VIDEO" and not isinstance(request.get("motion_risk_analysis"), dict):
+        return None
     provenance = request.get("corrective_replan_provenance")
     if (not isinstance(provenance, dict)
             or provenance.get("root_request_id") != request["root_request_id"]
@@ -2029,6 +2031,9 @@ def _qc_corrective_replan_genesis_projection(request: dict) -> dict | None:
         "correction_nonce": request["correction_nonce"],
         "correction_reason": request["correction_reason"],
         "corrected_semantic_intent": request.get("corrected_semantic_intent"),
+        **({"motion_risk_analysis": request.get("motion_risk_analysis"),
+            "corrective_motion_evidence": request.get("corrective_motion_evidence")}
+           if request["media_type"] == "VIDEO" else {}),
         "corrective_replan_provenance": provenance,
     }
 
@@ -2371,13 +2376,29 @@ def _latest_qc_rejection(entry: dict) -> dict:
     return latest
 
 
+def _video_continuity_qc_approved(entry: dict | None) -> bool:
+    """A VIDEO correction may preserve motion only for an approved temporal, continuity-only rejection."""
+    if not isinstance(entry, dict):
+        return False
+    selected = entry.get("selected_asset")
+    latest = _latest_qc_rejection(entry)
+    report = latest.get("report") if isinstance(latest, dict) else None
+    results = report.get("results") if isinstance(report, dict) else None
+    if not isinstance(selected, dict) or selected.get("temporal_qc") != "APPROVED" or not isinstance(results, dict):
+        return False
+    if str(results.get("CONTINUITY", "")).upper() != "FAIL":
+        return False
+    return all(str(value).upper() == "PASS" for field, value in results.items() if field != "CONTINUITY")
+
+
 def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str,
                          router: GeminiReasoningRouter | None = None,
                          _fault_injector: Callable[[str], None] | None = None) -> dict:
     """Create one canonical semantic correction epoch from a terminal QC rejection.
 
     This is intentionally not a general replacement-of-replacement operation:
-    only the current IMAGE-shot lineage tip with confirmed attribution and a
+    only the current IMAGE-shot or approved-temporal continuity-only VIDEO
+    lineage tip with confirmed attribution and a
     latest terminal QC rejection can reach Gemini or receive a fresh identity.
     """
     if not isinstance(reason, str) or not reason.strip():
@@ -2424,8 +2445,10 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                     "idempotent": True,
                 }
             raise FlowError("QC_CORRECTIVE_REPLAN_ALREADY_COMPLETED")
-        if (old_request.get("purpose") != "SHOT" or old_request.get("media_type") != "IMAGE"
-                or not _terminal_qc_rejection(old_entry)):
+        media_type = old_request.get("media_type")
+        if (old_request.get("purpose") != "SHOT" or media_type not in {"IMAGE", "VIDEO"}
+                or not _terminal_qc_rejection(old_entry)
+                or media_type == "VIDEO" and not _video_continuity_qc_approved(old_entry)):
             raise FlowError("QC_CORRECTIVE_REPLAN_NOT_ELIGIBLE")
         if _direct_qc_corrective_child_ids(paths, project_id, request_id) != []:
             raise FlowError("QC_CORRECTIVE_REPLAN_ALREADY_COMPLETED")
@@ -2440,7 +2463,8 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         shot_id = old_request.get("shot_id")
         shot = next((item for item in shot_plan.get("shots", []) if item.get("shot_id") == shot_id), None)
         media = next((item for item in media_plan.get("shots", []) if item.get("shot_id") == shot_id), None)
-        if not isinstance(shot, dict) or not isinstance(media, dict) or media.get("media_type") != "IMAGE":
+        if (not isinstance(shot, dict) or not isinstance(media, dict)
+                or media.get("media_type") != media_type):
             raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_INVALID")
         relevant_entity_ids = list(dict.fromkeys(
             shot.get("character_ids", []) + shot.get("prop_ids", [])
@@ -2498,7 +2522,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                 canonical_context=canonical_context,
                 reference_entity_ids=set(reference_request_by_entity),
             )
-            correction = compile_qc_corrected_image_request(
+            correction = compile_qc_corrected_request(
                 old_request,
                 corrected_intent,
                 reference_request_by_entity=reference_request_by_entity,
@@ -2555,7 +2579,9 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "corrected_semantic_intent": corrected_intent,
             "semantic_delta": list(corrected_intent["semantic_delta"]),
             "reference_selection_delta": reference_delta,
-            "deterministic_compiler": "compile_image_prompt",
+            "deterministic_compiler": (
+                "compile_flow_motion_prompt" if media_type == "VIDEO" else "compile_image_prompt"
+            ),
         }
         for field in (
             "replacement_of", "replaces_request_id", "replacement_reason", "replacement_epoch",
@@ -2609,7 +2635,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "request_id": correction_id,
             "request_identity_sha256": fingerprint,
             "related_identity": shot_id,
-            "media_type": "IMAGE",
+            "media_type": correction["media_type"],
             "provider": correction.get("provider", "google_flow"),
             "prompt_sha256": hashlib.sha256(correction["prompt"].encode("utf-8")).hexdigest(),
             "reference_asset_hashes": [],
