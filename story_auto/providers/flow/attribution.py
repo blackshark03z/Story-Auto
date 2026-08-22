@@ -81,7 +81,16 @@ class RequestAttributionTracker:
         self.expected_count = expected_count
         self.required_stable_polls = required_stable_polls
         typed = records_for_type(baseline, media_type)
-        self.baseline_identities = {provider_identity(record) for record in typed if provider_identity(record)}
+        # Asset identity is the monotonic newness authority.  Media type is
+        # only routing metadata, so a thumbnail or other representation seen
+        # before activation must keep the same asset stale for this attempt.
+        stable_assets = {
+            provider_identity(record) for record in baseline
+            if record.get("asset_id") and provider_identity(record)
+        }
+        self.baseline_identities = stable_assets | {
+            provider_identity(record) for record in typed if provider_identity(record)
+        }
         self.baseline_cards = {str(record.get("card_id")) for record in typed if record.get("card_id")}
         self.lineage_card_id: str | None = None
         self.lineage_identity: str | None = None

@@ -264,6 +264,59 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((stable, observations), (3, [1, 2, 3]))
 
+    def test_trial_b_pre_dispatch_history_persists_asset_through_empty_video_baseline(self):
+        old_video = {"card_id": "old-card", "asset_id": "asset-a", "media_type": "VIDEO", "state": "READY"}
+        old_thumbnail = {**old_video, "media_type": "VIDEO_THUMBNAIL"}
+        surfaces = iter([
+            {"records": [old_video], "global_pending_count": 0},
+            {"records": [old_thumbnail], "global_pending_count": 0},
+            {"records": [], "global_pending_count": 0},
+            {"records": [], "global_pending_count": 0},
+        ])
+
+        class Dom:
+            def provider_surface(self):
+                return next(surfaces)
+
+        with tempfile.TemporaryDirectory() as root:
+            generator = LiveFlowGenerator(None, timeout_seconds=0)
+            path = Path(root) / "provider_poll_evidence.json"
+            generator._reset_poll_evidence(path)
+            baseline, stable = _stable_surface(
+                Dom(), "VIDEO", timeout_seconds=1, required_stable_polls=2, poll_seconds=0,
+                poll_observer=lambda surface, records, count: generator._record_poll(
+                    phase="PRE_DISPATCH_BASELINE", media_type="VIDEO", baseline=[],
+                    current=records, surface=surface, stable_polls=count,
+                ),
+            )
+
+            self.assertEqual(stable, 2)
+            self.assertEqual(
+                generator.last_settings["provider_poll_timeline"][-1]["pre_dispatch_asset_identity_set"],
+                [{"identity": "asset:asset-a", "asset_id": "asset-a"}],
+            )
+            self.assertEqual(
+                read_json(path)["observations"][-1]["pre_dispatch_asset_identity_set"][0]["identity"],
+                "asset:asset-a",
+            )
+
+            tracker = RequestAttributionTracker(baseline, media_type="VIDEO", expected_count=1)
+            pending = [
+                {"card_id": "new-wrapper", "asset_id": "asset-a", "media_type": "VIDEO", "state": "READY"},
+                {"card_id": "pending-card", "asset_id": None, "media_type": None, "state": "PENDING"},
+            ]
+            stale = tracker.observe(pending)
+            self.assertEqual((stale.state, stale.candidate_delta_count), ("WAITING", 0))
+
+            resolved = [
+                pending[0],
+                {"card_id": "pending-card", "asset_id": "asset-b", "media_type": "VIDEO", "state": "READY"},
+            ]
+            tracker.observe(resolved)
+            tracker.observe(list(reversed(resolved)))
+            confirmed = tracker.observe(resolved)
+            self.assertEqual((confirmed.state, confirmed.candidate["asset_id"]), ("CONFIRMED", "asset-b"))
+
     def test_complete_poll_timeline_is_append_only_hash_chained_and_retains_early_polls(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "provider_poll_evidence.json"

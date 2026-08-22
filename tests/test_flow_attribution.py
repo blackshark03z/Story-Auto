@@ -97,6 +97,51 @@ class FlowAttributionTests(unittest.TestCase):
             observation = tracker.observe(records)
         self.assertEqual((observation.state, observation.candidate["asset_id"]), ("CONFIRMED", "video-asset"))
 
+    def test_pre_dispatch_asset_remains_stale_across_representation_and_rewrap(self):
+        baseline = [
+            record("old-card", "asset-a", media_type="VIDEO"),
+            record("old-card", "asset-a", media_type="VIDEO_THUMBNAIL"),
+        ]
+        tracker = RequestAttributionTracker(baseline, media_type="VIDEO", expected_count=1)
+
+        pending = [
+            record("new-wrapper", "asset-a", media_type="VIDEO"),
+            record("pending-card", media_type=None, state="PENDING"),
+        ]
+        stale = tracker.observe(pending)
+        self.assertEqual((stale.state, stale.candidate_delta_count), ("WAITING", 0))
+        self.assertEqual(stale.candidate_identities, [])
+
+        resolved = [
+            record("new-wrapper", "asset-a", media_type="VIDEO"),
+            record("pending-card", "asset-b", media_type="VIDEO"),
+        ]
+        self.assertEqual(tracker.observe(resolved).state, "CANDIDATE")
+        self.assertEqual(tracker.observe(list(reversed(resolved))).state, "CANDIDATE")
+        confirmed = tracker.observe(resolved)
+        self.assertEqual((confirmed.state, confirmed.candidate["asset_id"]), ("CONFIRMED", "asset-b"))
+
+    def test_thumbnail_only_baseline_asset_is_stale_after_video_promotion(self):
+        tracker = RequestAttributionTracker(
+            [record("old-card", "asset-a", media_type="VIDEO_THUMBNAIL")],
+            media_type="VIDEO", expected_count=1,
+        )
+        promoted = tracker.observe([record("new-card", "asset-a", media_type="VIDEO")])
+        self.assertEqual((promoted.state, promoted.candidate_delta_count), ("WAITING", 0))
+
+    def test_multiple_genuinely_new_video_assets_remain_ambiguous_regardless_of_order(self):
+        candidates = [
+            record("card-b", "asset-b", media_type="VIDEO"),
+            record("card-c", "asset-c", media_type="VIDEO"),
+        ]
+        for current in (candidates, list(reversed(candidates))):
+            with self.subTest(order=[item["asset_id"] for item in current]):
+                observation = RequestAttributionTracker(
+                    [], media_type="VIDEO", expected_count=1,
+                ).observe(current)
+                self.assertEqual((observation.state, observation.candidate_delta_count), ("AMBIGUOUS", 2))
+                self.assertIsNone(observation.candidate)
+
 
 if __name__ == "__main__":
     unittest.main()
