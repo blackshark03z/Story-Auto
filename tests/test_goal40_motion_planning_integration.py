@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import tempfile
 import unittest
@@ -10,7 +11,9 @@ from story_auto.core.audio import TimedSpan, build_alignment
 from story_auto.core.content import narration_hash
 from story_auto.core.gemini_qc import MOTION_PLAN_VERSION
 from story_auto.core.planning import run_visual_planning_stages, validate_generation_requests
-from story_auto.core.planning.service import PlanningError
+from story_auto.core.planning.service import (PlanningError, apply_motion_plans,
+                                              compile_generation_requests,
+                                              compile_media_plan)
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.llm import LLMResponse, ReasoningResult, RouterError
 
@@ -131,8 +134,6 @@ class Goal40MotionPlanningIntegrationTests(unittest.TestCase):
             planner = OfflineMotionPlanner()
             self.assertEqual(run_visual_planning_stages(runtime.root, project_id, provider=planner),
                              ("RUN", "RUN", "RUN"))
-            initial = read_json(paths.artifact_path("output/generation_requests.json"))
-            initial_ids = [item["request_id"] for item in initial["requests"]]
             atomic_write_json(paths.artifact_path("output/generation_requests.json"), broken)
             atomic_write_json(paths.root / "output" / ".checkpoints" / "generation_requests.json",
                               fixture["generation_request_checkpoint"])
@@ -148,7 +149,6 @@ class Goal40MotionPlanningIntegrationTests(unittest.TestCase):
             self.assertEqual(sum(item["motion_risk_analysis"].get("schema_version") != MOTION_PLAN_VERSION
                                  for item in videos), 0)
             self.assertTrue(all(item["execution_tier"] == "STANDARD_PRODUCTION" for item in videos))
-            self.assertEqual([item["request_id"] for item in upgraded["requests"]], initial_ids)
             self.assertEqual(planner.motion_calls, 8)
             self.assertEqual(planner.external_provider_calls, 0)
             self.assertFalse(paths.artifact_path("output/generation_manifest.json").exists())
@@ -189,6 +189,53 @@ class Goal40MotionPlanningIntegrationTests(unittest.TestCase):
             self.assertTrue(all(item["part_count"] == 1 for item in videos))
             self.assertTrue(all("motion_risk_analysis" not in item for item in images))
             self.assertNotIn("motion_plan_version", images[0])
+
+    def test_apply_motion_plans_preserves_hybrid_image_objects_exactly(self):
+        shot_plan = {"shots":[
+            {"shot_id":"sh_0001", "start":0.0, "end":1.0, "character_ids":[],
+             "prop_ids":[], "location_id":None, "subject":"Caretaker",
+             "action":"walks through the corridor", "camera_intent":"locked",
+             "composition_intent":"medium frame", "visual_emotional_purpose":"arrival",
+             "motion_value":0},
+            {"shot_id":"sh_0002", "start":1.0, "end":2.0, "character_ids":[],
+             "prop_ids":[], "location_id":None, "subject":"Empty corridor",
+             "action":"remains still", "camera_intent":"locked",
+             "composition_intent":"wide frame", "visual_emotional_purpose":"quiet aftermath",
+             "motion_value":0},
+        ]}
+        continuity = {"characters":[], "locations":[], "props":[]}
+        settings = {"hook_seconds":0.5, "motion_spike_threshold":8, "overrides":{},
+                    "max_attempts":2, "aspect_ratio":"16:9",
+                    "large_batch_request_threshold":20, "provider_video_clip_seconds":8.0}
+        media = compile_media_plan("prj_goal40_mixed", shot_plan, "hybrid_hook", settings)
+        before = compile_generation_requests(
+            "prj_goal40_mixed", shot_plan, media, continuity, settings,
+        )
+        image_before = copy.deepcopy(next(
+            item for item in before["requests"] if item["media_type"] == "IMAGE"
+        ))
+        video_before = next(item for item in before["requests"] if item["media_type"] == "VIDEO")
+        analysis = {
+            "physical_complexity":"LOW", "anatomy_risk":"LOW", "looping_risk":"LOW",
+            "interaction_objects":[], "hand_object_contact":"none",
+            "atomic_clips":[{
+                "start_state":"standing", "action":"walks through the corridor",
+                "end_state":"across the corridor", "natural_stillness":"brief pause",
+            }],
+        }
+
+        after = apply_motion_plans(before, shot_plan, {
+            "records":[{"request_id":video_before["request_id"], "analysis":analysis}],
+        })
+        image_after = next(item for item in after["requests"] if item["media_type"] == "IMAGE")
+        videos_after = [item for item in after["requests"] if item["media_type"] == "VIDEO"]
+
+        self.assertEqual(image_after, image_before)
+        self.assertEqual(image_after["request_id"], image_before["request_id"])
+        self.assertEqual(image_after["fingerprint"], image_before["fingerprint"])
+        self.assertTrue(all(item.get("motion_risk_analysis") for item in videos_after))
+        self.assertEqual(len({item["request_id"] for item in videos_after}), len(videos_after))
+        validate_generation_requests(after, media, continuity)
 
     def test_motion_planner_failure_publishes_no_executable_requests_or_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

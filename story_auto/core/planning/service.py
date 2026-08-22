@@ -491,13 +491,14 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
                     "looping_risk":analysis.get("looping_risk"),"interaction_objects":analysis.get("interaction_objects",[]),
                     "hand_object_contact":analysis.get("hand_object_contact"),"atomic_clip":clip}})
             rewritten.append(part)
-    prior_ids: dict[int, str] = {
-        id(request): request.pop("_motion_source_request_id", request.get("request_id"))
-        for request in rewritten
-    }
+    prior_ids: dict[int, str] = {}
+    for request in rewritten:
+        if request.get("media_type") == "VIDEO":
+            prior_ids[id(request)] = request.pop("_motion_source_request_id")
     by_shot: dict[str, list[dict[str, Any]]] = {}
     for request in rewritten:
-        if request.get("purpose") == "SHOT": by_shot.setdefault(request["shot_id"], []).append(request)
+        if request.get("purpose") == "SHOT" and request.get("media_type") == "VIDEO":
+            by_shot.setdefault(request["shot_id"], []).append(request)
     replacements: dict[str, list[str]] = {}
     for parts in by_shot.values():
         parts.sort(key=lambda item: float(item["target_start"]))
@@ -508,6 +509,8 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
             request["request_id"] = _canonical_request_id(seed); request["fingerprint"] = _hash_text(canonical_json(seed))
             replacements.setdefault(prior_id, []).append(request["request_id"])
     for request in rewritten:
+        if request.get("media_type") != "VIDEO":
+            continue
         dependencies: list[str] = []
         for dependency in request.get("depends_on", []):
             dependencies.extend(replacements.get(dependency, [dependency]))
