@@ -80,6 +80,9 @@ def plan_qc_corrective_intent(
     prompt = (
         "Correct one terminal QC-rejected SHOT generation intent (IMAGE or VIDEO). Use only the supplied canonical sources. "
         "Repair the latest QC contradiction materially; do not merely paraphrase the rejected prompt. "
+        "The canonical_locked_core is immutable generation authority: you may reason about it and return an echo "
+        "for evidence, but it will be deterministically overlaid before request construction. Do not redefine its "
+        "shot identity, subject, location, continuity, principal action, props, timing, or media type. "
         "Choose only reference entity IDs whose visual context supports the corrected continuity, and remove "
         "any conflicting reference. State exclusions that make the rejected relocation or contradiction impossible. "
         "When labeled candidate reference media is supplied, assess the actual visual context of each image as "

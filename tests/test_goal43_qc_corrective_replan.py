@@ -13,7 +13,6 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.visual import default_visual_policy
 from story_auto.providers.flow.service import (
     QC_CORRECTIVE_REPLANNED_STATUS,
-    _apply_canonical_corrective_location,
     _first_invalid_request_replacement,
     _provider_generation_retry_authorized,
     _resolve_current_canonical_descendant,
@@ -130,6 +129,30 @@ class _FullReplanRouter(_FixtureRouter):
             validator(value)
         return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1,
                                "d" * 64)
+
+
+class _ParaphrasingLockedCoreRouter(_FullReplanRouter):
+    """Returns a plausible but wrong whole-shot rewrite to prove core overlay."""
+    def reason(self, **kwargs):
+        if kwargs.get("task") == "motion_planning":
+            return super().reason(**kwargs)
+        self.calls.append(kwargs)
+        value = {
+            "subject": "a weathered lighthouse keeper",
+            "action": "reflects on an unfamiliar document without a required hand action",
+            "location": "the ocean-facing gallery beside the great lantern lens",
+            "composition_intent": "a new gallery tableau",
+            "continuity_requirements": ["an unrelated moment in a different room"],
+            "exclusions": ["no sudden cuts"],
+            "selected_reference_entity_ids": ["char_elias_venn"],
+            "semantic_delta": ["proposed an alternate gallery staging"],
+            "reference_selection_rationale": "incorrectly selected the gallery-biased character reference",
+        }
+        validator = kwargs.get("acceptance_validator")
+        if validator:
+            validator(value)
+        return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1,
+                               "p" * 64)
 
 
 class Goal43QcCorrectiveReplanTests(unittest.TestCase):
@@ -262,19 +285,6 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             ],
         })
         return runtime, config, paths
-
-    def test_compatible_kitchen_wording_is_compiled_to_authoritative_dim_kitchen_location(self):
-        shot = {"location_id": "loc_marrow_bay_lighthouse"}
-        entities = {"loc_marrow_bay_lighthouse": {"name": "Marrow Bay Lighthouse"}}
-        continuity = {"required_location": "dim kitchen inside Marrow Bay Lighthouse"}
-        value = _apply_canonical_corrective_location(
-            {"location": "Kitchen inside Marrow Bay Lighthouse"},
-            shot=shot, entities=entities, scene_continuity=continuity)
-        self.assertEqual(value["location"], "dim kitchen inside Marrow Bay Lighthouse")
-        with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH"):
-            _apply_canonical_corrective_location(
-                {"location": "ocean-facing gallery in the lighthouse"},
-                shot=shot, entities=entities, scene_continuity=continuity)
 
     def _assert_sh_0006_append_only_correction(self, media_type: str):
         with tempfile.TemporaryDirectory() as root:
@@ -484,6 +494,76 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertEqual(again["correction_request_id"], correction_id)
             self.assertEqual(len(router.calls), 2)
 
+    def test_full_replan_locks_canonical_core_over_paraphrased_model_rewrite(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, media_type="VIDEO")
+            requests_data = read_json(paths.artifact_path("output/generation_requests.json"))
+            request = requests_data["requests"][1]
+            request.update({"shot_id": "sh_0007", "target_start": 40.0,
+                            "target_end": 42.970833, "target_duration": 2.970833})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests_data)
+            shot_plan = read_json(paths.artifact_path("output/shot_plan.json"))
+            current = shot_plan["shots"][0]
+            current.update({
+                "shot_id": "sh_0007", "start": 40.0, "end": 42.970833,
+                "action": "Elias slowly lowers the official sealed envelope while his thumb stays on the unbroken wax seal",
+                "composition_intent": "direct continuation in the dim kitchen from sh_0006",
+            })
+            preceding = copy.deepcopy(current)
+            preceding.update({
+                "shot_id": "sh_0006", "start": 32.0, "end": 40.0,
+                "action": "Elias examines the official sealed envelope in the dim kitchen.",
+                "composition_intent": "dim kitchen continuity before sh_0007",
+            })
+            shot_plan["shots"] = [preceding, current]
+            atomic_write_json(paths.artifact_path("output/shot_plan.json"), shot_plan)
+            media_plan = read_json(paths.artifact_path("output/media_plan.json"))
+            media_plan["shots"][0].update({"shot_id": "sh_0007", "target_duration": 2.970833})
+            atomic_write_json(paths.artifact_path("output/media_plan.json"), media_plan)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            root_entry = next(item for item in manifest["requests"] if item["request_id"] == self.ROOT)
+            root_entry.update({"failure_class": "USABLE_TEMPORAL_WINDOW_INVALID", "quality_reviews": []})
+            root_entry["selected_asset"].update({
+                "temporal_qc": "REJECTED",
+                "temporal_reviews": [{"report": {"state": "USABLE_TEMPORAL_WINDOW_INVALID", "eligible": False}}],
+                "production_qc": "PENDING",
+            })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            router = _ParaphrasingLockedCoreRouter()
+            result = qc_corrective_replan(runtime.root, config.project_id, self.ROOT,
+                                          reason="lock canonical semantics before corrective mechanics", router=router)
+            correction_id = result["correction_request_id"]
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            correction = next(item for item in requests if item["request_id"] == correction_id)
+            provenance = correction["corrective_replan_provenance"]
+            core = provenance["canonical_locked_core"]
+            effective = correction["corrected_semantic_intent"]
+
+            self.assertEqual(core["logical_shot_id"], "sh_0007")
+            self.assertEqual(core["subject"], effective["subject"])
+            self.assertEqual(core["location"], effective["location"])
+            self.assertEqual(core["action"], effective["action"])
+            self.assertEqual(core["continuity_requirements"], effective["continuity_requirements"])
+            self.assertEqual(core["media_type"], correction["media_type"])
+            self.assertEqual(core["target_duration"], correction["target_duration"])
+            self.assertIn("dim kitchen", correction["prompt"].lower())
+            self.assertIn("no ocean-facing gallery", correction["prompt"].lower())
+            self.assertEqual(correction["reference_asset_ids"], [])
+            self.assertEqual(correction["depends_on"], [])
+            self.assertIn("location", provenance["non_authoritative_locked_core_overrides"])
+            self.assertEqual(provenance["non_authoritative_model_output"]["location"],
+                             "the ocean-facing gallery beside the great lantern lens")
+            entries = {item["request_id"]: item for item in read_json(
+                paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            self.assertEqual(entries[correction_id]["attempts"], [])
+            self.assertEqual(entries[correction_id]["provider_submissions"], 0)
+            self.assertFalse(_provider_generation_retry_authorized(entries[self.ROOT]))
+            again = qc_corrective_replan(runtime.root, config.project_id, self.ROOT,
+                                         reason="idempotent locked-core retry", router=router)
+            self.assertTrue(again["idempotent"])
+            self.assertEqual(again["correction_request_id"], correction_id)
+
     def test_short_usable_window_temporal_rejection_is_eligible_for_full_replan(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root, media_type="VIDEO")
@@ -528,17 +608,19 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
                 self.assertEqual(router.calls, [])
                 self.assertEqual(read_json(paths.artifact_path("output/generation_requests.json")), before_requests)
 
-    def test_conflicting_reference_fails_before_child_creation(self):
+    def test_conflicting_reference_is_removed_before_child_creation(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root, media_type="VIDEO")
             router = _ConflictingReferenceRouter()
-            with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID"):
-                qc_corrective_replan(
-                    runtime.root, config.project_id, self.ROOT,
-                    reason="reject the lantern-room reference", router=router)
+            result = qc_corrective_replan(
+                runtime.root, config.project_id, self.ROOT,
+                reason="remove the lantern-room reference", router=router)
             self.assertEqual(len(router.calls), 1)
             requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
-            self.assertEqual([item["request_id"] for item in requests], [self.REF, self.ROOT])
+            correction = next(item for item in requests if item["request_id"] == result["correction_request_id"])
+            self.assertEqual(correction["reference_asset_ids"], [])
+            policy = correction["corrective_replan_provenance"]["reference_policy"]
+            self.assertEqual(policy["removed_conflicting_reference_entity_ids"], ["char_elias_venn"])
 
     def test_reference_selection_cannot_exceed_flow_capacity(self):
         value = _FixtureRouter().reason().value

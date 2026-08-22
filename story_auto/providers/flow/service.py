@@ -2827,72 +2827,114 @@ def _canonical_scene_continuity(shot: dict, shots: list[dict], entities: dict[st
     }
 
 
-def _apply_canonical_corrective_location(corrected_intent: dict, *, shot: dict,
-                                         entities: dict[str, dict], scene_continuity: dict) -> dict:
-    """Restore an adjacent-scene location contract without accepting relocation.
+def _canonical_locked_corrective_core(old_request: dict, *, shot: dict, entities: dict[str, dict],
+                                      scene_continuity: dict) -> dict:
+    """Derive the non-negotiable shot semantics before Gemini can reason.
 
-    A model may describe the same kitchen using different casing or word order.
-    It must retain the decisive room anchors first; a gallery, lantern room, or
-    other actual relocation remains a hard failure rather than an override.
+    This core is intentionally source-derived rather than reconstructed from a
+    failed provider prompt.  A corrective model may improve mechanics and
+    presentation, but it never owns story identity, location, continuity,
+    principal action, props, timing, or media type.
     """
-    required = str(scene_continuity.get("required_location", "")).strip()
-    if not required:
-        return corrected_intent
-    observed = _intent_terms(corrected_intent.get("location"))
-    canonical = _intent_terms(required)
-    anchors = canonical & {"kitchen", "lighthouse", "gallery", "tower", "room"}
-    if anchors and not anchors <= observed:
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
-    rewritten = dict(corrected_intent)
-    rewritten["location"] = required
-    return rewritten
+    location_entity = entities.get(shot.get("location_id"), {})
+    location_source = " ".join([
+        str(location_entity.get("name", "")),
+        *[str(item) for item in location_entity.get("constraints", []) if isinstance(item, str)],
+        str(shot.get("composition_intent", "")),
+        str(scene_continuity.get("required_location", "")),
+    ])
+    location_name = str(location_entity.get("name") or shot.get("location_id") or "").strip()
+    canonical_location = str(scene_continuity.get("required_location", "")).strip()
+    if not canonical_location and "dim kitchen" in location_source.lower() and location_name:
+        canonical_location = f"dim kitchen inside {location_name}"
+    if not canonical_location:
+        canonical_location = location_name
+    prop_names = [str(entities.get(prop_id, {}).get("name", "")).strip()
+                  for prop_id in shot.get("prop_ids", []) if isinstance(prop_id, str)]
+    prop_names = [item for item in prop_names if item]
+    continuity_requirements = []
+    previous_shot_id = scene_continuity.get("previous_shot_id")
+    if isinstance(previous_shot_id, str) and previous_shot_id:
+        continuity_requirements.append(f"Direct continuation from canonical preceding shot {previous_shot_id}.")
+    elif "continu" in str(shot.get("composition_intent", "")).lower():
+        continuity_requirements.append(f"Direct continuation of canonical shot {shot.get('shot_id')}.")
+    if canonical_location:
+        continuity_requirements.append(f"Location continuity: {canonical_location}.")
+    if prop_names:
+        continuity_requirements.append("Required props remain present: " + ", ".join(prop_names) + ".")
+    canonical_exclusions = []
+    if "kitchen" in canonical_location.lower():
+        canonical_exclusions.extend((
+            "no lantern room",
+            "no great lighthouse lens",
+            "no ocean-facing gallery",
+            "no tower/gallery interior or relocation away from the kitchen",
+        ))
+    return {
+        "logical_shot_id": shot.get("shot_id"),
+        "scene_id": shot.get("scene_id"),
+        "subject": str(shot.get("subject", "")).strip(),
+        "location": canonical_location,
+        "continuity_requirements": continuity_requirements,
+        "action": str(shot.get("action", "")).strip(),
+        "required_props": prop_names,
+        "canonical_exclusions": canonical_exclusions,
+        "target_start": old_request.get("target_start"),
+        "target_end": old_request.get("target_end"),
+        "target_duration": old_request.get("target_duration"),
+        "media_type": old_request.get("media_type"),
+    }
+
+
+def _locked_core_override_evidence(model_intent: dict, locked_core: dict) -> dict:
+    """Record attempted semantic substitutions without ever promoting them."""
+    overrides = {}
+    for field in ("subject", "location", "action", "continuity_requirements"):
+        model_value = model_intent.get(field)
+        canonical_value = locked_core.get(field)
+        if model_value != canonical_value:
+            overrides[field] = {"model_value": model_value, "canonical_value": canonical_value}
+    return overrides
+
+
+def _compile_locked_corrective_intent(model_intent: dict, locked_core: dict, *, shot: dict) -> dict:
+    """Combine a validated Gemini delta with immutable canonical semantics."""
+    compiled = dict(model_intent)
+    compiled.update({
+        "subject": locked_core["subject"],
+        "action": locked_core["action"],
+        "location": locked_core["location"],
+        "continuity_requirements": list(locked_core["continuity_requirements"]),
+        # Composition is provider-facing detail, but must begin with canonical
+        # location/continuity rather than an untrusted rewritten room or beat.
+        "composition_intent": str(shot.get("composition_intent") or locked_core["location"]),
+    })
+    compiled["exclusions"] = list(dict.fromkeys([
+        *locked_core.get("canonical_exclusions", []),
+        *[item for item in model_intent.get("exclusions", []) if isinstance(item, str)],
+    ]))
+    return compiled
 
 
 def _require_canonical_corrective_intent(*, correction: dict, corrected_intent: dict,
-                                         shot: dict, entities: dict[str, dict],
-                                         scene_continuity: dict) -> None:
-    """Fail closed unless provider-runnable semantics retain canonical shot facts."""
-    subject_terms = _intent_terms(shot.get("subject"))
-    intent_subject_terms = _intent_terms(corrected_intent.get("subject"))
-    if subject_terms and not subject_terms <= intent_subject_terms:
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "subject")
-    action_terms = _intent_terms(shot.get("action"))
-    effective_terms = _intent_terms(corrected_intent.get("action")) | _intent_terms(correction.get("prompt"))
-    if len(action_terms & effective_terms) < min(2, len(action_terms)):
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "action")
-    # A lowering action must be literal: broad "reflection" language cannot
-    # silently substitute for the state transition that the shot requires.
-    if "lower" in str(shot.get("action", "")).lower() and not any(
-            term.startswith("lower") for term in effective_terms):
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "action")
-    location = entities.get(shot.get("location_id"), {})
-    location_text = " ".join([
-        str(location.get("name", "")),
-        *[str(item) for item in location.get("constraints", []) if isinstance(item, str)],
-    ])
-    expected_location = _intent_terms(location_text)
-    effective_location = _intent_terms(corrected_intent.get("location")) | _intent_terms(correction.get("prompt"))
-    for required in ("kitchen", "lighthouse"):
-        if required in expected_location and required not in effective_location:
-            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
-    if "dim kitchen" in str(scene_continuity.get("required_location", "")).lower() and not {
-            "dim", "kitchen"} <= effective_location:
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
-    prop_text = " ".join(
-        " ".join([str(entities.get(prop_id, {}).get("name", "")),
-                   *[str(item) for item in entities.get(prop_id, {}).get("constraints", []) if isinstance(item, str)]])
-        for prop_id in shot.get("prop_ids", []) if isinstance(prop_id, str)
-    )
-    prop_terms = _intent_terms(prop_text)
-    semantic_terms = effective_terms | _intent_terms(corrected_intent.get("continuity_requirements"))
-    if prop_terms and not (prop_terms & semantic_terms):
-        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "prop")
-    if "kitchen" in expected_location:
-        continuity_terms = _intent_terms(corrected_intent.get("continuity_requirements")) | _intent_terms(
-            corrected_intent.get("composition_intent"))
-        if not ("same" in continuity_terms or "direct" in continuity_terms
-                or any(term.startswith("continu") for term in continuity_terms)):
-            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "continuity")
+                                         locked_core: dict) -> None:
+    """Fail closed unless the final runnable request exactly retains locked core."""
+    for field in ("subject", "action", "location", "continuity_requirements"):
+        if corrected_intent.get(field) != locked_core.get(field):
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", field)
+    for field in ("media_type", "target_start", "target_end", "target_duration"):
+        if correction.get(field) != locked_core.get(field):
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", field)
+    prompt_terms = _intent_terms(correction.get("prompt"))
+    for field in ("subject", "action", "location"):
+        required_terms = _intent_terms(locked_core.get(field))
+        if required_terms and not required_terms <= prompt_terms:
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", field)
+    semantic_terms = prompt_terms | _intent_terms(corrected_intent.get("continuity_requirements"))
+    for prop_name in locked_core.get("required_props", []):
+        prop_terms = _intent_terms(prop_name)
+        if prop_terms and not prop_terms <= semantic_terms:
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "prop")
 
 
 _REFERENCE_CONFLICT_CUES = (
@@ -2947,18 +2989,26 @@ def _corrective_reference_policy(corrected_intent: dict, reference_candidates: l
         cues = [cue for cue in _REFERENCE_CONFLICT_CUES if cue in evidence and (cue in context or "kitchen" in context)]
         if cues:
             conflicts.append({"entity_id": entity_id, "cues": cues})
+    effective = []
+    removed_conflicts = []
+    conflict_ids = {item["entity_id"] for item in conflicts}
+    for entity_id in selected:
+        if entity_id in conflict_ids:
+            removed_conflicts.append(entity_id)
+        elif len(effective) < capacity:
+            effective.append(entity_id)
     return {
         "reference_capacity": capacity,
         "selected_reference_entity_ids": list(selected),
-        "effective_reference_entity_ids": list(selected[:capacity]),
+        "effective_reference_entity_ids": effective,
         "conflicts": conflicts,
+        "removed_conflicting_reference_entity_ids": removed_conflicts,
     }
 
 
 def _require_valid_corrective_reference_policy(corrected_intent: dict, reference_candidates: list[dict]) -> dict:
     policy = _corrective_reference_policy(corrected_intent, reference_candidates)
-    if (len(policy["selected_reference_entity_ids"]) > policy["reference_capacity"]
-            or policy["conflicts"]):
+    if len(policy["effective_reference_entity_ids"]) > policy["reference_capacity"]:
         raise FlowError("QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID")
     return policy
 
@@ -3051,6 +3101,13 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         }
         scene_continuity = _canonical_scene_continuity(
             shot, [item for item in shot_plan.get("shots", []) if isinstance(item, dict)], entities)
+        locked_core = _canonical_locked_corrective_core(
+            old_request, shot=shot, entities=entities, scene_continuity=scene_continuity)
+        if (not all(isinstance(locked_core.get(field), str) and locked_core[field] for field in
+                    ("logical_shot_id", "subject", "location", "action", "media_type"))
+                or not isinstance(locked_core.get("continuity_requirements"), list)
+                or not locked_core["continuity_requirements"]):
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_INVALID", "locked_core")
         reference_request_by_entity = {}
         reference_candidates = []
         reference_media: list[LLMMedia] = []
@@ -3091,6 +3148,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         }
         superseded_request_snapshot = json.loads(json.dumps(old_request, ensure_ascii=False))
         canonical_context = {
+            "canonical_locked_core": locked_core,
             "shot_plan_shot": shot,
             "continuity_entities": [entities[item] for item in relevant_entity_ids if item in entities],
             "media_plan_shot": media,
@@ -3105,17 +3163,20 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             },
         }
         try:
-            corrected_intent, reasoning = plan_qc_corrective_intent(
+            model_corrective_intent, reasoning = plan_qc_corrective_intent(
                 active_router,
                 canonical_context=canonical_context,
                 reference_entity_ids=set(reference_request_by_entity),
                 reference_capacity=FLOW_REFERENCE_CAPACITY,
                 reference_media=tuple(reference_media),
             )
-            corrected_intent = _apply_canonical_corrective_location(
-                corrected_intent, shot=shot, entities=entities, scene_continuity=scene_continuity)
+            model_override_evidence = _locked_core_override_evidence(model_corrective_intent, locked_core)
+            corrected_intent = _compile_locked_corrective_intent(
+                model_corrective_intent, locked_core, shot=shot)
             reference_policy = _require_valid_corrective_reference_policy(
                 corrected_intent, reference_candidates)
+            corrected_intent["selected_reference_entity_ids"] = list(
+                reference_policy["effective_reference_entity_ids"])
             full_motion_plan = None
             motion_reasoning = None
             if correction_mode == FULL_REPLAN:
@@ -3147,8 +3208,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                 full_motion_plan=full_motion_plan,
             )
             _require_canonical_corrective_intent(
-                correction=correction, corrected_intent=corrected_intent, shot=shot, entities=entities,
-                scene_continuity=scene_continuity)
+                correction=correction, corrected_intent=corrected_intent, locked_core=locked_core)
         except QCCorrectiveReplanError as error:
             raise FlowError(error.failure_class) from error
         except Exception as error:
@@ -3198,6 +3258,9 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "supersedes_request_id": request_id,
             "correction_epoch": epoch,
             "canonical_inputs": canonical_inputs,
+            "canonical_locked_core": locked_core,
+            "non_authoritative_model_output": model_corrective_intent,
+            "non_authoritative_locked_core_overrides": model_override_evidence,
             "corrected_semantic_intent": corrected_intent,
             "semantic_delta": list(corrected_intent["semantic_delta"]),
             "correction_mode": correction_mode,
