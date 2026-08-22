@@ -108,9 +108,14 @@ def is_high_risk(action: str) -> bool:
     lowered = action.lower(); return any(term in lowered for term in HIGH_RISK_TERMS)
 
 
-def validate_motion_plan(plan: dict[str, Any], *, original_action: str) -> None:
+def validate_motion_plan(plan: dict[str, Any], *, original_action: str,
+                         required_atomic_clip_count: int | None = None) -> None:
     clips = plan.get("atomic_clips", [])
     if not clips: raise GeminiQCError("MOTION_PLAN_INVALID")
+    if (required_atomic_clip_count is not None
+            and (not isinstance(required_atomic_clip_count, int) or required_atomic_clip_count < 1
+                 or len(clips) != required_atomic_clip_count)):
+        raise GeminiQCError("MOTION_PLAN_ATOMIC_CLIP_COUNT_INVALID")
     if is_high_risk(original_action) and len(plan.get("meaningful_actions", [])) > 1 and len(clips) < 2:
         raise GeminiQCError("HIGH_RISK_ACTION_NOT_DECOMPOSED")
     for clip in clips:
@@ -119,13 +124,23 @@ def validate_motion_plan(plan: dict[str, Any], *, original_action: str) -> None:
 
 
 def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[dict[str, Any], ReasoningResult]:
-    prompt = "Decompose this production VIDEO intent into physically plausible cinematic states. Default to one meaningful action per generated clip. Split high-risk contact mechanics with cuts. Natural stillness is valid. Return JSON only. Intent:\n" + json.dumps(intent, ensure_ascii=False, sort_keys=True)
+    required_clip_count = intent.get("required_atomic_clip_count")
+    if required_clip_count is not None and (not isinstance(required_clip_count, int) or required_clip_count < 1):
+        raise GeminiQCError("MOTION_PLAN_ATOMIC_CLIP_COUNT_INVALID")
+    count_instruction = (f" Return exactly {required_clip_count} atomic clip(s); do not split this request."
+                         if required_clip_count is not None else "")
+    prompt = ("Decompose this production VIDEO intent into physically plausible cinematic states. Default to one meaningful action per generated clip. "
+              "Split high-risk contact mechanics with cuts. Natural stillness is valid."
+              + count_instruction + " Return JSON only. Intent:\n"
+              + json.dumps(intent, ensure_ascii=False, sort_keys=True))
     def accept_motion_plan(plan: dict[str, Any]) -> None:
-        validate_motion_plan(plan, original_action=str(intent.get("action", "")))
+        validate_motion_plan(plan, original_action=str(intent.get("action", "")),
+                             required_atomic_clip_count=required_clip_count)
     result = router.reason(task="motion_planning", prompt=prompt, schema=MOTION_SCHEMA, tier="HARD",
         prompt_version="motion-planner/1.0.0", schema_version=MOTION_PLAN_VERSION,
         acceptance_validator=accept_motion_plan)
-    validate_motion_plan(result.value, original_action=str(intent.get("action", "")))
+    validate_motion_plan(result.value, original_action=str(intent.get("action", "")),
+                         required_atomic_clip_count=required_clip_count)
     return result.value, result
 
 

@@ -7,16 +7,20 @@ from pathlib import Path
 from typing import Any, Callable
 import hashlib
 import json
+import re
 import shutil
 import uuid
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.planning.qc_corrective import (
+    FULL_REPLAN,
     QCCorrectiveReplanError,
+    SEMANTIC_ONLY,
     compile_qc_corrected_request,
     plan_qc_corrective_intent,
 )
 from story_auto.core.planning.service import PlanningError, validate_generation_requests
+from story_auto.core.gemini_qc import MOTION_PLAN_VERSION, plan_motion
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
@@ -2571,6 +2575,146 @@ def _video_continuity_qc_approved(entry: dict | None) -> bool:
     return all(str(value).upper() == "PASS" for field, value in results.items() if field != "CONTINUITY")
 
 
+def _confirmed_selected_attempt(entry: dict | None) -> bool:
+    """A corrective epoch can only start from attributed selected bytes."""
+    if not isinstance(entry, dict) or not isinstance(entry.get("selected_asset"), dict):
+        return False
+    selected_attempt = entry["selected_asset"].get("attempt")
+    return isinstance(entry.get("attempts"), list) and any(
+        isinstance(attempt, dict)
+        and attempt.get("attempt") == selected_attempt
+        and attempt.get("attribution_state") == "CONFIRMED"
+        for attempt in entry["attempts"]
+    )
+
+
+def _video_temporal_qc_rejected(entry: dict | None) -> bool:
+    if not isinstance(entry, dict) or entry.get("media_type") != "VIDEO":
+        return False
+    selected = entry.get("selected_asset")
+    if not isinstance(selected, dict) or selected.get("temporal_qc") != "REJECTED":
+        return False
+    reviews = selected.get("temporal_reviews")
+    latest = reviews[-1] if isinstance(reviews, list) and reviews else None
+    report = latest.get("report") if isinstance(latest, dict) else None
+    return isinstance(report, dict) and str(report.get("state", "")).startswith("REJECT_")
+
+
+def _latest_temporal_qc_rejection(entry: dict) -> dict:
+    selected = entry.get("selected_asset")
+    reviews = selected.get("temporal_reviews") if isinstance(selected, dict) else None
+    latest = reviews[-1] if isinstance(reviews, list) and reviews else None
+    if not isinstance(latest, dict) or not isinstance(latest.get("report"), dict):
+        raise FlowError("QC_CORRECTIVE_REPLAN_NOT_ELIGIBLE")
+    return {
+        "status": "REJECTED",
+        "failure_class": entry.get("failure_class"),
+        "report": latest["report"],
+        "selected_asset_path": selected.get("path"),
+        "selected_asset_sha256": selected.get("sha256"),
+    }
+
+
+def _intent_terms(value: Any) -> set[str]:
+    return {term for term in re.findall(r"[a-z0-9]+", str(value).lower()) if len(term) > 2}
+
+
+def _persisted_action_contradicts_shot(request: dict, shot: dict) -> bool:
+    """Detect an explicit failed-request action/state contradiction deterministically."""
+    prompt = str(request.get("prompt", "")).lower()
+    action = str(shot.get("action", "")).lower()
+    # These concrete state transitions are material generation semantics, not
+    # style words.  If the canonical action requires one yet the provider
+    # prompt omits it (or states its opposite), a preserved-motion correction
+    # would reintroduce the defect.
+    for cue in ("lower", "raise", "open", "close", "pick", "place", "lift", "walk", "turn"):
+        if cue in action and cue not in prompt:
+            return True
+    return ("lower" in action and ("elevated" in prompt or "remain still" in prompt))
+
+
+def _qc_corrective_mode(request: dict, entry: dict, shot: dict) -> str | None:
+    if request.get("media_type") != "VIDEO":
+        return SEMANTIC_ONLY if _terminal_qc_rejection(entry) else None
+    if _video_temporal_qc_rejected(entry) or _persisted_action_contradicts_shot(request, shot):
+        return FULL_REPLAN if _confirmed_selected_attempt(entry) else None
+    return SEMANTIC_ONLY if _terminal_qc_rejection(entry) and _video_continuity_qc_approved(entry) else None
+
+
+def _canonical_scene_continuity(shot: dict, shots: list[dict], entities: dict[str, dict]) -> dict:
+    """Derive only adjacent, same-scene continuity facts from the shot plan."""
+    scene_id = shot.get("scene_id")
+    start = shot.get("start")
+    if not isinstance(scene_id, str) or not isinstance(start, (int, float)):
+        return {}
+    predecessors = [item for item in shots if isinstance(item, dict)
+                    and item is not shot and item.get("scene_id") == scene_id
+                    and isinstance(item.get("end"), (int, float)) and item["end"] <= start + .05]
+    if not predecessors:
+        return {}
+    previous = max(predecessors, key=lambda item: float(item["end"]))
+    source_text = " ".join(str(previous.get(field, "")) for field in (
+        "action", "camera_intent", "composition_intent", "previous_shot_context", "next_shot_handoff"))
+    location = entities.get(shot.get("location_id"), {})
+    required_location = ""
+    if "dim kitchen" in source_text.lower():
+        required_location = f"dim kitchen inside {location.get('name') or shot.get('location_id')}"
+    return {
+        "previous_shot_id": previous.get("shot_id"),
+        "previous_shot_action": previous.get("action"),
+        "previous_shot_camera_intent": previous.get("camera_intent"),
+        "previous_shot_composition_intent": previous.get("composition_intent"),
+        "required_location": required_location,
+    }
+
+
+def _require_canonical_corrective_intent(*, correction: dict, corrected_intent: dict,
+                                         shot: dict, entities: dict[str, dict],
+                                         scene_continuity: dict) -> None:
+    """Fail closed unless provider-runnable semantics retain canonical shot facts."""
+    subject_terms = _intent_terms(shot.get("subject"))
+    intent_subject_terms = _intent_terms(corrected_intent.get("subject"))
+    if subject_terms and not subject_terms <= intent_subject_terms:
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "subject")
+    action_terms = _intent_terms(shot.get("action"))
+    effective_terms = _intent_terms(corrected_intent.get("action")) | _intent_terms(correction.get("prompt"))
+    if len(action_terms & effective_terms) < min(2, len(action_terms)):
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "action")
+    # A lowering action must be literal: broad "reflection" language cannot
+    # silently substitute for the state transition that the shot requires.
+    if "lower" in str(shot.get("action", "")).lower() and not any(
+            term.startswith("lower") for term in effective_terms):
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "action")
+    location = entities.get(shot.get("location_id"), {})
+    location_text = " ".join([
+        str(location.get("name", "")),
+        *[str(item) for item in location.get("constraints", []) if isinstance(item, str)],
+    ])
+    expected_location = _intent_terms(location_text)
+    effective_location = _intent_terms(corrected_intent.get("location")) | _intent_terms(correction.get("prompt"))
+    for required in ("kitchen", "lighthouse"):
+        if required in expected_location and required not in effective_location:
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
+    if "dim kitchen" in str(scene_continuity.get("required_location", "")).lower() and not {
+            "dim", "kitchen"} <= effective_location:
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
+    prop_text = " ".join(
+        " ".join([str(entities.get(prop_id, {}).get("name", "")),
+                   *[str(item) for item in entities.get(prop_id, {}).get("constraints", []) if isinstance(item, str)]])
+        for prop_id in shot.get("prop_ids", []) if isinstance(prop_id, str)
+    )
+    prop_terms = _intent_terms(prop_text)
+    semantic_terms = effective_terms | _intent_terms(corrected_intent.get("continuity_requirements"))
+    if prop_terms and not (prop_terms & semantic_terms):
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "prop")
+    if "kitchen" in expected_location:
+        continuity_terms = _intent_terms(corrected_intent.get("continuity_requirements")) | _intent_terms(
+            corrected_intent.get("composition_intent"))
+        if not ("same" in continuity_terms or "direct" in continuity_terms
+                or any(term.startswith("continu") for term in continuity_terms)):
+            raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "continuity")
+
+
 _REFERENCE_CONFLICT_CUES = (
     "lantern room", "lantern-room", "great lighthouse lens", "great lens",
     "ocean-facing gallery", "ocean gallery", "tower/gallery", "tower gallery",
@@ -2695,8 +2839,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             raise FlowError("QC_CORRECTIVE_REPLAN_ALREADY_COMPLETED")
         media_type = old_request.get("media_type")
         if (old_request.get("purpose") != "SHOT" or media_type not in {"IMAGE", "VIDEO"}
-                or not _terminal_qc_rejection(old_entry)
-                or media_type == "VIDEO" and not _video_continuity_qc_approved(old_entry)):
+                or not isinstance(old_entry, dict)):
             raise FlowError("QC_CORRECTIVE_REPLAN_NOT_ELIGIBLE")
         if _direct_qc_corrective_child_ids(paths, project_id, request_id) != []:
             raise FlowError("QC_CORRECTIVE_REPLAN_ALREADY_COMPLETED")
@@ -2714,6 +2857,9 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         if (not isinstance(shot, dict) or not isinstance(media, dict)
                 or media.get("media_type") != media_type):
             raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_INVALID")
+        correction_mode = _qc_corrective_mode(old_request, old_entry, shot)
+        if correction_mode is None:
+            raise FlowError("QC_CORRECTIVE_REPLAN_NOT_ELIGIBLE")
         relevant_entity_ids = list(dict.fromkeys(
             shot.get("character_ids", []) + shot.get("prop_ids", [])
             + ([shot["location_id"]] if shot.get("location_id") else [])
@@ -2723,6 +2869,8 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             for kind in ("characters", "locations", "props")
             for item in continuity.get(kind, []) if isinstance(item, dict)
         }
+        scene_continuity = _canonical_scene_continuity(
+            shot, [item for item in shot_plan.get("shots", []) if isinstance(item, dict)], entities)
         reference_request_by_entity = {}
         reference_candidates = []
         reference_media: list[LLMMedia] = []
@@ -2750,7 +2898,9 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         original_prompt = root_entry.get("historical_prompt")
         if not isinstance(original_prompt, str) or not original_prompt.strip():
             original_prompt = old_request.get("prompt")
-        latest_rejection = _latest_qc_rejection(old_entry)
+        latest_rejection = (_latest_temporal_qc_rejection(old_entry)
+                            if correction_mode == FULL_REPLAN and _video_temporal_qc_rejected(old_entry)
+                            else _latest_qc_rejection(old_entry))
         original_logical_request = {
             "root_request_id": root_request_id,
             "purpose": old_request.get("purpose"),
@@ -2764,6 +2914,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "shot_plan_shot": shot,
             "continuity_entities": [entities[item] for item in relevant_entity_ids if item in entities],
             "media_plan_shot": media,
+            "adjacent_scene_continuity": scene_continuity,
             "original_logical_request_intent": original_logical_request,
             "latest_qc_rejection": latest_rejection,
             "reference_candidates": reference_candidates,
@@ -2783,11 +2934,39 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             )
             reference_policy = _require_valid_corrective_reference_policy(
                 corrected_intent, reference_candidates)
+            full_motion_plan = None
+            motion_reasoning = None
+            if correction_mode == FULL_REPLAN:
+                motion_intent = {
+                    "schema_version": MOTION_PLAN_VERSION,
+                    "request_id": old_request["request_id"],
+                    "shot_id": shot_id,
+                    "target_start": old_request.get("target_start"),
+                    "target_end": old_request.get("target_end"),
+                    "target_duration": old_request.get("target_duration"),
+                    "subject": corrected_intent["subject"],
+                    "action": corrected_intent["action"],
+                    "location": corrected_intent["location"],
+                    "camera_intent": shot.get("camera_intent"),
+                    "composition_intent": corrected_intent["composition_intent"],
+                    "visual_emotional_purpose": shot.get("visual_emotional_purpose"),
+                    "reference_asset_ids": list(corrected_intent["selected_reference_entity_ids"]),
+                    # A corrective transaction has one fresh child.  Ask the
+                    # shared planner for mechanics that fit that exact Flow
+                    # request rather than silently dropping planned clips.
+                    "required_atomic_clip_count": 1,
+                }
+                full_motion_plan, motion_reasoning = plan_motion(active_router, motion_intent)
             correction = compile_qc_corrected_request(
                 old_request,
                 corrected_intent,
                 reference_request_by_entity=reference_request_by_entity,
+                correction_mode=correction_mode,
+                full_motion_plan=full_motion_plan,
             )
+            _require_canonical_corrective_intent(
+                correction=correction, corrected_intent=corrected_intent, shot=shot, entities=entities,
+                scene_continuity=scene_continuity)
         except QCCorrectiveReplanError as error:
             raise FlowError(error.failure_class) from error
         except Exception as error:
@@ -2839,12 +3018,23 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "canonical_inputs": canonical_inputs,
             "corrected_semantic_intent": corrected_intent,
             "semantic_delta": list(corrected_intent["semantic_delta"]),
+            "correction_mode": correction_mode,
             "reference_selection_delta": reference_delta,
             "reference_policy": reference_policy,
             "deterministic_compiler": (
                 "compile_flow_motion_prompt" if media_type == "VIDEO" else "compile_image_prompt"
             ),
         }
+        if motion_reasoning is not None:
+            provenance["motion_replan"] = {
+                "schema_version": MOTION_PLAN_VERSION,
+                "model": motion_reasoning.model,
+                "router_input_hash": motion_reasoning.input_hash,
+                "cache_hit": motion_reasoning.cache_hit,
+                "fallback_count": motion_reasoning.fallback_count,
+                "request_count": motion_reasoning.request_count,
+                "plan": full_motion_plan,
+            }
         for field in (
             "replacement_of", "replaces_request_id", "replacement_reason", "replacement_epoch",
             "replays_unresolved_request_id", "replay_epoch", "replay_creation_transaction_id",

@@ -79,6 +79,58 @@ class _ConflictingReferenceRouter(_FixtureRouter):
         return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1, "e" * 64)
 
 
+class _FullReplanRouter(_FixtureRouter):
+    """Fixture for a temporal-rejected VIDEO that must receive fresh mechanics."""
+    def reason(self, **kwargs):
+        self.calls.append(kwargs)
+        if kwargs.get("task") == "motion_planning":
+            value = {
+                "start_state": "Elias holds the official sealed letter at chest height in the dim kitchen",
+                "end_state": "Elias has lowered the sealed letter while remaining in the dim kitchen",
+                "meaningful_actions": ["Elias slowly lowers the official sealed letter"],
+                "interaction_objects": ["official sealed letter"],
+                "hand_object_contact": "Elias keeps both hands on the letter throughout the slow lowering motion",
+                "action_dependencies": ["the letter stays in Elias's hands"],
+                "physical_complexity": "LOW",
+                "anatomy_risk": "LOW",
+                "looping_risk": "LOW",
+                "atomic_clips": [{
+                    "start_state": "Elias holds the official sealed letter at chest height in the dim kitchen",
+                    "action": "Elias slowly lowers the official sealed letter",
+                    "end_state": "the sealed letter rests lower in Elias's hands",
+                    "natural_stillness": "Elias pauses naturally after lowering the letter",
+                }],
+            }
+        else:
+            value = {
+                "subject": "Elias Venn",
+                "action": "Elias slowly lowers the official sealed letter in quiet reflection",
+                "location": "the dim kitchen inside Marrow Bay Lighthouse",
+                "composition_intent": "direct continuation in the same dim kitchen scene",
+                "continuity_requirements": [
+                    "direct continuation from the preceding kitchen shot",
+                    "Elias remains with the official sealed letter",
+                ],
+                "exclusions": [
+                    "no lantern room",
+                    "no great lighthouse lens",
+                    "no ocean-facing gallery or tower/gallery relocation",
+                ],
+                "selected_reference_entity_ids": [],
+                "semantic_delta": [
+                    "restored the dim kitchen continuation",
+                    "restored the required slow lowering action",
+                    "removed the conflicting lantern-room reference",
+                ],
+                "reference_selection_rationale": "No available reference is compatible with the dim kitchen.",
+            }
+        validator = kwargs.get("acceptance_validator")
+        if validator:
+            validator(value)
+        return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1,
+                               "d" * 64)
+
+
 class Goal43QcCorrectiveReplanTests(unittest.TestCase):
     ROOT = "req_9bf6057af18642d39faf"
     REF = "req_elias_lantern_reference"
@@ -316,6 +368,107 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
 
     def test_sh_0006_video_correction_preserves_approved_motion_evidence(self):
         self._assert_sh_0006_append_only_correction("VIDEO")
+
+    def test_sh_0007_temporal_rejection_uses_full_replan_and_never_attaches_conflicting_reference(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, media_type="VIDEO")
+            requests_data = read_json(paths.artifact_path("output/generation_requests.json"))
+            char_reference, request = requests_data["requests"]
+            prop_reference = copy.deepcopy(char_reference)
+            prop_reference.update({
+                "request_id": "req_prop_letter_reference", "fingerprint": "prop-reference-fingerprint",
+                "reference_type": "PROP_REFERENCE", "entity_id": "prop_letter",
+                "prompt": "Official sealed letter under the dim kitchen brass clock",
+            })
+            location_reference = copy.deepcopy(char_reference)
+            location_reference.update({
+                "request_id": "req_kitchen_reference", "fingerprint": "kitchen-reference-fingerprint",
+                "reference_type": "LOCATION_REFERENCE", "entity_id": "loc_marrow_bay_lighthouse",
+                "prompt": "Marrow Bay Lighthouse kitchen with a brass clock",
+            })
+            request.update({
+                "shot_id": "sh_0007",
+                "prompt": "Elias holds the letter elevated near chest level and remains still in broad lighthouse context.",
+                "reference_asset_ids": ["char_elias_venn", "prop_letter", "loc_marrow_bay_lighthouse"],
+                "depends_on": [char_reference["request_id"], prop_reference["request_id"], location_reference["request_id"]],
+            })
+            requests_data["requests"] = [char_reference, prop_reference, location_reference, request]
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests_data)
+            continuity = read_json(paths.artifact_path("output/continuity_bible.json"))
+            continuity["locations"][0]["constraints"] = ["sh_0007 continues in the dim kitchen inside Marrow Bay Lighthouse"]
+            continuity["props"] = [{"entity_id": "prop_letter", "name": "official sealed letter",
+                                    "constraints": ["the letter remains sealed in Elias's hands"]}]
+            atomic_write_json(paths.artifact_path("output/continuity_bible.json"), continuity)
+            shot_plan = read_json(paths.artifact_path("output/shot_plan.json"))
+            shot_plan["shots"][0].update({
+                "shot_id": "sh_0007",
+                "action": "Elias slowly lowers the official sealed letter as he stands still in quiet reflection.",
+                "prop_ids": ["prop_letter"],
+                "composition_intent": "direct continuation in the dim kitchen from sh_0006",
+            })
+            preceding = copy.deepcopy(shot_plan["shots"][0])
+            preceding.update({
+                "shot_id": "sh_0006", "start": 32.0, "end": 40.0,
+                "action": "Elias examines the official sealed letter in the dim kitchen.",
+                "camera_intent": "medium framing against the dim kitchen window",
+                "composition_intent": "dim kitchen continuity before sh_0007",
+            })
+            shot_plan["shots"] = [preceding, shot_plan["shots"][0]]
+            atomic_write_json(paths.artifact_path("output/shot_plan.json"), shot_plan)
+            media_plan = read_json(paths.artifact_path("output/media_plan.json"))
+            media_plan["shots"][0].update({"shot_id": "sh_0007", "selected_request_id": self.ROOT})
+            atomic_write_json(paths.artifact_path("output/media_plan.json"), media_plan)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            root_entry = next(item for item in manifest["requests"] if item["request_id"] == self.ROOT)
+            root_entry.update({"media_type": "VIDEO", "failure_class": "REJECT_BACKGROUND", "quality_reviews": []})
+            root_entry["selected_asset"].update({
+                "temporal_qc": "REJECTED",
+                "temporal_reviews": [{"report": {"state": "REJECT_BACKGROUND", "eligible": False}}],
+            })
+            for reference in (prop_reference, location_reference):
+                manifest["requests"].append({
+                    "request_id": reference["request_id"], "request_identity_sha256": reference["fingerprint"],
+                    "related_identity": reference["entity_id"], "media_type": "IMAGE", "provider": "google_flow",
+                    "prompt_sha256": reference["fingerprint"], "reference_asset_hashes": [], "attempts": [],
+                    "provider_submissions": 1, "status": "SUCCEEDED",
+                    "selected_asset": {"path": f"assets/image/{reference['request_id']}.png", "sha256": "e" * 64},
+                })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            before = copy.deepcopy(root_entry)
+
+            router = _FullReplanRouter()
+            result = qc_corrective_replan(runtime.root, config.project_id, self.ROOT,
+                                          reason="full replan after temporal background rejection", router=router)
+            self.assertEqual(len(router.calls), 2)
+            self.assertIn("adjacent_scene_continuity", router.calls[0]["prompt"])
+            self.assertIn("dim kitchen inside Marrow Bay Lighthouse", router.calls[0]["prompt"])
+            self.assertIn('"required_atomic_clip_count": 1', router.calls[1]["prompt"])
+            correction_id = result["correction_request_id"]
+            entries = {item["request_id"]: item for item in read_json(
+                paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            correction = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                              if item["request_id"] == correction_id)
+            lowered = correction["prompt"].lower()
+            self.assertEqual(correction["media_type"], "VIDEO")
+            self.assertIn("dim kitchen", lowered)
+            self.assertIn("slowly lowers the official sealed letter", lowered)
+            self.assertNotIn("remain still", lowered.split("one visible action only:", 1)[1].split("end state:", 1)[0])
+            self.assertIn("no lantern room", lowered)
+            self.assertEqual(correction["reference_asset_ids"], [])
+            self.assertEqual(correction["depends_on"], [])
+            self.assertEqual(correction["corrective_replan_provenance"]["correction_mode"], "FULL_REPLAN")
+            self.assertIn("motion_replan", correction["corrective_replan_provenance"])
+            self.assertEqual(correction["corrective_motion_evidence"]["scope"], "FULL_REPLAN")
+            self.assertEqual(entries[correction_id]["attempts"], [])
+            self.assertEqual(entries[correction_id]["provider_submissions"], 0)
+            self.assertEqual(entries[self.ROOT]["attempts"], before["attempts"])
+            self.assertEqual(entries[self.ROOT]["selected_asset"], before["selected_asset"])
+            self.assertFalse(_provider_generation_retry_authorized(entries[self.ROOT]))
+            again = qc_corrective_replan(runtime.root, config.project_id, self.ROOT,
+                                         reason="idempotent full-replan retry", router=router)
+            self.assertTrue(again["idempotent"])
+            self.assertEqual(again["correction_request_id"], correction_id)
+            self.assertEqual(len(router.calls), 2)
 
     def test_correction_fails_closed_without_confirmed_current_qc_rejection(self):
         mutations = {
