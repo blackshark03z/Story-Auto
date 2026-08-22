@@ -473,9 +473,7 @@ def _stable_surface(dom, media_type: str, *, seed: list[dict] | None = None,
         else:
             stable = 0
         if poll_observer:
-            # Pre-dispatch evidence receives the accumulated surface so the
-            # latest durable poll cannot forget an asset observed earlier.
-            poll_observer(surface if isinstance(surface, dict) else {}, union, stable)
+            poll_observer(surface if isinstance(surface, dict) else {}, records, stable)
         if quiescent:
             return union, stable
         last_fingerprint = fingerprint
@@ -799,6 +797,7 @@ class LiveFlowGenerator:
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
         self._poll_timeline = ProviderPollEvidenceTimeline()
+        self._pre_dispatch_asset_records: list[dict] = []
 
     @staticmethod
     def _fetch_bytes(page, url: str) -> bytes:
@@ -809,6 +808,7 @@ class LiveFlowGenerator:
 
     def _reset_poll_evidence(self, path: Path) -> None:
         self._poll_timeline = ProviderPollEvidenceTimeline(path)
+        self._pre_dispatch_asset_records = []
         self.last_settings = {}
         self._sync_poll_evidence()
 
@@ -872,11 +872,13 @@ class LiveFlowGenerator:
                      bind_authoritative_output: bool = True) -> dict:
         baseline_projection = _identity_projection(baseline, media_type)
         current_projection = _identity_projection(current, media_type)
-        pre_dispatch_records = (
-            _merge_surface_records(baseline, current)
-            if phase.startswith("PRE_DISPATCH") else baseline
-        )
-        pre_dispatch_assets = _asset_identity_projection(pre_dispatch_records)
+        if phase.startswith("PRE_DISPATCH"):
+            self._pre_dispatch_asset_records = _merge_surface_records(
+                self._pre_dispatch_asset_records, baseline, current,
+            )
+        elif not self._pre_dispatch_asset_records:
+            self._pre_dispatch_asset_records = _merge_surface_records(baseline)
+        pre_dispatch_assets = _asset_identity_projection(self._pre_dispatch_asset_records)
         baseline_ids = {item["identity"] for item in baseline_projection}
         delta = [item for item in current_projection if item["identity"] not in baseline_ids]
         candidates = observation.candidate_identities if observation is not None else delta

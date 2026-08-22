@@ -292,6 +292,10 @@ class Goal20PollEvidenceTests(unittest.TestCase):
 
             self.assertEqual(stable, 2)
             self.assertEqual(
+                generator.last_settings["provider_poll_timeline"][-1]["current_identity_set"],
+                [],
+            )
+            self.assertEqual(
                 generator.last_settings["provider_poll_timeline"][-1]["pre_dispatch_asset_identity_set"],
                 [{"identity": "asset:asset-a", "asset_id": "asset-a"}],
             )
