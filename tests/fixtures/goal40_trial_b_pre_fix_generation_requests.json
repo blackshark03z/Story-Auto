@@ -1,0 +1,41 @@
+{
+  "fixture_schema": "story-auto-goal40-trial-b-pre-fix/1.0.0",
+  "render_mode": "hybrid_hook",
+  "logical_visuals": 16,
+  "video_requests": 8,
+  "provider_submissions": 0,
+  "generation_manifest_present": false,
+  "generation_requests": {
+    "schema_version": "story-auto-generation-requests/1.0.0",
+    "project_id": "prj_goal40_trial_b_sanitized",
+    "prompt_version": "story-auto-generation-prompt/2.8.0",
+    "provider_execution_authorized": false,
+    "review_status": "VALIDATED",
+    "requests": [
+      {"request_id":"req_pref_fix_01","purpose":"SHOT","shot_id":"sh_0001","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_02","purpose":"SHOT","shot_id":"sh_0002","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_03","purpose":"SHOT","shot_id":"sh_0003","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_04","purpose":"SHOT","shot_id":"sh_0004","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_05","purpose":"SHOT","shot_id":"sh_0005","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_06","purpose":"SHOT","shot_id":"sh_0006","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_07","purpose":"SHOT","shot_id":"sh_0007","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_08","purpose":"SHOT","shot_id":"sh_0008","media_type":"VIDEO"},
+      {"request_id":"req_pref_fix_09","purpose":"SHOT","shot_id":"sh_0009","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_10","purpose":"SHOT","shot_id":"sh_0010","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_11","purpose":"SHOT","shot_id":"sh_0011","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_12","purpose":"SHOT","shot_id":"sh_0012","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_13","purpose":"SHOT","shot_id":"sh_0013","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_14","purpose":"SHOT","shot_id":"sh_0014","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_15","purpose":"SHOT","shot_id":"sh_0015","media_type":"IMAGE"},
+      {"request_id":"req_pref_fix_16","purpose":"SHOT","shot_id":"sh_0016","media_type":"IMAGE"}
+    ]
+  },
+  "generation_request_checkpoint": {
+    "schema_version": "story-auto-checkpoint/1.0.0",
+    "fingerprint": "sanitized-pre-fix-fingerprint-without-motion-plan-version",
+    "status": "SUCCESS",
+    "outputs": ["output/generation_requests.json"],
+    "producer_version": "story-auto-generation-prompt/2.8.0",
+    "updated_at": "2026-08-22T06:45:10+00:00"
+  }
+}

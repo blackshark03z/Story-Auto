@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,7 +16,8 @@ from story_auto.core.planning.service import (PlanningError, apply_motion_plans,
     compile_generation_requests, compile_media_plan)
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.visual import compile_video_prompt
-from story_auto.providers.llm import GeminiProvider, GeminiProviderError, LLMResponse
+from story_auto.providers.llm import (GeminiProvider, GeminiProviderError,
+                                      LLMResponse, ReasoningResult)
 
 
 class FakeGemini:
@@ -31,6 +33,19 @@ class FakeGemini:
 
 
 class FakeVisualGemini(FakeGemini):
+    def reason(self, **kwargs):
+        self.calls.append(kwargs)
+        intent = json.loads(kwargs["prompt"].split("Intent:\n", 1)[1])
+        action = intent["action"]
+        value = {"start_state":"ready", "end_state":"action complete",
+                 "meaningful_actions":[action], "interaction_objects":[],
+                 "hand_object_contact":"none", "action_dependencies":[],
+                 "physical_complexity":"LOW", "anatomy_risk":"LOW", "looping_risk":"LOW",
+                 "atomic_clips":[{"start_state":"ready", "action":action,
+                                  "end_state":"action complete", "natural_stillness":"brief pause"}]}
+        return ReasoningResult(value, "fake-gemini", "fixture-key", "fixture-project",
+                               False, 0, 0, "fixture-motion-input")
+
     def generate_structured(self, request):
         if request.stage == "shot_plan":
             self.calls.append(request)
@@ -126,7 +141,8 @@ class PlanningTests(unittest.TestCase):
             self.assertTrue(all(request["visual_policy"]["realism_style"] == "NATURAL_SOFT_REALISM" for request in requests["requests"]))
             self.assertTrue(all(request.get("output_count") == 1 for request in requests["requests"] if request["media_type"] == "IMAGE"))
             video_prompts=[request["prompt"] for request in requests["requests"] if request["media_type"] == "VIDEO"]
-            self.assertTrue(all("Subject motion:" in prompt and "Preserve the supplied reference image" in prompt for prompt in video_prompts))
+            self.assertTrue(all("One visible action only:" in prompt and "Physically causal motion" in prompt for prompt in video_prompts))
+            self.assertTrue(all(request.get("motion_risk_analysis") for request in requests["requests"] if request["media_type"] == "VIDEO"))
             self.assertTrue(all("bottom-right provider-mark safe area" in request["prompt"] for request in requests["requests"]))
             self.assertTrue(all(request["provider"] == "google_flow" and request["output_count"] == 1 for request in requests["requests"]))
             self.assertTrue(all("masterpiece" not in request["prompt"].lower() and "8k" not in request["prompt"].lower() for request in requests["requests"]))
@@ -157,6 +173,10 @@ class PlanningTests(unittest.TestCase):
         settings={"hook_seconds":55.0,"motion_spike_threshold":8,"overrides":{},"max_attempts":2,"aspect_ratio":"16:9","large_batch_request_threshold":20,"provider_video_clip_seconds":.75}
         media=compile_media_plan("prj_fullvideo",shot_plan,"full_video_ai",settings)
         requests=compile_generation_requests("prj_fullvideo",shot_plan,media,continuity,settings)
+        base_parts=[item for item in requests["requests"] if item.get("purpose")=="SHOT"]
+        clip=lambda action:{"start_state":"still","action":action,"end_state":"changed","natural_stillness":"brief pause"}
+        motion={"records":[{"request_id":item["request_id"],"analysis":{"physical_complexity":"LOW","anatomy_risk":"LOW","looping_risk":"LOW","interaction_objects":[],"hand_object_contact":"none","atomic_clips":[clip("walks through the hall")]}} for item in base_parts]}
+        requests=apply_motion_plans(requests,shot_plan,motion)
         parts=[item for item in requests["requests"] if item.get("purpose")=="SHOT"]
         self.assertEqual(([item["part_index"] for item in parts],[round(item["target_duration"],2) for item in parts]),([1,2,3],[.75,.75,.5]))
         self.assertTrue(all(item["media_type"]=="VIDEO" and item["requirement"]=="REQUIRED" for item in parts))

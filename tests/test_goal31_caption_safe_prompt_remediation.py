@@ -43,7 +43,7 @@ def ambient_brief() -> dict:
 class Goal31CaptionSafePromptTests(unittest.TestCase):
     def test_current_compilers_preserve_breathing_room_without_editorial_overlay_instruction(self):
         self.assertEqual((GENERATION_PROMPT_VERSION, AMBIENT_GENERATION_PROMPT_VERSION),
-                         ("story-auto-generation-prompt/2.8.0", "story-auto-ambient-image-prompt/2.1.0"))
+                         ("story-auto-generation-prompt/2.9.0", "story-auto-ambient-image-prompt/2.1.0"))
         brief = ambient_brief()
         ambient = compile_ambient_image_prompt(
             brief, dict(DEFAULT_VISUAL_POLICY),

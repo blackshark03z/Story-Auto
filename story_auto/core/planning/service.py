@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
-from story_auto.core.checkpoint import CheckpointStore, fingerprint
+from story_auto.core.checkpoint import CheckpointStore, canonical_json, fingerprint
 from story_auto.core.content import narration_hash, parse_content_markdown
-from story_auto.core.gemini_qc import MOTION_PLAN_VERSION, compile_flow_motion_prompt
+from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, GeminiQCError,
+                                       compile_flow_motion_prompt, plan_motion,
+                                       validate_motion_plan)
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import (
@@ -40,7 +42,7 @@ TIMELINE_PROMPT_VERSION = "story-auto-timeline-prompt/1.1.0"
 CONTINUITY_PROMPT_VERSION = "story-auto-continuity-prompt/1.0.0"
 SHOT_PROMPT_VERSION = "story-auto-shot-prompt/1.1.0"
 MEDIA_POLICY_VERSION = "story-auto-media-policy/1.0.0"
-GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.8.0"
+GENERATION_PROMPT_VERSION = "story-auto-generation-prompt/2.9.0"
 SHOT_SCHEMA_VERSION = "story-auto-shot-plan/1.0.0"
 MEDIA_SCHEMA_VERSION = "story-auto-media-plan/1.0.0"
 REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
@@ -367,6 +369,7 @@ def validate_media_plan(value: Any, shot_plan: dict[str, Any]) -> None:
         if not hook or any(m["media_type"] != "VIDEO" or m["requirement"] != "REQUIRED" for m in hook): raise PlanningError("HYBRID_HOOK_POLICY_INVALID")
 
 def _request_id(payload: dict[str, Any]) -> str: return "req_" + _hash_text(repr(sorted(payload.items())))[:20]
+def _canonical_request_id(payload: dict[str, Any]) -> str: return "req_" + _hash_text(canonical_json(payload))[:20]
 def _generation_media_identity(media: dict[str, Any], *, ambient: bool) -> dict[str, Any]:
     if not ambient: return media
     return {key: media.get(key) for key in ("shot_id", "media_type", "requirement", "target_duration", "fallback_policy", "reference_strategy", "generation_priority")}
@@ -446,12 +449,14 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
             shot_identity = brief if ambient else shot
             seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot_identity,"media":_generation_media_identity(media,ambient=ambient),"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION}
             if ambient: seed["ambient_style"] = ambient_style
-            request_id = _request_id(seed)
+            request_id = _canonical_request_id(seed) if media["media_type"] == "VIDEO" else _request_id(seed)
             if media["media_type"] == "IMAGE":
                 prompt = _compile_ambient_prompt(brief, visual_policy, style_directive) if ambient else compile_image_prompt(intent, visual_policy)
             else:
                 prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
-            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":_hash_text(repr(seed)),**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
+            request_fingerprint = (_hash_text(canonical_json(seed)) if media["media_type"] == "VIDEO"
+                                   else _hash_text(repr(seed)))
+            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":request_fingerprint,**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
             part_start = part_end
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
@@ -478,6 +483,7 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
             part = {key:value for key,value in request.items() if key not in {"request_id","fingerprint","part_index","part_count","target_start","target_end","target_duration","prompt"}}
             part_start = start + index * step; part_end = end if index == len(clips)-1 else start + (index+1) * step
             part.update({"target_start":part_start,"target_end":part_end,"target_duration":part_end-part_start,
+                "_motion_source_request_id":request["request_id"],
                 "prompt":compile_flow_motion_prompt(subject=shot["subject"], location=shot.get("location_id") or "story location",
                     clip=clip, duration=part_end-part_start),
                 "motion_risk_analysis":{"schema_version":MOTION_PLAN_VERSION,"source_request_id":request["request_id"],
@@ -485,15 +491,27 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
                     "looping_risk":analysis.get("looping_risk"),"interaction_objects":analysis.get("interaction_objects",[]),
                     "hand_object_contact":analysis.get("hand_object_contact"),"atomic_clip":clip}})
             rewritten.append(part)
+    prior_ids: dict[int, str] = {
+        id(request): request.pop("_motion_source_request_id", request.get("request_id"))
+        for request in rewritten
+    }
     by_shot: dict[str, list[dict[str, Any]]] = {}
     for request in rewritten:
         if request.get("purpose") == "SHOT": by_shot.setdefault(request["shot_id"], []).append(request)
+    replacements: dict[str, list[str]] = {}
     for parts in by_shot.values():
         parts.sort(key=lambda item: float(item["target_start"]))
         for index, request in enumerate(parts, 1):
+            prior_id = prior_ids[id(request)]
             request["part_index"], request["part_count"] = index, len(parts)
             seed = {key:value for key,value in request.items() if key not in {"request_id","fingerprint"}}
-            request["request_id"] = _request_id(seed); request["fingerprint"] = _hash_text(repr(sorted(seed.items())))
+            request["request_id"] = _canonical_request_id(seed); request["fingerprint"] = _hash_text(canonical_json(seed))
+            replacements.setdefault(prior_id, []).append(request["request_id"])
+    for request in rewritten:
+        dependencies: list[str] = []
+        for dependency in request.get("depends_on", []):
+            dependencies.extend(replacements.get(dependency, [dependency]))
+        request["depends_on"] = list(dict.fromkeys(dependencies))
     rewritten.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     result = dict(generation_requests); result["requests"] = rewritten
     estimate = dict(result.get("guardrail_estimate", {}))
@@ -507,6 +525,56 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
     result["guardrail_estimate"] = estimate
     result["motion_plan_version"] = MOTION_PLAN_VERSION
     return result
+
+
+def _motion_intent(request: dict[str, Any], shot: dict[str, Any]) -> dict[str, Any]:
+    """Build the canonical planner input from the authoritative shot/request."""
+    return {
+        "schema_version": MOTION_PLAN_VERSION,
+        "request_id": request["request_id"],
+        "shot_id": request["shot_id"],
+        "target_start": request["target_start"],
+        "target_end": request["target_end"],
+        "target_duration": request["target_duration"],
+        "subject": shot["subject"],
+        "action": shot["action"],
+        "location": shot.get("location_id") or "story location",
+        "camera_intent": shot["camera_intent"],
+        "composition_intent": shot["composition_intent"],
+        "visual_emotional_purpose": shot["visual_emotional_purpose"],
+        "reference_asset_ids": request.get("reference_asset_ids", []),
+        "depends_on": request.get("depends_on", []),
+    }
+
+
+def _apply_planned_motion(generation_requests: dict[str, Any], shot_plan: dict[str, Any],
+                          router: GeminiReasoningRouter) -> dict[str, Any]:
+    shots = {item["shot_id"]: item for item in shot_plan.get("shots", [])}
+    records: list[dict[str, Any]] = []
+    for request in generation_requests.get("requests", []):
+        if request.get("media_type") != "VIDEO":
+            continue
+        shot = shots.get(request.get("shot_id"))
+        if not shot:
+            raise PlanningError("MOTION_SHOT_REFERENCE_INVALID")
+        intent = _motion_intent(request, shot)
+        try:
+            analysis, result = plan_motion(router, intent)
+            validate_motion_plan(analysis, original_action=shot["action"])
+        except Exception as error:
+            failure = getattr(error, "failure_class", type(error).__name__)
+            raise PlanningError("MOTION_PLANNING_FAILED", str(failure)) from error
+        records.append({
+            "request_id": request["request_id"], "intent": intent, "analysis": analysis,
+            "provenance": {"input_hash": result.input_hash, "model": result.model,
+                           "cache_hit": result.cache_hit, "fallback_count": result.fallback_count,
+                           "request_count": result.request_count},
+        })
+    if not records:
+        return generation_requests
+    return apply_motion_plans(generation_requests, shot_plan, {
+        "schema_version": MOTION_PLAN_VERSION, "records": records,
+    })
 
 def validate_generation_requests(value: Any, media_plan: dict[str, Any], continuity: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != REQUEST_SCHEMA_VERSION or not isinstance(value.get("requests"), list): raise PlanningError("GENERATION_REQUESTS_INVALID")
@@ -523,6 +591,32 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
         try: validate_visual_policy(request.get("visual_policy"))
         except ValueError as error: raise PlanningError("VISUAL_POLICY_INVALID") from error
         if request.get("media_type") == "IMAGE" and request.get("output_count") != 1: raise PlanningError("IMAGE_OUTPUT_COUNT_INVALID")
+        if request.get("media_type") == "VIDEO" and request.get("execution_tier") == "STANDARD_PRODUCTION":
+            evidence = request.get("motion_risk_analysis")
+            required = ("source_request_id", "physical_complexity", "anatomy_risk", "looping_risk",
+                        "interaction_objects", "hand_object_contact", "atomic_clip")
+            if (value.get("motion_plan_version") != MOTION_PLAN_VERSION or not isinstance(evidence, dict)
+                    or evidence.get("schema_version") != MOTION_PLAN_VERSION
+                    or any(name not in evidence for name in required)
+                    or evidence.get("physical_complexity") not in {"LOW", "MEDIUM", "HIGH"}
+                    or evidence.get("anatomy_risk") not in {"LOW", "MEDIUM", "HIGH"}
+                    or evidence.get("looping_risk") not in {"LOW", "MEDIUM", "HIGH"}
+                    or not isinstance(evidence.get("source_request_id"), str)
+                    or not evidence["source_request_id"]
+                    or not isinstance(evidence.get("interaction_objects"), list)
+                    or not all(isinstance(item, str) for item in evidence["interaction_objects"])
+                    or not isinstance(evidence.get("hand_object_contact"), str)
+                    or not evidence["hand_object_contact"].strip()
+                    or not isinstance(evidence.get("atomic_clip"), dict)):
+                raise PlanningError("MOTION_PLAN_INVALID", str(request.get("request_id")))
+            try:
+                clip = evidence["atomic_clip"]
+                if any(not isinstance(clip.get(name), str) or not clip[name].strip()
+                       for name in ("start_state", "action", "end_state", "natural_stillness")):
+                    raise GeminiQCError("MOTION_PLAN_INVALID")
+                validate_motion_plan({"atomic_clips":[clip]}, original_action=clip["action"])
+            except (GeminiQCError, KeyError, TypeError) as error:
+                raise PlanningError("MOTION_PLAN_INVALID", str(request.get("request_id"))) from error
         if ambient:
             if request.get("media_type") != "IMAGE": raise PlanningError("AMBIENT_IMAGE_ONLY_POLICY_INVALID")
             if len(request["prompt"]) > FLOW_IMAGE_PROMPT_HARD_LIMIT: raise PlanningError("FLOW_IMAGE_PROMPT_TOO_LONG")
@@ -546,6 +640,13 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
         if not parts or [r.get("part_index") for r in parts] != list(range(1, len(parts)+1)) or any(r.get("part_count") != len(parts) for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
         if any(r.get("media_type") != media_type or float(r.get("target_duration",0)) <= 0 for r in parts): raise PlanningError("GENERATION_PARTITION_INVALID")
         if abs(sum(float(r["target_duration"]) for r in parts) - next(float(m["target_duration"]) for m in media_plan["shots"] if m["shot_id"] == shot_id)) > .001: raise PlanningError("GENERATION_PARTITION_INVALID")
+        previous_end = float(parts[0]["target_start"])
+        for request in parts:
+            if (abs(float(request["target_start"]) - previous_end) > .001
+                    or abs(float(request["target_end"]) - float(request["target_start"])
+                           - float(request["target_duration"])) > .001):
+                raise PlanningError("GENERATION_PARTITION_INVALID")
+            previous_end = float(request["target_end"])
 
 
 def _record_visual_planning_failure(paths, error: PlanningError) -> None:
@@ -636,7 +737,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
         if decision.action == "RUN":
             media_plan=compile_media_plan(project_id,shot_plan,config.render_mode,media_settings); media_plan["shot_plan_sha256"]=shot_sha; validate_media_plan(media_plan,shot_plan); atomic_write_json(media_path,media_plan); checkpoints.record("media_plan",fingerprint=media_fp,status="SUCCESS",outputs=["output/media_plan.json"],producer_version=media_producer); media_action="RUN"
         media_sha=sha256_file(media_path); generation_media_sha=_hash_text(repr(_generation_media_plan_identity(media_plan)))
-        request_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_semantic_sha256":generation_media_sha,"prompt_version":request_producer} if ambient else {"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION}
+        request_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_semantic_sha256":generation_media_sha,"prompt_version":request_producer} if ambient else {"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION,"motion_plan_version":MOTION_PLAN_VERSION}
         request_settings={"aspect_ratio":media_settings["aspect_ratio"],"max_attempts":media_settings["max_attempts"],"provider_video_clip_seconds":media_settings["provider_video_clip_seconds"]}
         if ambient: request_settings["ambient_style"] = ambient_style
         request_path=paths.artifact_path("output/generation_requests.json"); request_fp=fingerprint(stage_name="generation_requests",producer_version=request_producer,artifact_schema_version=REQUEST_SCHEMA_VERSION,direct_inputs=request_inputs,settings=request_settings); decision=checkpoints.decide("generation_requests",request_fp)
@@ -645,7 +746,13 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             except Exception: decision=type(decision)("RUN","artifact invalid")
         if decision.action == "RUN":
             try:
-                requests=compile_generation_requests(project_id,shot_plan,media_plan,continuity,media_settings,ambient_style=ambient_style); validate_generation_requests(requests,media_plan,continuity)
+                requests=compile_generation_requests(project_id,shot_plan,media_plan,continuity,media_settings,ambient_style=ambient_style)
+                if not ambient:
+                    router = active.router if isinstance(active, RoutedGeminiProvider) else active
+                    if not callable(getattr(router, "reason", None)):
+                        raise PlanningError("MOTION_PLANNER_UNAVAILABLE")
+                    requests = _apply_planned_motion(requests, shot_plan, router)
+                validate_generation_requests(requests,media_plan,continuity)
             except PlanningError as error:
                 request_path.unlink(missing_ok=True)
                 checkpoints.record("generation_requests",fingerprint=request_fp,status="FAILED",outputs=[],producer_version=request_producer)
