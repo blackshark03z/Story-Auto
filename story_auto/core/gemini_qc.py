@@ -192,18 +192,31 @@ def combine_temporal_qc(video_result: dict[str, Any], frames_result: dict[str, A
 
 
 def temporal_video_qc(router: GeminiReasoningRouter, *, video: Path, intent: dict[str, Any], frames: list[dict[str, Any]],
-                      duration: float, target_duration: float) -> tuple[dict[str, Any], list[ReasoningResult]]:
+                      duration: float, target_duration: float,
+                      review_epoch: str | None = None) -> tuple[dict[str, Any], list[ReasoningResult]]:
+    """Run temporal QC, optionally binding a fresh appeal epoch into cache identity.
+
+    A false-positive appeal must re-evaluate the same bytes.  Its epoch is
+    intentionally included in both prompt and prompt-version identity so an
+    earlier rejected cache entry cannot be reused as the fresh review.
+    """
+    if review_epoch is not None and (not isinstance(review_epoch, str) or not review_epoch.strip()):
+        raise GeminiQCError("TEMPORAL_QC_REVIEW_EPOCH_INVALID")
     dimensions = "ACTION_CAUSALITY, LIMB_INTEGRITY, HAND_OBJECT_CONTACT, OBJECT_STATE_CONTINUITY, ACTION_LOOPING, MOTION_NATURALNESS, START_END_STATE_LOGIC, IDENTITY_STABILITY, BACKGROUND_STABILITY, PROP_STABILITY"
     base = ("Judge actual temporal progression at normal playback. Severe visible physical, anatomy, looping, identity, background, or prop defects reject the clip. "
             f"Evaluate: {dimensions}. Intent: {json.dumps(intent, ensure_ascii=False, sort_keys=True)}. Duration={duration:.3f}. Return JSON only.")
+    epoch_suffix = ""
+    if review_epoch is not None:
+        base += f" Fresh temporal-QC review epoch: {review_epoch}. Do not reuse any earlier temporal review conclusion."
+        epoch_suffix = f";review-epoch={review_epoch}"
     video_media = (LLMMedia(video.read_bytes(), "video/mp4", "complete candidate video"),)
     video_result = router.reason(task="temporal_video_qc", prompt=base, schema=TEMPORAL_SCHEMA, tier="HARD", media=video_media,
-        prompt_version="temporal-video-qc/1.0.0", schema_version=TEMPORAL_QC_VERSION,
+        prompt_version="temporal-video-qc/1.0.0" + epoch_suffix, schema_version=TEMPORAL_QC_VERSION,
         qc_policy_version="temporal-hard-gates/1.0.0", confidence_field="confidence")
     frame_media = tuple(LLMMedia(Path(item["path"]).read_bytes(), "image/jpeg", f"frame {item['index']} timestamp {item['timestamp']:.3f}s") for item in frames)
     frame_prompt = base + " Inspect these ordered dense frames specifically for detachments, mutations, penetration, state inconsistency, repeated poses/resets, drift, and morphing."
     frame_result = router.reason(task="dense_frame_temporal_qc", prompt=frame_prompt, schema=TEMPORAL_SCHEMA, tier="HARD", media=frame_media,
-        prompt_version="dense-frame-qc/1.0.0", schema_version=TEMPORAL_QC_VERSION,
+        prompt_version="dense-frame-qc/1.0.0" + epoch_suffix, schema_version=TEMPORAL_QC_VERSION,
         qc_policy_version="temporal-hard-gates/1.0.0", confidence_field="confidence")
     return combine_temporal_qc(video_result.value, frame_result.value, duration=duration, target_duration=target_duration), [video_result, frame_result]
 

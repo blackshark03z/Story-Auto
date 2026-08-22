@@ -5,6 +5,7 @@ import unittest
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from story_auto.core.artifacts import atomic_write_json, read_json
@@ -14,7 +15,8 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 adopt_exact_flow_recovery, adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
-                                                reopen_false_positive_production_qc, review_production_asset)
+                                                reopen_false_positive_production_qc, reopen_false_positive_temporal_qc,
+                                                review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
@@ -112,6 +114,27 @@ class FlowTests(unittest.TestCase):
                "selected_asset":{"path":rel,"sha256":digest,"attempt":1,"production_qc":"REJECTED"},"quality_reviews":[rejection]}
         atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
         return runtime,cfg,paths,executor,calls,entry
+
+    def _temporal_false_positive_fixture(self, root):
+        """Exact-style sh_0007 fixture: a persisted black-frame claim disproven by fresh evidence."""
+        runtime,cfg,paths=self._project(root)
+        request_id="req_f4ac825ecb2ccbea03d2"; rel=f"assets/video/{request_id}/attempt_001.mp4"
+        asset=paths.artifact_path(rel); asset.parent.mkdir(parents=True,exist_ok=True); asset.write_bytes(b"deterministic-video-bytes")
+        digest=hashlib.sha256(asset.read_bytes()).hexdigest()
+        requests={"requests":[{"request_id":request_id,"fingerprint":request_id+"hash","purpose":"SHOT","shot_id":"sh_0007",
+                                 "media_type":"VIDEO","prompt":"Elias continues in the dim kitchen.","depends_on":[],
+                                 "provider":"google_flow","target_duration":3.0,
+                                 "motion_risk_analysis":{"anatomy_risk":"LOW"}}]}
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+        original={"reviewed_at":"2026-08-22T15:39:17+00:00","report":{"state":"REJECT_BACKGROUND","eligible":False,
+                  "notes":"full black discontinuity near 04.0s","reviewer":"old-reviewer"}}
+        entry={"request_id":request_id,"request_identity_sha256":request_id+"hash","media_type":"VIDEO","provider":"google_flow",
+               "status":"FAILED_RETRYABLE","failure_class":"REJECT_BACKGROUND","attempts":[{"attempt":1,"status":"SUCCEEDED",
+               "attribution_state":"CONFIRMED","asset_path":rel,"asset_sha256":digest}],
+               "selected_asset":{"path":rel,"sha256":digest,"attempt":1,"metadata":{"duration_seconds":8.0},
+               "temporal_qc":"REJECTED","production_qc":"PENDING","temporal_reviews":[original]}}
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
+        return runtime,cfg,paths,request_id,digest,original
     def test_fail_closed_composer(self):
         dom=DOM(); FlowComposer(dom).submit("complete prompt", references=[], media_type="IMAGE"); self.assertTrue(dom.controls[0].clicked)
         for dom in (DOM(0),DOM(2),DOM(1,2)):
@@ -495,6 +518,62 @@ class FlowTests(unittest.TestCase):
             review_production_asset(runtime.root,cfg.project_id,request_id,self._production_report())
             final=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
             self.assertEqual(final["status"],"SUCCEEDED")
+
+    def test_temporal_false_positive_supersession_is_exact_append_only_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,request_id,digest,original=self._temporal_false_positive_fixture(root)
+            evidence={"decoded_frames":192,"minimum_luma":65.07,"frames_below_y20":0,
+                      "checked_timestamps":[0.5,3.8,4.0,4.2,7.5]}
+            with patch("story_auto.providers.flow.service._valid_selected",return_value=True):
+                event=reopen_false_positive_temporal_qc(runtime.root,cfg.project_id,request_id,
+                    expected_asset_sha256=digest,expected_attempt=1,reviewer="tech-lead",
+                    reason="exact-byte review disproves claimed black frame",evidence=evidence)
+                again=reopen_false_positive_temporal_qc(runtime.root,cfg.project_id,request_id,
+                    expected_asset_sha256=digest,expected_attempt=1,reviewer="tech-lead",
+                    reason="exact-byte review disproves claimed black frame",evidence=evidence)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(entry["selected_asset"]["temporal_reviews"][0],original)
+            self.assertEqual((entry["status"],entry["failure_class"],entry["selected_asset"]["temporal_qc"]),
+                             ("QC_PENDING",None,"PENDING"))
+            self.assertEqual((event["selected_asset_sha256"],event["selected_attempt"],event["superseded_review_index"]),
+                             (digest,1,0))
+            self.assertEqual((again["supersession_id"],again["idempotent"]),(event["supersession_id"],True))
+            report={"state":"PASS_TEMPORAL","eligible":True,"usable_start":0.0,"usable_end":8.0,
+                    "review_identity":event["review_epoch"],"request_id":request_id,"attempt":1,"media_sha256":digest,
+                    "frame_evidence":[{"index":1,"timestamp":0.5,"sha256":"a"*64}]}
+            review_temporal_asset(runtime.root,cfg.project_id,request_id,report)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            fresh=entry["selected_asset"]["temporal_reviews"][-1]
+            self.assertEqual((entry["selected_asset"]["temporal_qc"],fresh["review_epoch"],fresh["media_sha256"],fresh["selected_attempt"]),
+                             ("APPROVED",event["review_epoch"],digest,1))
+
+    def test_temporal_false_positive_supersession_fails_closed_for_wrong_asset_or_attempt(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,_paths,request_id,digest,_original=self._temporal_false_positive_fixture(root)
+            with patch("story_auto.providers.flow.service._valid_selected",return_value=True):
+                for sha,attempt in (("0"*64,1),(digest,2)):
+                    with self.subTest(sha=sha,attempt=attempt), self.assertRaisesRegex(FlowError,"TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID"):
+                        reopen_false_positive_temporal_qc(runtime.root,cfg.project_id,request_id,
+                            expected_asset_sha256=sha,expected_attempt=attempt,reviewer="tech-lead",reason="proof",evidence={"proof":"x"})
+
+    def test_fresh_temporal_supersession_review_persists_exact_media_and_frame_binding(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,request_id,digest,_original=self._temporal_false_positive_fixture(root)
+            with patch("story_auto.providers.flow.service._valid_selected",return_value=True):
+                event=reopen_false_positive_temporal_qc(runtime.root,cfg.project_id,request_id,
+                    expected_asset_sha256=digest,expected_attempt=1,reviewer="tech-lead",reason="proof",evidence={"proof":"x"})
+                frames=[{"index":1,"timestamp":.5,"path":"fixture-frame.jpg","sha256":"a"*64}]
+                result={"state":"PASS_TEMPORAL","eligible":True,"usable_start":0.0,"usable_end":8.0}
+                calls=[SimpleNamespace(model="fixture",cache_hit=False,input_hash="fresh-video",request_count=1),
+                       SimpleNamespace(model="fixture",cache_hit=False,input_hash="fresh-frames",request_count=1)]
+                with patch("story_auto.providers.flow.service.sample_dense_frames",return_value=frames), \
+                     patch("story_auto.providers.flow.service.temporal_video_qc",return_value=(result,calls)):
+                    fresh=run_fresh_temporal_qc_review(runtime.root,cfg.project_id,request_id,router=object())
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            review=entry["selected_asset"]["temporal_reviews"][-1]
+            self.assertEqual((fresh["review_epoch"],fresh["cache_hit"],review["media_sha256"],review["selected_attempt"]),
+                             (event["review_epoch"],False,digest,1))
+            self.assertEqual(review["frame_evidence"],[{"index":1,"timestamp":.5,"sha256":"a"*64}])
 
     def test_goal37_r2_reopens_exact_pre_goal37_legacy_rejection_without_rewriting_it(self):
         """The primary compatibility fixture is hand-shaped, never made by r1 QC code."""

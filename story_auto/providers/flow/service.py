@@ -20,7 +20,8 @@ from story_auto.core.planning.qc_corrective import (
     plan_qc_corrective_intent,
 )
 from story_auto.core.planning.service import PlanningError, validate_generation_requests
-from story_auto.core.gemini_qc import MOTION_PLAN_VERSION, plan_motion
+from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, plan_motion,
+                                       sample_dense_frames, temporal_video_qc)
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
@@ -1671,7 +1672,27 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
         state = report.get("state")
         if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW", "REJECT_ACTION_LOGIC", "REJECT_ANATOMY", "REJECT_LOOP", "REJECT_IDENTITY", "REJECT_BACKGROUND", "UNCERTAIN"}:
             raise FlowError("TEMPORAL_VIDEO_QC_INVALID")
-        selected.setdefault("temporal_reviews", []).append({"reviewed_at": _now(), "report": report})
+        review = {"reviewed_at": _now(), "report": report}
+        review_epoch = selected.get("active_temporal_review_epoch")
+        if review_epoch is not None:
+            frame_evidence = report.get("frame_evidence")
+            if (report.get("review_identity") != review_epoch
+                    or report.get("request_id") != request_id
+                    or report.get("attempt") != selected.get("attempt")
+                    or report.get("media_sha256") != selected.get("sha256")
+                    or not isinstance(frame_evidence, list) or not frame_evidence
+                    or any(not isinstance(item, dict) or not isinstance(item.get("sha256"), str)
+                           or len(item["sha256"]) != 64 for item in frame_evidence)):
+                raise FlowError("TEMPORAL_VIDEO_QC_FRESH_EVIDENCE_INVALID")
+            review.update({
+                "review_epoch": review_epoch,
+                "selected_asset_path": selected.get("path"),
+                "selected_asset_sha256": selected.get("sha256"),
+                "selected_attempt": selected.get("attempt"),
+                "media_sha256": selected.get("sha256"),
+                "frame_evidence": frame_evidence,
+            })
+        selected.setdefault("temporal_reviews", []).append(review)
         if state not in {"PASS_TEMPORAL", "PASS_WITH_USABLE_WINDOW"} or not report.get("eligible"):
             failure = "TEMPORAL_VIDEO_QC_UNCERTAIN" if state == "UNCERTAIN" else state
             selected["temporal_qc"] = "REJECTED"
@@ -1685,6 +1706,9 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
             raise FlowError("USABLE_TEMPORAL_WINDOW_INVALID")
         selected.update({"temporal_qc": "APPROVED", "usable_start": start, "usable_end": end,
                          "temporal_state": state})
+        if review_epoch is not None:
+            selected["completed_temporal_review_epoch"] = review_epoch
+            selected.pop("active_temporal_review_epoch", None)
         semantic_ready = selected.get("production_qc") == "APPROVED" and selected.get("alignment_classification") in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"}
         entry.update({"status": "SUCCEEDED" if semantic_ready else "QC_PENDING",
                       "failure_class": None if semantic_ready else "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED", "updated_at": _now()})
@@ -1707,6 +1731,139 @@ def reopen_uncertain_temporal_qc(runtime_root: Path | str, project_id: str, requ
         selected["temporal_qc"] = "PENDING"
         entry.update({"status": "QC_PENDING", "failure_class": "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def reopen_false_positive_temporal_qc(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                      expected_asset_sha256: str, expected_attempt: int,
+                                      reviewer: str, reason: str, evidence: dict) -> dict:
+    """Append one exact-byte temporal-QC false-positive appeal.
+
+    This is the temporal sibling of ``reopen_false_positive_production_qc``.
+    It preserves the rejected temporal review and merely creates a fresh,
+    cache-distinct review epoch for the identical confirmed provider asset.
+    """
+    if (not isinstance(expected_asset_sha256, str) or len(expected_asset_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_asset_sha256.lower())
+            or not isinstance(expected_attempt, int) or expected_attempt < 1
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or not isinstance(reason, str) or not reason.strip()
+            or not isinstance(evidence, dict) or not evidence):
+        raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        matches = [item for item in manifest["requests"] if isinstance(item, dict) and item.get("request_id") == request_id]
+        if len(matches) != 1:
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        entry = matches[0]
+        selected = entry.get("selected_asset")
+        if (entry.get("media_type") != "VIDEO" or not isinstance(selected, dict)
+                or selected.get("sha256") != expected_asset_sha256.lower()
+                or selected.get("attempt") != expected_attempt
+                or sha256_file(paths.artifact_path(str(selected.get("path", "")))) != expected_asset_sha256.lower()
+                or not _valid_selected(paths, entry)):
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        attempts = entry.get("attempts")
+        attempt = next((item for item in attempts if isinstance(item, dict) and item.get("attempt") == expected_attempt), None) if isinstance(attempts, list) else None
+        if (not isinstance(attempt, dict) or attempt.get("attribution_state") != "CONFIRMED"
+                or attempt.get("asset_path") != selected.get("path")
+                or attempt.get("asset_sha256") != expected_asset_sha256.lower()):
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        reviews = selected.get("temporal_reviews")
+        source_index = len(reviews) - 1 if isinstance(reviews, list) else -1
+        source_review = reviews[source_index] if source_index >= 0 else None
+        source_report = source_review.get("report") if isinstance(source_review, dict) else None
+        source_state = source_report.get("state") if isinstance(source_report, dict) else None
+        source_sha = _json_sha256(source_review)
+        events = entry.get("temporal_qc_false_positive_supersessions")
+        if events is not None and not isinstance(events, list):
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        # Repeating the same still-active appeal must be a no-op.  This check
+        # deliberately precedes the terminal-rejection state check because the
+        # first call has already moved the asset to QC_PENDING.
+        if events:
+            existing = events[-1] if isinstance(events[-1], dict) else None
+            if (isinstance(existing, dict) and entry.get("status") == "QC_PENDING"
+                    and selected.get("temporal_qc") == "PENDING"
+                    and existing.get("superseded_review_sha256") == source_sha
+                    and existing.get("selected_asset_sha256") == expected_asset_sha256.lower()
+                    and existing.get("selected_attempt") == expected_attempt):
+                return {**existing, "idempotent": True}
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        if (entry.get("status") != "FAILED_RETRYABLE" or entry.get("failure_class") != source_state
+                or selected.get("temporal_qc") != "REJECTED"
+                or not isinstance(source_state, str) or not source_state.startswith("REJECT_")):
+            raise FlowError("TEMPORAL_QC_FALSE_POSITIVE_REOPEN_INVALID")
+        supersession_id = "temporal-qc-fp-" + _json_sha256({
+            "project_id": project_id, "request_id": request_id, "attempt": expected_attempt,
+            "asset_sha256": expected_asset_sha256.lower(), "superseded_review_sha256": source_sha,
+        })[:24]
+        review_epoch = "temporal-review-" + _json_sha256({"supersession_id": supersession_id, "epoch": 1})[:24]
+        event = {
+            "at": _now(), "event": "TEMPORAL_QC_FALSE_POSITIVE_SUPERSEDED",
+            "disposition": "FALSE_POSITIVE_REOPENED", "supersession_id": supersession_id,
+            "request_id": request_id, "selected_asset_path": selected.get("path"),
+            "selected_asset_sha256": expected_asset_sha256.lower(), "selected_attempt": expected_attempt,
+            "superseded_review_index": source_index, "superseded_review_sha256": source_sha,
+            "superseded_temporal_state": source_state, "review_epoch": review_epoch,
+            "reviewer": reviewer.strip(), "reason": reason.strip(), "evidence": evidence,
+        }
+        entry.setdefault("temporal_qc_false_positive_supersessions", []).append(event)
+        selected["temporal_qc"] = "PENDING"
+        selected["active_temporal_review_epoch"] = review_epoch
+        entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": event["at"]})
+        atomic_write_json(path, manifest)
+        return {**event, "idempotent": False}
+
+
+def run_fresh_temporal_qc_review(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                 router: GeminiReasoningRouter | None = None) -> dict:
+    """Perform the mandatory cache-distinct temporal review opened by an appeal."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    manifest_path, manifest = _manifest(paths, project_id)
+    entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+    if not isinstance(entry, dict) or entry.get("status") != "QC_PENDING" or entry.get("media_type") != "VIDEO":
+        raise FlowError("TEMPORAL_VIDEO_QC_FRESH_REVIEW_INVALID")
+    selected = entry.get("selected_asset")
+    review_epoch = selected.get("active_temporal_review_epoch") if isinstance(selected, dict) else None
+    if (not isinstance(selected, dict) or not isinstance(review_epoch, str) or not review_epoch
+            or not _valid_selected(paths, entry)):
+        raise FlowError("TEMPORAL_VIDEO_QC_FRESH_REVIEW_INVALID")
+    requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
+    request = next((item for item in requests if isinstance(item, dict) and item.get("request_id") == request_id), None)
+    if not isinstance(request, dict):
+        raise FlowError("TEMPORAL_VIDEO_QC_FRESH_REVIEW_INVALID")
+    metadata = selected.get("metadata") if isinstance(selected.get("metadata"), dict) else {}
+    duration = float(metadata.get("duration_seconds", 0))
+    if duration <= 0:
+        raise FlowError("TEMPORAL_VIDEO_QC_FRESH_REVIEW_INVALID")
+    video = paths.artifact_path(selected["path"])
+    risk = str((request.get("motion_risk_analysis") or {}).get("anatomy_risk", "LOW")).upper()
+    frame_dir = paths.runtime.temp / "temporal_qc" / request_id / review_epoch
+    frames = sample_dense_frames(video, frame_dir, risk=risk, duration=duration)
+    intent = {"request_id": request_id, "shot_id": request.get("shot_id"), "prompt": request.get("prompt"),
+              "corrected_semantic_intent": request.get("corrected_semantic_intent"),
+              "motion_risk_analysis": request.get("motion_risk_analysis")}
+    active_router = router or GeminiReasoningRouter(
+        cache_dir=paths.runtime.cache / "gemini_reasoning",
+        ledger_path=paths.runtime.evidence / "gemini_reasoning_ledger.json",
+    )
+    result, calls = temporal_video_qc(active_router, video=video, intent=intent, frames=frames,
+                                      duration=duration, target_duration=float(request.get("target_duration", duration)),
+                                      review_epoch=review_epoch)
+    report = {**result, "review_identity": review_epoch, "request_id": request_id,
+              "attempt": selected.get("attempt"), "media_sha256": selected.get("sha256"),
+              "media_path": selected.get("path"), "frame_evidence": [
+                  {"index": item["index"], "timestamp": item["timestamp"], "sha256": item["sha256"]}
+                  for item in frames],
+              "reviewer": "GeminiReasoningRouter",
+              "gemini": [{"model": item.model, "cache_hit": item.cache_hit,
+                           "input_hash": item.input_hash, "request_count": item.request_count}
+                          for item in calls]}
+    review_temporal_asset(runtime_root, project_id, request_id, report)
+    return {"request_id": request_id, "review_epoch": review_epoch,
+            "media_sha256": selected.get("sha256"), "cache_hit": all(item.cache_hit for item in calls),
+            "report": report}
 
 
 def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:

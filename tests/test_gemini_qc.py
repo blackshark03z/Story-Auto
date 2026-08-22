@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from story_auto.providers.llm.router import ReasoningResult
+
 from story_auto.core.gemini_qc import (GeminiQCError, combine_temporal_qc, compile_flow_motion_prompt,
-    is_high_risk, sample_dense_frames, validate_hook_plan, validate_motion_plan, validate_usable_window)
+    is_high_risk, sample_dense_frames, temporal_video_qc, validate_hook_plan, validate_motion_plan, validate_usable_window)
 
 
 def beat(start, end, info, action, risk="LOW"):
@@ -69,6 +71,26 @@ def test_valid_usable_window_is_selected_deterministically():
     result = combine_temporal_qc(temporal("PASS_WITH_USABLE_WINDOW", start=0, end=4),
                                  temporal("PASS_TEMPORAL", start=0, end=8), duration=8, target_duration=3.5)
     assert result["eligible"] and result["usable_end"] == 4
+
+
+def test_temporal_false_positive_review_epoch_changes_both_qc_cache_identities(tmp_path):
+    class Router:
+        def __init__(self): self.calls=[]
+        def reason(self, **kwargs):
+            self.calls.append(kwargs)
+            return ReasoningResult(temporal("PASS_TEMPORAL"),"fixture","key","project",False,0,1,
+                                   f"hash-{len(self.calls)}")
+    video=tmp_path / "video.mp4"; video.write_bytes(b"video")
+    frame=tmp_path / "frame.jpg"; frame.write_bytes(b"frame")
+    frames=[{"index":1,"timestamp":.5,"path":str(frame),"sha256":"x"*64}]
+    router=Router()
+    temporal_video_qc(router,video=video,intent={"shot_id":"sh_0007"},frames=frames,duration=8,target_duration=3,
+                      review_epoch="epoch-a")
+    temporal_video_qc(router,video=video,intent={"shot_id":"sh_0007"},frames=frames,duration=8,target_duration=3,
+                      review_epoch="epoch-b")
+    assert len(router.calls)==4
+    assert router.calls[0]["prompt"] != router.calls[2]["prompt"]
+    assert router.calls[0]["prompt_version"] != router.calls[2]["prompt_version"]
 
 
 def test_dense_frame_sampling_is_bounded(ffmpeg_test_video):
