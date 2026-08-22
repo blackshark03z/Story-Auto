@@ -1,6 +1,8 @@
 """Append-only Flow generation orchestration with provider-independent request ordering."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,36 @@ from .postprocess import (
 )
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
+
+
+_transaction_read_cache: ContextVar[dict[object, Any] | None] = ContextVar(
+    "flow_transaction_read_cache", default=None)
+
+
+@contextmanager
+def _transaction_read_scope():
+    """Reuse already-validated immutable transaction payloads in one operation only."""
+    existing = _transaction_read_cache.get()
+    if existing is not None:
+        yield existing
+        return
+    token = _transaction_read_cache.set({})
+    try:
+        yield _transaction_read_cache.get()
+    finally:
+        _transaction_read_cache.reset(token)
+
+
+def _prepared_transaction_sha256(transaction: dict) -> str:
+    """Hash a validated transaction once per validation operation."""
+    cache = _transaction_read_cache.get()
+    cache_key = ("prepared_sha256", id(transaction))
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+    value = _json_sha256(transaction)
+    if cache is not None:
+        cache[cache_key] = value
+    return value
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
 FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
@@ -535,6 +567,10 @@ def _transaction_paths(paths, transaction_id: str, *,
 def _prepared_transactions(paths, project_id: str, *,
                            schema_version: str = SUPERSESSION_TRANSACTION_SCHEMA) -> list[tuple[Path, dict]]:
     directory, error_code = _transaction_spec(paths, schema_version)
+    cache = _transaction_read_cache.get()
+    cache_key = ("prepared", str(directory.resolve()), project_id, schema_version)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     if not directory.is_dir(): return []
     values = []
     for path in sorted(directory.glob("*.prepared.json")):
@@ -557,6 +593,8 @@ def _prepared_transactions(paths, project_id: str, *,
             raise FlowError(error_code)
         _validate_transaction_targets(value, schema_version=schema_version)
         values.append((path, value))
+    if cache is not None:
+        cache[cache_key] = values
     return values
 
 
@@ -769,31 +807,32 @@ def _abandoned_unresolved_entry_valid(paths, project_id: str, entry: dict, reque
 
 def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str, dict],
                                        requests: list[dict]) -> tuple[dict, dict] | None:
-    invalid = _first_invalid_superseded(paths, project_id, entries, requests)
-    if invalid is not None:
-        return invalid
-    for request in requests:
-        if isinstance(request, dict) and not _qc_ancestry_metadata_has_direct_origin(paths, project_id, request):
-            return request, entries.get(request.get("request_id"), {"request_id": request.get("request_id")})
-        if isinstance(request, dict) and not _qc_corrective_metadata_has_direct_origin(paths, project_id, request):
-            return request, entries.get(request.get("request_id"), {"request_id": request.get("request_id")})
-    for entry in entries.values():
-        if not _qc_ancestry_metadata_has_direct_origin(paths, project_id, entry):
-            return {"request_id": entry.get("request_id")}, entry
-        if not _qc_corrective_metadata_has_direct_origin(paths, project_id, entry):
-            return {"request_id": entry.get("request_id")}, entry
-        if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
-                and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
-            return {"request_id": entry.get("request_id")}, entry
-        if (entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
-                and not _qc_rejected_asset_replacement_valid(paths, project_id, entry, requests, entries)):
-            return {"request_id": entry.get("request_id")}, entry
-        if (entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
-                and not _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
-            return {"request_id": entry.get("request_id")}, entry
-        if (entry.get("status") == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
-                and not _qc_corrective_pre_dispatch_supersession_valid(paths, project_id, entry, requests, entries)):
-            return {"request_id": entry.get("request_id")}, entry
+    with _transaction_read_scope():
+        invalid = _first_invalid_superseded(paths, project_id, entries, requests)
+        if invalid is not None:
+            return invalid
+        for request in requests:
+            if isinstance(request, dict) and not _qc_ancestry_metadata_has_direct_origin(paths, project_id, request):
+                return request, entries.get(request.get("request_id"), {"request_id": request.get("request_id")})
+            if isinstance(request, dict) and not _qc_corrective_metadata_has_direct_origin(paths, project_id, request):
+                return request, entries.get(request.get("request_id"), {"request_id": request.get("request_id")})
+        for entry in entries.values():
+            if not _qc_ancestry_metadata_has_direct_origin(paths, project_id, entry):
+                return {"request_id": entry.get("request_id")}, entry
+            if not _qc_corrective_metadata_has_direct_origin(paths, project_id, entry):
+                return {"request_id": entry.get("request_id")}, entry
+            if (entry.get("status") == ABANDONED_UNRESOLVED_STATUS
+                    and not _abandoned_unresolved_entry_valid(paths, project_id, entry, requests, entries)):
+                return {"request_id": entry.get("request_id")}, entry
+            if (entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
+                    and not _qc_rejected_asset_replacement_valid(paths, project_id, entry, requests, entries)):
+                return {"request_id": entry.get("request_id")}, entry
+            if (entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
+                    and not _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
+                return {"request_id": entry.get("request_id")}, entry
+            if (entry.get("status") == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
+                    and not _qc_corrective_pre_dispatch_supersession_valid(paths, project_id, entry, requests, entries)):
+                return {"request_id": entry.get("request_id")}, entry
     return None
 
 
@@ -817,7 +856,7 @@ def _publish_replacement_transaction(paths, transaction: dict,
         if fault_injector: fault_injector(name)
         atomic_write_json(paths.artifact_path(target["path"]), target["value"])
     receipt = {"schema_version": schema_version, "state": "COMMITTED",
-               "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+               "transaction_id": transaction_id, "prepared_sha256": _prepared_transaction_sha256(transaction)}
     if not committed_path.is_file():
         if fault_injector: fault_injector("committed")
         atomic_write_json(committed_path, receipt)
@@ -853,7 +892,7 @@ def _recover_replacement_transactions(paths, project_id: str, *, schema_version:
                     or receipt.get("schema_version") != schema_version
                     or receipt.get("state") != "COMMITTED"
                     or receipt.get("transaction_id") != transaction_id
-                    or receipt.get("prepared_sha256") != _json_sha256(transaction)):
+                    or receipt.get("prepared_sha256") != _prepared_transaction_sha256(transaction)):
                 raise FlowError(error_code)
         old_request_id = transaction.get("old_request_id")
         replacement_request_id = transaction.get("replacement_request_id")
@@ -913,7 +952,7 @@ def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
             except Exception:
                 return None
             expected = {"schema_version": UNRESOLVED_REPLAY_TRANSACTION_SCHEMA, "state": "COMMITTED",
-                        "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+                        "transaction_id": transaction_id, "prepared_sha256": _prepared_transaction_sha256(transaction)}
             if receipt != expected:
                 return None
             matches.append((transaction, receipt))
@@ -939,7 +978,7 @@ def _supersession_transaction(paths, project_id: str, old_request_id: str,
             except Exception:
                 return None
             expected = {"schema_version": SUPERSESSION_TRANSACTION_SCHEMA, "state": "COMMITTED",
-                        "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+                        "transaction_id": transaction_id, "prepared_sha256": _prepared_transaction_sha256(transaction)}
             if receipt != expected:
                 return None
             matches.append((transaction, receipt))
@@ -1979,7 +2018,7 @@ def _qc_rejected_asset_replacement_transaction(paths, project_id: str, old_reque
         except Exception:
             return None
         expected = {"schema_version": QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA, "state": "COMMITTED",
-                    "transaction_id": transaction_id, "prepared_sha256": _json_sha256(transaction)}
+                    "transaction_id": transaction_id, "prepared_sha256": _prepared_transaction_sha256(transaction)}
         if receipt != expected:
             return None
         matches.append((transaction, receipt))
@@ -2020,7 +2059,7 @@ def _direct_qc_replacement_child_ids(paths, project_id: str, old_request_id: str
             "schema_version": QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA,
             "state": "COMMITTED",
             "transaction_id": transaction_id,
-            "prepared_sha256": _json_sha256(transaction),
+            "prepared_sha256": _prepared_transaction_sha256(transaction),
         }
         if receipt != expected_receipt:
             return None
@@ -2247,7 +2286,7 @@ def _qc_corrective_replan_transaction(paths, project_id: str, supersedes_request
             "schema_version": QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA,
             "state": "COMMITTED",
             "transaction_id": transaction_id,
-            "prepared_sha256": _json_sha256(transaction),
+            "prepared_sha256": _prepared_transaction_sha256(transaction),
         }
         if receipt != expected:
             return None
@@ -2294,7 +2333,7 @@ def _qc_corrective_pre_dispatch_transaction(paths, project_id: str, old_request_
         expected = {
             "schema_version": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA,
             "state": "COMMITTED", "transaction_id": transaction_id,
-            "prepared_sha256": _json_sha256(transaction),
+            "prepared_sha256": _prepared_transaction_sha256(transaction),
         }
         if receipt != expected:
             return None
@@ -3799,6 +3838,13 @@ def _first_unresolved(paths, project_id: str, requests: list[dict], entries: dic
         return malformed
     for request in requests:
         entry = entries.get(request.get("request_id"))
+        # A verified corrective parent is immutable historical QC evidence;
+        # only its fresh child is current queue work.  Do not send the parent
+        # through provider reconciliation merely because it has prior attempts.
+        if (isinstance(entry, dict)
+                and entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
+                and _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
+            continue
         if _unresolved_flow_entry(entry):
             return request, entry
     return None
@@ -4097,7 +4143,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     storage=config.settings.get("storage",{})
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
-    with ProjectLock(paths.runtime, project_id):
+    with ProjectLock(paths.runtime, project_id), _transaction_read_scope():
         # Complete every prepared request-graph replacement before selecting
         # executable requests. A partially published old epoch is never run.
         _recover_pending_request_replacements(paths, project_id)

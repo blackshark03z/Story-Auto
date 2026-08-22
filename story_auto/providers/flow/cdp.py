@@ -3,13 +3,19 @@ from __future__ import annotations
 
 import itertools
 import json
+import time
 from urllib.request import urlopen
 
 from .session import FlowSessionError
 
+MAX_UNMATCHED_CDP_MESSAGES = 128
+
 
 class CdpPage:
-    def __init__(self, websocket, runtime=None): self.websocket, self._ids, self.runtime = websocket, itertools.count(1), runtime
+    def __init__(self, websocket, runtime=None, *, command_timeout_seconds: float = 30.0,
+                 clock=time.monotonic):
+        self.websocket, self._ids, self.runtime = websocket, itertools.count(1), runtime
+        self.command_timeout_seconds, self._clock = command_timeout_seconds, clock
 
     @classmethod
     def open(cls, runtime, *, opener=urlopen, ws_connect=None):
@@ -36,10 +42,28 @@ class CdpPage:
     def command(self, method: str, params: dict | None = None) -> dict:
         identifier = next(self._ids)
         try:
+            deadline = self._clock() + self.command_timeout_seconds
+            unmatched_messages = 0
             self.websocket.send(json.dumps({"id":identifier, "method":method, "params":params or {}}))
             while True:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise FlowSessionError(
+                        "FLOW_CDP_COMMAND_TIMEOUT",
+                        f"CDP {method} did not return a matching response before the pre-provider deadline",
+                    )
+                set_timeout = getattr(self.websocket, "settimeout", None)
+                if callable(set_timeout):
+                    set_timeout(remaining)
                 payload = json.loads(self.websocket.recv())
-                if payload.get("id") != identifier: continue
+                if payload.get("id") != identifier:
+                    unmatched_messages += 1
+                    if unmatched_messages > MAX_UNMATCHED_CDP_MESSAGES:
+                        raise FlowSessionError(
+                            "FLOW_CDP_COMMAND_TIMEOUT",
+                            f"CDP {method} exceeded the pre-provider unmatched-event limit",
+                        )
+                    continue
                 if "error" in payload: raise FlowSessionError("FLOW_UI_CHANGED", f"CDP {method} rejected")
                 return payload.get("result", {})
         except FlowSessionError:

@@ -15,11 +15,13 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 adopt_exact_flow_recovery, adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
-                                                reopen_false_positive_production_qc, reopen_false_positive_temporal_qc,
+                                                reopen_false_positive_production_qc, reopen_false_positive_temporal_qc, _first_unresolved,
                                                 review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review)
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
+from story_auto.providers.flow.cdp import CdpPage, MAX_UNMATCHED_CDP_MESSAGES
+import story_auto.providers.flow.service as flow_service
 
 
 class Editor:
@@ -257,6 +259,45 @@ class FlowTests(unittest.TestCase):
         auth=preflight(runtime,Inspector({"login_required":True}),opener=opener); self.assertFalse(auth.authenticated)
         cap=preflight(runtime,Inspector({"project_identity":"story-auto","image":True,"video":True,"reference_image":True,"frame_video":True}),opener=opener)
         cap.require("VIDEO",True)
+
+    def test_preflight_cdp_command_times_out_on_unrelated_event_stream(self):
+        """A busy DevTools event stream cannot keep preflight alive forever."""
+        class EventOnlySocket:
+            def __init__(self): self.sent=[]; self.timeouts=[]
+            def send(self, payload): self.sent.append(json.loads(payload))
+            def settimeout(self, value): self.timeouts.append(value)
+            def recv(self): return json.dumps({"method":"Runtime.executionContextCreated"})
+        socket = EventOnlySocket()
+        page = CdpPage(socket, command_timeout_seconds=1.0, clock=lambda: 0.0)
+        with self.assertRaises(FlowSessionError) as caught:
+            page.evaluate("document.title")
+        self.assertEqual(caught.exception.failure_class, "FLOW_CDP_COMMAND_TIMEOUT")
+        self.assertEqual(socket.sent[0]["method"], "Runtime.evaluate")
+        self.assertEqual(len(socket.sent), 1)
+        self.assertEqual(len(socket.timeouts), MAX_UNMATCHED_CDP_MESSAGES + 1)
+        self.assertTrue(socket.timeouts)
+
+    def test_valid_qc_corrective_parent_is_not_reconciled_before_its_fresh_child(self):
+        parent = {"request_id": "parent"}
+        child = {"request_id": "child"}
+        entries = {
+            "parent": {"request_id": "parent", "status": "QC_CORRECTIVE_REPLANNED",
+                       "attempts": [{"attempt": 1, "status": "SUCCEEDED"}]},
+            "child": {"request_id": "child", "status": "PENDING", "attempts": []},
+        }
+        with patch("story_auto.providers.flow.service._first_invalid_request_replacement", return_value=None), \
+             patch("story_auto.providers.flow.service._qc_corrective_replan_valid", return_value=True):
+            self.assertIsNone(_first_unresolved(None, "project", [parent, child], entries))
+
+    def test_transaction_hash_is_reused_only_inside_one_validation_scope(self):
+        transaction = {"schema_version": "fixture", "targets": {"snapshot": list(range(100))}}
+        with patch.object(flow_service, "_json_sha256", wraps=flow_service._json_sha256) as digest:
+            with flow_service._transaction_read_scope():
+                self.assertEqual(flow_service._prepared_transaction_sha256(transaction),
+                                 flow_service._prepared_transaction_sha256(transaction))
+            self.assertEqual(digest.call_count, 1)
+            flow_service._prepared_transaction_sha256(transaction)
+            self.assertEqual(digest.call_count, 2)
     def test_dedicated_session_never_uses_another_profile(self):
         with tempfile.TemporaryDirectory() as root:
             profile=Path(root)/"story-auto-profile"; runtime=FlowRuntime(profile,"http://127.0.0.1:9222","https://flow.example","story-auto"); calls=[]
