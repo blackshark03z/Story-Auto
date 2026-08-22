@@ -2827,6 +2827,27 @@ def _canonical_scene_continuity(shot: dict, shots: list[dict], entities: dict[st
     }
 
 
+def _apply_canonical_corrective_location(corrected_intent: dict, *, shot: dict,
+                                         entities: dict[str, dict], scene_continuity: dict) -> dict:
+    """Restore an adjacent-scene location contract without accepting relocation.
+
+    A model may describe the same kitchen using different casing or word order.
+    It must retain the decisive room anchors first; a gallery, lantern room, or
+    other actual relocation remains a hard failure rather than an override.
+    """
+    required = str(scene_continuity.get("required_location", "")).strip()
+    if not required:
+        return corrected_intent
+    observed = _intent_terms(corrected_intent.get("location"))
+    canonical = _intent_terms(required)
+    anchors = canonical & {"kitchen", "lighthouse", "gallery", "tower", "room"}
+    if anchors and not anchors <= observed:
+        raise FlowError("QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH", "location")
+    rewritten = dict(corrected_intent)
+    rewritten["location"] = required
+    return rewritten
+
+
 def _require_canonical_corrective_intent(*, correction: dict, corrected_intent: dict,
                                          shot: dict, entities: dict[str, dict],
                                          scene_continuity: dict) -> None:
@@ -3091,6 +3112,8 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                 reference_capacity=FLOW_REFERENCE_CAPACITY,
                 reference_media=tuple(reference_media),
             )
+            corrected_intent = _apply_canonical_corrective_location(
+                corrected_intent, shot=shot, entities=entities, scene_continuity=scene_continuity)
             reference_policy = _require_valid_corrective_reference_policy(
                 corrected_intent, reference_candidates)
             full_motion_plan = None

@@ -13,6 +13,7 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.visual import default_visual_policy
 from story_auto.providers.flow.service import (
     QC_CORRECTIVE_REPLANNED_STATUS,
+    _apply_canonical_corrective_location,
     _first_invalid_request_replacement,
     _provider_generation_retry_authorized,
     _resolve_current_canonical_descendant,
@@ -261,6 +262,19 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             ],
         })
         return runtime, config, paths
+
+    def test_compatible_kitchen_wording_is_compiled_to_authoritative_dim_kitchen_location(self):
+        shot = {"location_id": "loc_marrow_bay_lighthouse"}
+        entities = {"loc_marrow_bay_lighthouse": {"name": "Marrow Bay Lighthouse"}}
+        continuity = {"required_location": "dim kitchen inside Marrow Bay Lighthouse"}
+        value = _apply_canonical_corrective_location(
+            {"location": "Kitchen inside Marrow Bay Lighthouse"},
+            shot=shot, entities=entities, scene_continuity=continuity)
+        self.assertEqual(value["location"], "dim kitchen inside Marrow Bay Lighthouse")
+        with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_REPLAN_CANONICAL_INPUT_MISMATCH"):
+            _apply_canonical_corrective_location(
+                {"location": "ocean-facing gallery in the lighthouse"},
+                shot=shot, entities=entities, scene_continuity=continuity)
 
     def _assert_sh_0006_append_only_correction(self, media_type: str):
         with tempfile.TemporaryDirectory() as root:
