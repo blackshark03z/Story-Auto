@@ -9,6 +9,7 @@ from story_auto.core.gemini_qc import compile_flow_motion_prompt, validate_motio
 from story_auto.core.visual import (caption_safe_effective_prompt, compile_image_prompt,
                                     default_visual_policy, validate_visual_policy)
 from story_auto.providers.llm import GeminiReasoningRouter, ReasoningResult
+from story_auto.providers.llm.gemini import LLMMedia
 
 
 QC_CORRECTIVE_REPLAN_VERSION = "story-auto-qc-corrective-replan/1.0.0"
@@ -41,7 +42,8 @@ class QCCorrectiveReplanError(RuntimeError):
         super().__init__(failure_class + (f": {detail}" if detail else ""))
 
 
-def validate_qc_corrective_intent(value: dict[str, Any], *, reference_entity_ids: set[str]) -> None:
+def validate_qc_corrective_intent(value: dict[str, Any], *, reference_entity_ids: set[str],
+                                  reference_capacity: int | None = None) -> None:
     if not isinstance(value, dict):
         raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_STRUCTURED_OUTPUT_INVALID")
     for field in ("subject", "action", "location", "composition_intent", "reference_selection_rationale"):
@@ -57,6 +59,10 @@ def validate_qc_corrective_intent(value: dict[str, Any], *, reference_entity_ids
     if (not isinstance(selected, list) or len(selected) != len(set(selected))
             or any(not isinstance(item, str) or item not in reference_entity_ids for item in selected)):
         raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_REFERENCE_SELECTION_INVALID")
+    if reference_capacity is not None and (
+            not isinstance(reference_capacity, int) or reference_capacity < 0
+            or len(selected) > reference_capacity):
+        raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_REFERENCE_CAPACITY_INVALID")
 
 
 def plan_qc_corrective_intent(
@@ -64,6 +70,8 @@ def plan_qc_corrective_intent(
     *,
     canonical_context: dict[str, Any],
     reference_entity_ids: set[str],
+    reference_capacity: int,
+    reference_media: tuple[LLMMedia, ...] = (),
 ) -> tuple[dict[str, Any], ReasoningResult]:
     """Ask the established router for structured semantics, never a provider side effect."""
     prompt = (
@@ -71,24 +79,28 @@ def plan_qc_corrective_intent(
         "Repair the latest QC contradiction materially; do not merely paraphrase the rejected prompt. "
         "Choose only reference entity IDs whose visual context supports the corrected continuity, and remove "
         "any conflicting reference. State exclusions that make the rejected relocation or contradiction impossible. "
-        "Return structured JSON only. Canonical context:\n"
+        "When labeled candidate reference media is supplied, assess the actual visual context of each image as "
+        "well as its canonical text evidence. Return structured JSON only. Canonical context:\n"
         + json.dumps(canonical_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     )
 
     def accept(value: dict[str, Any]) -> None:
-        validate_qc_corrective_intent(value, reference_entity_ids=reference_entity_ids)
+        validate_qc_corrective_intent(
+            value, reference_entity_ids=reference_entity_ids, reference_capacity=reference_capacity)
 
     result = router.reason(
         task="qc_corrective_replan",
         prompt=prompt,
         schema=QC_CORRECTIVE_INTENT_SCHEMA,
         tier="HARD",
+        media=reference_media,
         prompt_version=QC_CORRECTIVE_REPLAN_VERSION,
         schema_version=QC_CORRECTIVE_INTENT_SCHEMA_VERSION,
         qc_policy_version="DETERMINISTIC_GENERATION_COMPILER",
         acceptance_validator=accept,
     )
-    validate_qc_corrective_intent(result.value, reference_entity_ids=reference_entity_ids)
+    validate_qc_corrective_intent(
+        result.value, reference_entity_ids=reference_entity_ids, reference_capacity=reference_capacity)
     return result.value, result
 
 

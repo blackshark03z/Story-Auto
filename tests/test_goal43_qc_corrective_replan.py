@@ -3,9 +3,11 @@ from __future__ import annotations
 import copy
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.gemini_qc import MOTION_PLAN_VERSION
+from story_auto.core.planning.qc_corrective import validate_qc_corrective_intent
 from story_auto.core.planning.service import validate_generation_requests
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.visual import default_visual_policy
@@ -17,6 +19,7 @@ from story_auto.providers.flow.service import (
     _runnable,
     qc_corrective_replan,
     replace_qc_rejected_asset,
+    supersede_invalid_pending_qc_corrective_child,
 )
 from story_auto.providers.llm import ReasoningResult
 
@@ -53,6 +56,27 @@ class _FixtureRouter:
         if validator:
             validator(value)
         return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1, "f" * 64)
+
+
+class _ConflictingReferenceRouter(_FixtureRouter):
+    """Models the pre-fix Gemini result that retained the lantern-room reference."""
+    def reason(self, **kwargs):
+        self.calls.append(kwargs)
+        value = {
+            "subject": "Elias Venn",
+            "action": "continues examining the sealed official envelope and runs his thumb over the unbroken wax seal",
+            "location": "the dim kitchen inside Marrow Bay Lighthouse",
+            "composition_intent": "direct continuation from sh_0006 part 1 at the same kitchen table",
+            "continuity_requirements": ["continue the exact moment from sh_0006 part 1"],
+            "exclusions": ["no lantern room", "no great lighthouse lens", "no ocean-facing gallery"],
+            "selected_reference_entity_ids": ["char_elias_venn"],
+            "semantic_delta": ["locked the scene to the dim kitchen"],
+            "reference_selection_rationale": "incorrectly retained the character reference",
+        }
+        validator = kwargs.get("acceptance_validator")
+        if validator:
+            validator(value)
+        return ReasoningResult(value, "gemini-3.6-flash", "key-fixture", "project-fixture", False, 0, 1, "e" * 64)
 
 
 class Goal43QcCorrectiveReplanTests(unittest.TestCase):
@@ -229,6 +253,9 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertEqual(result["gemini_model"], "gemini-3.6-flash")
             self.assertEqual(result["provider_submissions"], 0)
             self.assertEqual(len(router.calls), 1)
+            candidates = router.calls[0]["prompt"]
+            self.assertIn("Elias Venn in the lantern room beside the lighthouse lens and ocean gallery", candidates)
+            self.assertIn("provider_reference_capacity", candidates)
 
             requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
             entries = {item["request_id"]: item for item in read_json(
@@ -312,6 +339,85 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
                         reason="must fail before semantic replanning", router=router)
                 self.assertEqual(router.calls, [])
                 self.assertEqual(read_json(paths.artifact_path("output/generation_requests.json")), before_requests)
+
+    def test_conflicting_reference_fails_before_child_creation(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, media_type="VIDEO")
+            router = _ConflictingReferenceRouter()
+            with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID"):
+                qc_corrective_replan(
+                    runtime.root, config.project_id, self.ROOT,
+                    reason="reject the lantern-room reference", router=router)
+            self.assertEqual(len(router.calls), 1)
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            self.assertEqual([item["request_id"] for item in requests], [self.REF, self.ROOT])
+
+    def test_reference_selection_cannot_exceed_flow_capacity(self):
+        value = _FixtureRouter().reason().value
+        value["selected_reference_entity_ids"] = ["char_elias_venn", "prop_official_envelope"]
+        with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_REPLAN_REFERENCE_CAPACITY_INVALID"):
+            validate_qc_corrective_intent(
+                value, reference_entity_ids={"char_elias_venn", "prop_official_envelope"}, reference_capacity=1)
+
+    def test_pre_dispatch_supersession_replaces_only_invalid_untouched_corrective_child(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, media_type="VIDEO")
+            router = _ConflictingReferenceRouter()
+            # Recreate the exact historical defect under a narrow test-only
+            # bypass, then verify the recovery path itself is fail-closed.
+            with patch("story_auto.providers.flow.service._require_valid_corrective_reference_policy",
+                       return_value={"reference_capacity": 1,
+                                     "selected_reference_entity_ids": ["char_elias_venn"],
+                                     "effective_reference_entity_ids": ["char_elias_venn"],
+                                     "conflicts": []}):
+                bad = qc_corrective_replan(
+                    runtime.root, config.project_id, self.ROOT,
+                    reason="historical pre-fix bad corrective child", router=router)
+            old_id = bad["correction_request_id"]
+            before_request = copy.deepcopy(next(item for item in read_json(
+                paths.artifact_path("output/generation_requests.json"))["requests"] if item["request_id"] == old_id))
+            before_entry = copy.deepcopy(next(item for item in read_json(
+                paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"] == old_id))
+
+            # This operation is available only before any provider boundary.
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            blocked_entry = next(item for item in manifest["requests"] if item["request_id"] == old_id)
+            blocked_entry["attempts"] = [{"attempt": 1, "status": "SUBMITTED"}]
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            with self.assertRaisesRegex(Exception, "QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_NOT_ELIGIBLE"):
+                supersede_invalid_pending_qc_corrective_child(
+                    runtime.root, config.project_id, old_id, reason="must reject provider-bound child")
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
+                **manifest,
+                "requests": [before_entry if item["request_id"] == old_id else item for item in manifest["requests"]],
+            })
+
+            result = supersede_invalid_pending_qc_corrective_child(
+                runtime.root, config.project_id, old_id, reason="remove forbidden effective reference")
+            new_id = result["replacement_request_id"]
+            self.assertFalse(result["idempotent"])
+            self.assertEqual(result["effective_references"], [])
+            self.assertEqual(result["reference_capacity"], 1)
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            entries = {item["request_id"]: item for item in read_json(
+                paths.artifact_path("output/generation_manifest.json"))["requests"]}
+            replacement = next(item for item in requests if item["request_id"] == new_id)
+            self.assertNotIn(old_id, {item["request_id"] for item in requests})
+            self.assertEqual((replacement["reference_asset_ids"], replacement["depends_on"]), ([], []))
+            self.assertTrue(_runnable(replacement, entries))
+            self.assertEqual(entries[old_id]["attempts"], before_entry["attempts"])
+            self.assertEqual(entries[old_id]["provider_submissions"], before_entry.get("provider_submissions", 0))
+            self.assertEqual(entries[old_id]["selected_asset"], before_entry["selected_asset"])
+            transaction = read_json(next(paths.artifact_path(
+                "output/qc_corrective_pre_dispatch_supersession_transactions").glob("*.prepared.json")))
+            self.assertEqual(transaction["superseded_request"], before_request)
+            self.assertEqual(_resolve_current_canonical_descendant(
+                paths, config.project_id, self.ROOT, requests, entries), new_id)
+            self.assertIsNone(_first_invalid_request_replacement(paths, config.project_id, entries, requests))
+            again = supersede_invalid_pending_qc_corrective_child(
+                runtime.root, config.project_id, old_id, reason="idempotent retry")
+            self.assertTrue(again["idempotent"])
+            self.assertEqual(again["replacement_request_id"], new_id)
 
 
 if __name__ == "__main__":

@@ -31,6 +31,7 @@ from story_auto.core.visual import (
     validate_production_qc,
 )
 from story_auto.providers.llm import GeminiReasoningRouter
+from story_auto.providers.llm.gemini import LLMMedia
 from .postprocess import (
     PROCESSOR_NAME,
     PROCESSOR_VERSION,
@@ -79,11 +80,19 @@ QC_REJECTED_ASSET_REPLACEMENT_REASON = "QC_REJECTED_ASSET_REPLACEMENT"
 QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA = "story-auto-qc-corrective-replan-transaction/1.0.0"
 QC_CORRECTIVE_REPLANNED_STATUS = "QC_CORRECTIVE_REPLANNED"
 QC_CORRECTIVE_REPLAN_REASON = "QC_CORRECTIVE_REPLAN"
+QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-qc-corrective-pre-dispatch-supersession-transaction/1.0.0"
+QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS = "QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED"
+QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON = "QC_CORRECTIVE_PRE_DISPATCH_REFERENCE_POLICY_SUPERSESSION"
+# Flow currently accepts a single reference upload.  Corrective planning must
+# preserve that provider contract rather than letting dependency ordering choose
+# the effective visual semantics.
+FLOW_REFERENCE_CAPACITY = 1
 CANONICAL_REPLACEMENT_PARENT_STATUSES = {
     SUPERSEDED_AMBIGUOUS_STATUS,
     ABANDONED_UNRESOLVED_STATUS,
     QC_REJECTED_ASSET_REPLACED_STATUS,
     QC_CORRECTIVE_REPLANNED_STATUS,
+    QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
 }
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
@@ -492,6 +501,8 @@ def _transaction_error(schema_version: str) -> str:
         return "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA:
         return "QC_CORRECTIVE_REPLAN_RECOVERY_INVALID"
+    if schema_version == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA:
+        return "QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_RECOVERY_INVALID"
     return "FLOW_REPLACEMENT_RECOVERY_INVALID"
 
 
@@ -504,6 +515,9 @@ def _transaction_spec(paths, schema_version: str) -> tuple[Path, str]:
         return paths.artifact_path("output/qc_rejected_asset_replacement_transactions"), "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA:
         return paths.artifact_path("output/qc_corrective_replan_transactions"), "QC_CORRECTIVE_REPLAN_RECOVERY_INVALID"
+    if schema_version == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA:
+        return (paths.artifact_path("output/qc_corrective_pre_dispatch_supersession_transactions"),
+                "QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_RECOVERY_INVALID")
     raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
 
 
@@ -545,7 +559,8 @@ def _validate_transaction_targets(transaction: dict, *, schema_version: str | No
     schema = schema_version or transaction.get("schema_version")
     if schema not in {SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
                       QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA,
-                      QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA}:
+                      QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA,
+                      QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA}:
         raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
     error_code = _transaction_error(schema)
     targets = transaction.get("targets")
@@ -771,6 +786,9 @@ def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str
         if (entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
                 and not _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
             return {"request_id": entry.get("request_id")}, entry
+        if (entry.get("status") == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
+                and not _qc_corrective_pre_dispatch_supersession_valid(paths, project_id, entry, requests, entries)):
+            return {"request_id": entry.get("request_id")}, entry
     return None
 
 
@@ -865,6 +883,12 @@ def _recover_pending_qc_corrective_replans(paths, project_id: str) -> dict[str, 
     )
 
 
+def _recover_pending_qc_corrective_pre_dispatch_supersessions(paths, project_id: str) -> dict[str, dict]:
+    return _recover_replacement_transactions(
+        paths, project_id, schema_version=QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA
+    )
+
+
 def _unresolved_replay_transaction(paths, project_id: str, old_request_id: str,
                                    replacement_request_id: str) -> tuple[dict, dict] | None:
     """Find the one committed creation transaction for a replay epoch."""
@@ -922,12 +946,14 @@ def _recover_pending_request_replacements(paths, project_id: str) -> dict[str, d
     replayed = _recover_pending_unresolved_replays(paths, project_id)
     qc_replaced = _recover_pending_qc_rejected_asset_replacements(paths, project_id)
     qc_corrected = _recover_pending_qc_corrective_replans(paths, project_id)
-    groups = (recovered, replayed, qc_replaced, qc_corrected)
+    qc_pre_dispatch = _recover_pending_qc_corrective_pre_dispatch_supersessions(paths, project_id)
+    groups = (recovered, replayed, qc_replaced, qc_corrected, qc_pre_dispatch)
     if any(set(left).intersection(right) for index, left in enumerate(groups) for right in groups[index + 1:]):
         raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
     recovered.update(replayed)
     recovered.update(qc_replaced)
     recovered.update(qc_corrected)
+    recovered.update(qc_pre_dispatch)
     return recovered
 
 
@@ -2086,6 +2112,140 @@ def _direct_qc_corrective_child_ids(paths, project_id: str, supersedes_request_i
     return children
 
 
+def _qc_corrective_pre_dispatch_transaction(paths, project_id: str, old_request_id: str,
+                                            replacement_request_id: str) -> tuple[dict, dict] | None:
+    matches = []
+    for _path, transaction in _prepared_transactions(
+            paths, project_id, schema_version=QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA):
+        if (transaction.get("old_request_id") != old_request_id
+                or transaction.get("replacement_request_id") != replacement_request_id):
+            continue
+        transaction_id = transaction.get("transaction_id")
+        if not isinstance(transaction_id, str):
+            return None
+        _prepared, committed_path = _transaction_paths(
+            paths, transaction_id, schema_version=QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA)
+        try:
+            receipt = read_json(committed_path)
+        except Exception:
+            return None
+        expected = {
+            "schema_version": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA,
+            "state": "COMMITTED", "transaction_id": transaction_id,
+            "prepared_sha256": _json_sha256(transaction),
+        }
+        if receipt != expected:
+            return None
+        matches.append((transaction, receipt))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _direct_qc_corrective_pre_dispatch_child_ids(paths, project_id: str, old_request_id: str) -> list[str] | None:
+    children = []
+    try:
+        transactions = _prepared_transactions(
+            paths, project_id, schema_version=QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA)
+    except FlowError:
+        return None
+    for _path, transaction in transactions:
+        if transaction.get("old_request_id") != old_request_id:
+            continue
+        child_id = transaction.get("replacement_request_id")
+        if (not isinstance(child_id, str) or not child_id
+                or _qc_corrective_pre_dispatch_transaction(paths, project_id, old_request_id, child_id) is None):
+            return None
+        children.append(child_id)
+    return children
+
+
+def _qc_corrective_pre_dispatch_genesis_projection(request: dict) -> dict | None:
+    required = ("request_id", "fingerprint", "prompt", "purpose", "media_type", "provider",
+                "root_request_id", "supersedes_request_id", "correction_nonce", "correction_reason")
+    if (not isinstance(request, dict)
+            or any(not isinstance(request.get(key), str) or not request[key] for key in required)
+            or request.get("purpose") != "SHOT"
+            or request.get("media_type") not in {"IMAGE", "VIDEO"}
+            or request.get("correction_reason") != QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON
+            or not isinstance(request.get("correction_epoch"), int)
+            or request["correction_epoch"] < 1
+            or request.get("reference_asset_ids") != [] or request.get("depends_on") != []):
+        return None
+    provenance = request.get("pre_dispatch_supersession_provenance")
+    if (not isinstance(provenance, dict)
+            or provenance.get("root_request_id") != request["root_request_id"]
+            or provenance.get("supersedes_request_id") != request["supersedes_request_id"]
+            or provenance.get("correction_epoch") != request["correction_epoch"]
+            or provenance.get("reference_capacity") != FLOW_REFERENCE_CAPACITY
+            or not isinstance(provenance.get("source_request_sha256"), str)
+            or not provenance["source_request_sha256"]
+            or not isinstance(provenance.get("reference_policy"), dict)):
+        return None
+    return {
+        "request_id": request["request_id"], "fingerprint": request["fingerprint"],
+        "prompt": request["prompt"], "purpose": request["purpose"], "shot_id": request.get("shot_id"),
+        "media_type": request["media_type"], "provider": request["provider"],
+        "output_count": request.get("output_count", 1), "execution_tier": request.get("execution_tier"),
+        "depends_on": [], "reference_asset_ids": [], "root_request_id": request["root_request_id"],
+        "supersedes_request_id": request["supersedes_request_id"],
+        "correction_epoch": request["correction_epoch"], "correction_nonce": request["correction_nonce"],
+        "correction_reason": request["correction_reason"],
+        "corrected_semantic_intent": request.get("corrected_semantic_intent"),
+        "motion_risk_analysis": request.get("motion_risk_analysis") if request["media_type"] == "VIDEO" else None,
+        "corrective_motion_evidence": request.get("corrective_motion_evidence") if request["media_type"] == "VIDEO" else None,
+        "pre_dispatch_supersession_provenance": provenance,
+    }
+
+
+def _qc_corrective_pre_dispatch_supersession_valid(paths, project_id: str, entry: dict,
+                                                    requests: list[dict], entries: dict[str, dict]) -> bool:
+    if (entry.get("status") != QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
+            or entry.get("selected_asset") is not None
+            or entry.get("attempts") != []
+            or entry.get("provider_submissions") != 0):
+        return False
+    child_id = entry.get("pre_dispatch_supersession_request_id")
+    events = entry.get("pre_dispatch_supersession_events")
+    if not isinstance(child_id, str) or not isinstance(events, list) or len(events) != 1:
+        return False
+    event = events[0] if isinstance(events[0], dict) else None
+    if (not isinstance(event, dict)
+            or event.get("event") != QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON
+            or event.get("old_request_id") != entry.get("request_id")
+            or event.get("replacement_request_id") != child_id
+            or event.get("attempts_sha256") != _json_sha256([])
+            or event.get("provider_submissions") != 0):
+        return False
+    resolved = _qc_corrective_pre_dispatch_transaction(paths, project_id, entry.get("request_id"), child_id)
+    if resolved is None:
+        return False
+    transaction, _receipt = resolved
+    stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
+    stored_manifest = transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+    stored_parent = next((item for item in stored_manifest if item.get("request_id") == entry.get("request_id")), None)
+    stored_child = next((item for item in stored_requests if item.get("request_id") == child_id), None)
+    stored_child_entry = next((item for item in stored_manifest if item.get("request_id") == child_id), None)
+    child = next((item for item in requests if item.get("request_id") == child_id), None)
+    child_entry = entries.get(child_id)
+    if (not isinstance(stored_parent, dict) or stored_parent != entry
+            or not isinstance(stored_child, dict)
+            or _qc_corrective_pre_dispatch_genesis_projection(stored_child) is None
+            or not isinstance(stored_child_entry, dict)
+            or stored_child_entry.get("attempts") != []
+            or stored_child_entry.get("provider_submissions") != 0
+            or stored_child_entry.get("selected_asset") is not None
+            or stored_child_entry.get("attribution_claim") != "NONE"
+            or not isinstance(child_entry, dict)
+            or _direct_qc_corrective_pre_dispatch_child_ids(paths, project_id, entry.get("request_id")) != [child_id]):
+        return False
+    if isinstance(child, dict):
+        return (_qc_corrective_pre_dispatch_genesis_projection(child)
+                == _qc_corrective_pre_dispatch_genesis_projection(stored_child)
+                and child_entry.get("status") in {"PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS",
+                                                    "FAILED_RETRYABLE", "QC_PENDING", "SUCCEEDED", "FAILED_PERMANENT",
+                                                    "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"})
+    return _historical_replacement_parent(child_entry) and _manifest_identity_matches_request(child_entry, stored_child)
+
+
 def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict) -> bool:
     fields = ("root_request_id", "supersedes_request_id", "correction_epoch", "correction_nonce",
               "correction_reason", "corrective_replan_provenance")
@@ -2098,20 +2258,32 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
             and isinstance(item.get("correction_request_id"), str)
             and "supersedes_request_id" not in item):
         return True
+    if (item.get("status") == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
+            and isinstance(item.get("pre_dispatch_supersession_request_id"), str)):
+        # The dedicated parent validator below verifies this outgoing edge.
+        return True
     request_id = item.get("request_id")
     parent_id = item.get("supersedes_request_id")
     if (not isinstance(request_id, str) or not request_id
             or not isinstance(parent_id, str) or not parent_id):
         return False
-    resolved = _qc_corrective_replan_transaction(paths, project_id, parent_id, request_id)
+    reason = item.get("correction_reason")
+    if reason == QC_CORRECTIVE_REPLAN_REASON:
+        resolved = _qc_corrective_replan_transaction(paths, project_id, parent_id, request_id)
+        projection = _qc_corrective_replan_genesis_projection
+    elif reason == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON:
+        resolved = _qc_corrective_pre_dispatch_transaction(paths, project_id, parent_id, request_id)
+        projection = _qc_corrective_pre_dispatch_genesis_projection
+    else:
+        return False
     if resolved is None:
         return False
     transaction, _receipt = resolved
     stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
     stored = next((request for request in stored_requests if request.get("request_id") == request_id), None)
     if "fingerprint" not in item or "prompt" not in item:
-        return (
-            _qc_corrective_replan_genesis_projection(stored) is not None
+        common = (
+            projection(stored) is not None
             and item.get("request_identity_sha256") == stored.get("fingerprint")
             and item.get("prompt_sha256") == hashlib.sha256(stored.get("prompt", "").encode("utf-8")).hexdigest()
             and item.get("related_identity") == (stored.get("shot_id") or stored.get("entity_id"))
@@ -2123,12 +2295,13 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
             and item.get("correction_nonce") == stored.get("correction_nonce")
             and item.get("correction_reason") == stored.get("correction_reason")
             and item.get("corrected_semantic_intent") == stored.get("corrected_semantic_intent")
-            and item.get("corrective_replan_provenance") == stored.get("corrective_replan_provenance")
         )
+        if reason == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON:
+            return common and item.get("pre_dispatch_supersession_provenance") == stored.get("pre_dispatch_supersession_provenance")
+        return common and item.get("corrective_replan_provenance") == stored.get("corrective_replan_provenance")
     return (
-        _qc_corrective_replan_genesis_projection(item) is not None
-        and _qc_corrective_replan_genesis_projection(item)
-        == _qc_corrective_replan_genesis_projection(stored)
+        projection(item) is not None
+        and projection(item) == projection(stored)
     )
 
 
@@ -2216,6 +2389,10 @@ def _resolve_current_canonical_descendant(paths, project_id: str, request_id: st
             if not _qc_corrective_replan_valid(paths, project_id, entry, requests, entries):
                 return None
             child_id = entry.get("correction_request_id")
+        elif status == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS:
+            if not _qc_corrective_pre_dispatch_supersession_valid(paths, project_id, entry, requests, entries):
+                return None
+            child_id = entry.get("pre_dispatch_supersession_request_id")
         elif status == SUPERSEDED_AMBIGUOUS_STATUS:
             if not _superseded_entry_valid(paths, project_id, entry, requests, entries):
                 return None
@@ -2343,6 +2520,9 @@ def _canonical_parent_ids(paths, project_id: str, child_id: str, requests: list[
         elif status == QC_CORRECTIVE_REPLANNED_STATUS:
             valid = entry.get("correction_request_id") == child_id and _qc_corrective_replan_valid(
                 paths, project_id, entry, requests, entries)
+        elif status == QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS:
+            valid = entry.get("pre_dispatch_supersession_request_id") == child_id and _qc_corrective_pre_dispatch_supersession_valid(
+                paths, project_id, entry, requests, entries)
         else:
             valid = False
         if valid:
@@ -2389,6 +2569,74 @@ def _video_continuity_qc_approved(entry: dict | None) -> bool:
     if str(results.get("CONTINUITY", "")).upper() != "FAIL":
         return False
     return all(str(value).upper() == "PASS" for field, value in results.items() if field != "CONTINUITY")
+
+
+_REFERENCE_CONFLICT_CUES = (
+    "lantern room", "lantern-room", "great lighthouse lens", "great lens",
+    "ocean-facing gallery", "ocean gallery", "tower/gallery", "tower gallery",
+    "rotating fresnel lens", "fresnel lens",
+)
+
+
+def _safe_reference_candidate(request: dict, entry: dict, canonical_entity: dict | None) -> dict:
+    """Expose only planner-relevant, non-secret provenance for a reference."""
+    selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+    metadata = selected.get("metadata") if isinstance(selected, dict) else None
+    return {
+        "entity_id": request.get("entity_id"),
+        "reference_request_id": request.get("request_id"),
+        "reference_type": request.get("reference_type"),
+        "reference_prompt": request.get("prompt"),
+        "reference_visual_brief": request.get("visual_brief"),
+        "canonical_entity": canonical_entity,
+        "selected_asset": ({
+            "sha256": selected.get("sha256"),
+            "pixel_sha256": metadata.get("pixel_sha256") if isinstance(metadata, dict) else None,
+            "dhash256": metadata.get("dhash256") if isinstance(metadata, dict) else None,
+        } if isinstance(selected, dict) else None),
+    }
+
+
+def _corrective_reference_policy(corrected_intent: dict, reference_candidates: list[dict],
+                                 *, capacity: int = FLOW_REFERENCE_CAPACITY) -> dict:
+    """Evaluate the references Flow will actually receive; never infer from order."""
+    selected = corrected_intent.get("selected_reference_entity_ids") if isinstance(corrected_intent, dict) else None
+    if (not isinstance(capacity, int) or capacity < 0 or not isinstance(selected, list)
+            or len(selected) != len(set(selected))):
+        raise FlowError("QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID")
+    candidates = {item.get("entity_id"): item for item in reference_candidates if isinstance(item, dict)}
+    if any(not isinstance(item, str) or item not in candidates for item in selected):
+        raise FlowError("QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID")
+    context = " ".join([
+        str(corrected_intent.get("location", "")),
+        *[str(item) for item in corrected_intent.get("continuity_requirements", [])],
+        *[str(item) for item in corrected_intent.get("exclusions", [])],
+    ]).lower()
+    conflicts = []
+    for entity_id in selected:
+        candidate = candidates[entity_id]
+        evidence = json.dumps({
+            "reference_prompt": candidate.get("reference_prompt"),
+            "reference_visual_brief": candidate.get("reference_visual_brief"),
+            "canonical_entity": candidate.get("canonical_entity"),
+        }, ensure_ascii=False).lower()
+        cues = [cue for cue in _REFERENCE_CONFLICT_CUES if cue in evidence and (cue in context or "kitchen" in context)]
+        if cues:
+            conflicts.append({"entity_id": entity_id, "cues": cues})
+    return {
+        "reference_capacity": capacity,
+        "selected_reference_entity_ids": list(selected),
+        "effective_reference_entity_ids": list(selected[:capacity]),
+        "conflicts": conflicts,
+    }
+
+
+def _require_valid_corrective_reference_policy(corrected_intent: dict, reference_candidates: list[dict]) -> dict:
+    policy = _corrective_reference_policy(corrected_intent, reference_candidates)
+    if (len(policy["selected_reference_entity_ids"]) > policy["reference_capacity"]
+            or policy["conflicts"]):
+        raise FlowError("QC_CORRECTIVE_REPLAN_REFERENCE_POLICY_INVALID")
+    return policy
 
 
 def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str,
@@ -2477,6 +2725,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
         }
         reference_request_by_entity = {}
         reference_candidates = []
+        reference_media: list[LLMMedia] = []
         for request in requests:
             entity_id = request.get("entity_id")
             entry = entries.get(request.get("request_id"))
@@ -2484,12 +2733,19 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                     or not isinstance(entry, dict) or entry.get("status") != "SUCCEEDED"):
                 continue
             reference_request_by_entity[entity_id] = request["request_id"]
-            reference_candidates.append({
-                "entity_id": entity_id,
-                "reference_request_id": request["request_id"],
-                "reference_type": request.get("reference_type"),
-                "canonical_entity": entities.get(entity_id),
-            })
+            candidate = _safe_reference_candidate(request, entry, entities.get(entity_id))
+            selected_asset = entry.get("selected_asset")
+            asset_path = selected_asset.get("path") if isinstance(selected_asset, dict) else None
+            asset_sha = selected_asset.get("sha256") if isinstance(selected_asset, dict) else None
+            source = paths.artifact_path(asset_path) if isinstance(asset_path, str) else None
+            suffixes = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+            if (source is not None and source.is_file() and source.suffix.lower() in suffixes
+                    and len(reference_media) < len(relevant_entity_ids)
+                    and source.stat().st_size <= 12 * 1024 * 1024):
+                label = f"reference:{entity_id}:{str(asset_sha)[:16]}"
+                candidate["reference_media_label"] = label
+                reference_media.append(LLMMedia(label=label, mime_type=suffixes[source.suffix.lower()], data=source.read_bytes()))
+            reference_candidates.append(candidate)
         root_entry = entries[root_request_id]
         original_prompt = root_entry.get("historical_prompt")
         if not isinstance(original_prompt, str) or not original_prompt.strip():
@@ -2511,6 +2767,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "original_logical_request_intent": original_logical_request,
             "latest_qc_rejection": latest_rejection,
             "reference_candidates": reference_candidates,
+            "provider_reference_capacity": FLOW_REFERENCE_CAPACITY,
             "prior_reference_selection": {
                 "entity_ids": old_request.get("reference_asset_ids", []),
                 "request_ids": old_request.get("depends_on", []),
@@ -2521,7 +2778,11 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
                 active_router,
                 canonical_context=canonical_context,
                 reference_entity_ids=set(reference_request_by_entity),
+                reference_capacity=FLOW_REFERENCE_CAPACITY,
+                reference_media=tuple(reference_media),
             )
+            reference_policy = _require_valid_corrective_reference_policy(
+                corrected_intent, reference_candidates)
             correction = compile_qc_corrected_request(
                 old_request,
                 corrected_intent,
@@ -2579,6 +2840,7 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "corrected_semantic_intent": corrected_intent,
             "semantic_delta": list(corrected_intent["semantic_delta"]),
             "reference_selection_delta": reference_delta,
+            "reference_policy": reference_policy,
             "deterministic_compiler": (
                 "compile_flow_motion_prompt" if media_type == "VIDEO" else "compile_image_prompt"
             ),
@@ -2691,6 +2953,169 @@ def qc_corrective_replan(runtime_root: Path | str, project_id: str, request_id: 
             "status": QC_CORRECTIVE_REPLANNED_STATUS,
             "idempotent": False,
         }
+
+
+def supersede_invalid_pending_qc_corrective_child(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                                  reason: str,
+                                                  _fault_injector: Callable[[str], None] | None = None) -> dict:
+    """Replace one policy-invalid, never-dispatched corrective child with a zero-reference child.
+
+    This is deliberately narrower than prompt editing or generic pending replacement:
+    it preserves the rejected corrective intent, accepts only an untouched
+    qc-corrective child, and only runs after deterministic reference-policy
+    rejection proves that Flow would receive a conflicting reference.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        recovered = _recover_pending_qc_corrective_pre_dispatch_supersessions(paths, project_id)
+        manifest_path, manifest = _manifest(paths, project_id)
+        requests_path = paths.artifact_path("output/generation_requests.json")
+        media_plan_path = paths.artifact_path("output/media_plan.json")
+        continuity_path = paths.artifact_path("output/continuity_bible.json")
+        try:
+            requests_data = read_json(requests_path)
+            requests = requests_data.get("requests") if isinstance(requests_data, dict) else None
+            media_plan = read_json(media_plan_path)
+            continuity = read_json(continuity_path)
+        except Exception as error:
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_INVALID") from error
+        if not isinstance(requests, list):
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_INVALID")
+        entries = {item.get("request_id"): item for item in manifest.get("requests", []) if isinstance(item, dict)}
+        old_request = next((item for item in requests if item.get("request_id") == request_id), None)
+        old_entry = entries.get(request_id)
+        if not isinstance(old_request, dict):
+            completed = recovered.get(request_id)
+            if (isinstance(old_entry, dict) and completed
+                    and _qc_corrective_pre_dispatch_supersession_valid(paths, project_id, old_entry, requests, entries)):
+                return {"old_request_id": request_id,
+                        "replacement_request_id": completed["replacement_request_id"],
+                        "provider_submissions": 0,
+                        "status": QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
+                        "idempotent": True}
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_ALREADY_COMPLETED")
+        if (old_request.get("purpose") != "SHOT"
+                or old_request.get("correction_reason") != QC_CORRECTIVE_REPLAN_REASON
+                or not isinstance(old_entry, dict)
+                or old_entry.get("status") != "PENDING"
+                or old_entry.get("attempts") != []
+                or old_entry.get("provider_submissions") != 0
+                or old_entry.get("selected_asset") is not None
+                or old_entry.get("attribution_claim") != "NONE"
+                or not _qc_corrective_metadata_has_direct_origin(paths, project_id, old_request)):
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_NOT_ELIGIBLE")
+        selected_entities = list(old_request.get("reference_asset_ids", []))
+        candidate_by_entity = {}
+        for candidate_request in requests:
+            entity_id = candidate_request.get("entity_id")
+            candidate_entry = entries.get(candidate_request.get("request_id"))
+            if (candidate_request.get("purpose") == "REFERENCE" and entity_id in selected_entities
+                    and isinstance(candidate_entry, dict) and candidate_entry.get("status") == "SUCCEEDED"):
+                candidate_by_entity[entity_id] = _safe_reference_candidate(candidate_request, candidate_entry, None)
+        policy = _corrective_reference_policy(
+            old_request.get("corrected_semantic_intent"), list(candidate_by_entity.values()))
+        if (len(policy["selected_reference_entity_ids"]) <= policy["reference_capacity"]
+                and not policy["conflicts"]):
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_NOT_ELIGIBLE")
+        old_request_snapshot = json.loads(json.dumps(old_request, ensure_ascii=False))
+        old_entry_snapshot = json.loads(json.dumps(old_entry, ensure_ascii=False))
+        epoch = int(old_request.get("correction_epoch", 0)) + 1
+        nonce = uuid.uuid4().hex
+        identity = {
+            "root_request_id": old_request.get("root_request_id"),
+            "supersedes_request_id": request_id,
+            "correction_epoch": epoch,
+            "correction_nonce": nonce,
+            "prompt": old_request.get("prompt"),
+            "corrected_semantic_intent": old_request.get("corrected_semantic_intent"),
+            "effective_reference_entity_ids": [],
+        }
+        fingerprint = _json_sha256(identity)
+        replacement_id = "req_" + fingerprint[:20]
+        if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_IDENTITY_COLLISION")
+        provenance = {
+            "root_request_id": old_request.get("root_request_id"),
+            "supersedes_request_id": request_id,
+            "correction_epoch": epoch,
+            "reference_capacity": FLOW_REFERENCE_CAPACITY,
+            "reference_policy": policy,
+            "source_request_sha256": _json_sha256(old_request_snapshot),
+            "source_manifest_sha256": _json_sha256(old_entry_snapshot),
+        }
+        replacement = dict(old_request)
+        replacement.update({
+            "request_id": replacement_id,
+            "fingerprint": fingerprint,
+            "reference_asset_ids": [],
+            "depends_on": [],
+            "supersedes_request_id": request_id,
+            "correction_epoch": epoch,
+            "correction_nonce": nonce,
+            "correction_reason": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON,
+            "pre_dispatch_supersession_provenance": provenance,
+        })
+        if _qc_corrective_pre_dispatch_genesis_projection(replacement) is None:
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_INVALID")
+        position = requests.index(old_request)
+        requests[position] = replacement
+        media_plan_changed = _migrate_request_references(media_plan, request_id, replacement_id)
+        try:
+            validate_generation_requests(requests_data, media_plan, continuity)
+        except PlanningError as error:
+            raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_INVALID", error.failure_class) from error
+        event = {
+            "at": _now(), "event": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON,
+            "operator_reason": reason.strip(), "old_request_id": request_id,
+            "replacement_request_id": replacement_id, "attempts_sha256": _json_sha256([]),
+            "provider_submissions": 0, "source_request_sha256": provenance["source_request_sha256"],
+            "reference_policy": policy,
+        }
+        old_entry.setdefault("pre_dispatch_supersession_events", []).append(event)
+        old_entry.update({
+            "status": QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
+            "pre_dispatch_supersession_request_id": replacement_id,
+            "pre_dispatch_supersession_reason": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON,
+            "updated_at": event["at"],
+        })
+        manifest["requests"].append({
+            "request_id": replacement_id, "request_identity_sha256": fingerprint,
+            "related_identity": replacement.get("shot_id"), "media_type": replacement["media_type"],
+            "provider": replacement.get("provider", "google_flow"),
+            "prompt_sha256": hashlib.sha256(replacement["prompt"].encode("utf-8")).hexdigest(),
+            "reference_asset_hashes": [], "attempts": [], "provider_submissions": 0,
+            "selected_asset": None, "attribution_claim": "NONE", "status": "PENDING",
+            "created_at": event["at"], "root_request_id": replacement["root_request_id"],
+            "supersedes_request_id": request_id, "correction_epoch": epoch,
+            "correction_nonce": nonce, "correction_reason": replacement["correction_reason"],
+            "corrected_semantic_intent": replacement.get("corrected_semantic_intent"),
+            "pre_dispatch_supersession_provenance": provenance,
+        })
+        transaction_id = "qc-corrective-pre-dispatch-" + _json_sha256({
+            "project_id": project_id, "old_request_id": request_id,
+            "replacement_request_id": replacement_id,
+        })[:24]
+        targets = {
+            "generation_requests": _target("output/generation_requests.json", requests_data),
+            "generation_manifest": _target("output/generation_manifest.json", manifest),
+        }
+        if media_plan_changed:
+            targets["media_plan"] = _target("output/media_plan.json", media_plan)
+        transaction = {
+            "schema_version": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA,
+            "state": "PREPARED", "transaction_id": transaction_id, "project_id": project_id,
+            "old_request_id": request_id, "replacement_request_id": replacement_id,
+            "superseded_request": old_request_snapshot,
+            "superseded_manifest_entry": old_entry_snapshot,
+            "targets": targets,
+        }
+        _publish_replacement_transaction(paths, transaction, fault_injector=_fault_injector)
+        return {"old_request_id": request_id, "replacement_request_id": replacement_id,
+                "provider_submissions": 0, "status": QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
+                "idempotent": False, "effective_references": [],
+                "reference_capacity": FLOW_REFERENCE_CAPACITY}
 
 
 def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: str, *, reason: str) -> dict | None:
