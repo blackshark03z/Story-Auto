@@ -23,7 +23,11 @@ class OperatorApplicationTests(unittest.TestCase):
             rejection={"reviewed_at":"2026-08-21T00:00:00Z","status":"REJECTED","failure_class":"NATURALNESS_QC_REJECTED",
                        "report":{"reviewer":"operator"},"selected_asset_path":"assets/selected.png","selected_asset_sha256":digest}
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":"prj_goal37","requests":[
-                {"request_id":request_id,"media_type":"IMAGE","status":"FAILED_RETRYABLE","failure_class":"NATURALNESS_QC_REJECTED","attempts":[],"selected_asset":{"path":"assets/selected.png","sha256":digest,"production_qc":"REJECTED"},"quality_reviews":[rejection]}]})
+                {"request_id":request_id,"media_type":"IMAGE","status":"FAILED_RETRYABLE","failure_class":"NATURALNESS_QC_REJECTED",
+                 "attempts":[{"attempt":1,"status":"SUCCEEDED","attribution_state":"CONFIRMED",
+                              "asset_path":"assets/selected.png","asset_sha256":digest}],
+                 "selected_asset":{"path":"assets/selected.png","sha256":digest,"attempt":1,"production_qc":"REJECTED"},
+                 "quality_reviews":[rejection]}]})
             media=app.reopen_false_positive_production_qc("prj_goal37",request_id,expected_asset_sha256=digest,
                                                            reviewer="tech-lead",reason="bounded appeal")
             item=next(value for value in media["references"] if value["request"]["request_id"]==request_id)
