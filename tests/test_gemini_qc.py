@@ -44,9 +44,62 @@ def test_high_risk_motion_requires_atomic_decomposition():
 
 def test_flow_prompt_is_deterministic_bounded_and_contact_safe():
     clip = {"start_state":"hand away from handle", "action":"hand approaches and rests on handle",
-            "end_state":"hand resting on handle; door closed", "natural_stillness":"one breath"}
+            "end_state":"hand resting on handle; door closed", "natural_stillness":"one breath",
+            "direction_sensitive":True, "ordered_action_steps":["hand approaches handle", "hand contacts handle"],
+            "progression_checkpoints":["hand away", "hand at handle"], "movement_direction":"hand toward handle",
+            "forbidden_motion":["hand moves away", "object moves before contact", "reverse progression"]}
     prompt = compile_flow_motion_prompt(subject="fictional conductor", location="academy corridor", clip=clip, duration=4)
-    assert "One visible action only" in prompt and "before they move" in prompt and "no reset" in prompt
+    assert "One visible action only" in prompt and "before they move" in prompt and "Required ordered action sequence" in prompt and "no reset" in prompt
+
+
+def directional_clip(action="ascends the staircase"):
+    return {"start_state":"lower stair position, body oriented upward", "action":action,
+            "end_state":"upper landing, higher position", "natural_stillness":"settles at the landing",
+            "direction_sensitive":True,
+            "ordered_action_steps":["lower stair position", "middle stair position", "upper landing"],
+            "progression_checkpoints":["lower", "middle", "upper"], "movement_direction":"lower -> middle -> upper, forward and upward",
+            "forbidden_motion":["backward ascent", "descending", "reverse progression", "unexplained direction reversal"]}
+
+
+def test_stair_ascent_contract_rejects_reverse_trajectory_and_accepts_forward_progression():
+    valid = directional_clip()
+    validate_motion_plan({"meaningful_actions":["ascend stairs"], "atomic_clips":[valid]}, original_action=valid["action"])
+    reversed_clip = directional_clip()
+    reversed_clip["movement_direction"] = "upper -> middle -> lower, downward"
+    with pytest.raises(GeminiQCError, match="MOTION_DIRECTIONAL_TRAJECTORY_INVALID"):
+        validate_motion_plan({"meaningful_actions":["ascend stairs"], "atomic_clips":[reversed_clip]}, original_action=reversed_clip["action"])
+
+
+def test_pickup_and_sit_contracts_reject_reversed_causal_order():
+    pickup = {"start_state":"hand away from cup", "action":"picks up the cup", "end_state":"cup lifted",
+              "natural_stillness":"holds still", "direction_sensitive":True,
+              "ordered_action_steps":["hand approaches cup", "hand contacts cup", "cup lifts"],
+              "progression_checkpoints":["hand away", "contact", "cup raised"], "movement_direction":"hand -> cup -> raised cup",
+              "forbidden_motion":["object moves before contact", "reverse progression"]}
+    validate_motion_plan({"meaningful_actions":["pick up cup"], "atomic_clips":[pickup]}, original_action=pickup["action"])
+    pickup["ordered_action_steps"] = ["cup lifts", "hand approaches cup", "hand contacts cup"]
+    with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
+        validate_motion_plan({"meaningful_actions":["pick up cup"], "atomic_clips":[pickup]}, original_action=pickup["action"])
+    sit = {"start_state":"standing", "action":"sits in chair", "end_state":"seated", "natural_stillness":"settles",
+           "direction_sensitive":True, "ordered_action_steps":["standing", "lowering toward chair", "seated"],
+           "progression_checkpoints":["standing", "lowering", "seated"], "movement_direction":"standing -> seated, downward",
+           "forbidden_motion":["standing up", "reverse progression"]}
+    validate_motion_plan({"meaningful_actions":["sit"], "atomic_clips":[sit]}, original_action=sit["action"])
+    sit["ordered_action_steps"] = ["seated", "lowering toward chair", "standing"]
+    with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
+        validate_motion_plan({"meaningful_actions":["sit"], "atomic_clips":[sit]}, original_action=sit["action"])
+
+
+def test_non_directional_still_motion_remains_unconstrained():
+    clip = {"start_state":"still", "action":"observes the quiet corridor", "end_state":"still", "natural_stillness":"one breath"}
+    validate_motion_plan({"meaningful_actions":["observe"], "atomic_clips":[clip]}, original_action=clip["action"])
+    assert "Required ordered action sequence" not in compile_flow_motion_prompt(subject="caretaker", location="corridor", clip=clip, duration=4)
+
+
+def test_complex_directional_action_requires_atomic_decomposition():
+    clip = directional_clip("turns then ascends the staircase")
+    with pytest.raises(GeminiQCError, match="HIGH_RISK_ACTION_NOT_DECOMPOSED"):
+        validate_motion_plan({"meaningful_actions":["turn", "ascend"], "atomic_clips":[clip]}, original_action=clip["action"])
 
 
 def test_usable_window_validation():
@@ -59,6 +112,18 @@ def test_deterministic_temporal_gate_overrides_gemini_pass_on_severe_defect():
     severe = [{"class":"LIMB_INTEGRITY", "severity":"SEVERE", "start":1, "end":2, "evidence":"detached hand"}]
     with pytest.raises(GeminiQCError, match="TEMPORAL_HARD_GATE_CONTRADICTION"):
         combine_temporal_qc(temporal("PASS_TEMPORAL", severe), temporal("PASS_TEMPORAL"), duration=8, target_duration=8)
+
+
+def test_temporal_qc_maps_directional_or_contact_progression_failures_to_action_logic_rejection():
+    contract = directional_clip()
+    reverse = temporal("PASS_TEMPORAL")
+    reverse["dimensions"] = {"MOVEMENT_DIRECTION":"SEVERE", "CHECKPOINT_PROGRESSION":"MAJOR"}
+    result = combine_temporal_qc(reverse, temporal("PASS_TEMPORAL"), duration=8, target_duration=8, motion_contract=contract)
+    assert result["state"] == "REJECT_ACTION_LOGIC" and not result["eligible"]
+    contact = temporal("PASS_TEMPORAL")
+    contact["dimensions"] = {"CAUSAL_CONTACT_ORDER":"MAJOR"}
+    result = combine_temporal_qc(temporal("PASS_TEMPORAL"), contact, duration=8, target_duration=8, motion_contract=contract)
+    assert result["state"] == "REJECT_ACTION_LOGIC" and not result["eligible"]
 
 
 @pytest.mark.parametrize("state", ["REJECT_ACTION_LOGIC", "REJECT_ANATOMY", "REJECT_LOOP", "REJECT_IDENTITY", "REJECT_BACKGROUND"])

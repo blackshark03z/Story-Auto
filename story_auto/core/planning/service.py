@@ -480,6 +480,12 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
         start, end = float(request["target_start"]), float(request["target_end"])
         step = (end - start) / len(clips)
         for index, clip in enumerate(clips):
+            clip = dict(clip)
+            clip.setdefault("direction_sensitive", False)
+            clip.setdefault("ordered_action_steps", [])
+            clip.setdefault("progression_checkpoints", [])
+            clip.setdefault("movement_direction", "")
+            clip.setdefault("forbidden_motion", [])
             part = {key:value for key,value in request.items() if key not in {"request_id","fingerprint","part_index","part_count","target_start","target_end","target_duration","prompt"}}
             part_start = start + index * step; part_end = end if index == len(clips)-1 else start + (index+1) * step
             part.update({"target_start":part_start,"target_end":part_end,"target_duration":part_end-part_start,
@@ -489,7 +495,10 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
                 "motion_risk_analysis":{"schema_version":MOTION_PLAN_VERSION,"source_request_id":request["request_id"],
                     "physical_complexity":analysis.get("physical_complexity"),"anatomy_risk":analysis.get("anatomy_risk"),
                     "looping_risk":analysis.get("looping_risk"),"interaction_objects":analysis.get("interaction_objects",[]),
-                    "hand_object_contact":analysis.get("hand_object_contact"),"atomic_clip":clip}})
+                    "hand_object_contact":analysis.get("hand_object_contact"),"direction_sensitive":clip.get("direction_sensitive", False),
+                    "ordered_action_steps":clip.get("ordered_action_steps",[]),"progression_checkpoints":clip.get("progression_checkpoints",[]),
+                    "movement_direction":clip.get("movement_direction", ""),"forbidden_motion":clip.get("forbidden_motion",[]),
+                    "atomic_clip":clip}})
             rewritten.append(part)
     prior_ids: dict[int, str] = {}
     for request in rewritten:
@@ -617,7 +626,15 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
                 if any(not isinstance(clip.get(name), str) or not clip[name].strip()
                        for name in ("start_state", "action", "end_state", "natural_stillness")):
                     raise GeminiQCError("MOTION_PLAN_INVALID")
-                validate_motion_plan({"atomic_clips":[clip]}, original_action=clip["action"])
+                contract_fields = ("direction_sensitive", "ordered_action_steps", "progression_checkpoints", "movement_direction", "forbidden_motion")
+                present = [field for field in contract_fields if field in evidence or field in clip]
+                # Pre-Goal44 requests are immutable correction inputs.  They have no
+                # directional fields at all; new compilation always emits all five.
+                if present:
+                    if len(present) != len(contract_fields) or any(
+                            evidence.get(field) != clip.get(field) for field in contract_fields):
+                        raise GeminiQCError("MOTION_PLAN_INVALID")
+                    validate_motion_plan({"atomic_clips":[clip]}, original_action=clip["action"])
             except (GeminiQCError, KeyError, TypeError) as error:
                 raise PlanningError("MOTION_PLAN_INVALID", str(request.get("request_id"))) from error
         if ambient:

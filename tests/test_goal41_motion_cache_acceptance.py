@@ -34,6 +34,18 @@ def motion_plan(*, valid: bool) -> dict:
             "action": "door opens once",
             "end_state": "door remains open",
             "natural_stillness": "settles without looping",
+            "direction_sensitive": True,
+            "ordered_action_steps": ["hand contacts handle", "door opens"],
+            "progression_checkpoints": ["door closed", "door open"],
+            "movement_direction": "door closed -> open",
+            "forbidden_motion": ["door closes", "object moves before contact", "reverse progression"],
+        })
+        clips[0].update({
+            "direction_sensitive": True,
+            "ordered_action_steps": ["hand approaches handle", "hand contacts handle"],
+            "progression_checkpoints": ["hand lowered", "hand at handle"],
+            "movement_direction": "hand toward handle",
+            "forbidden_motion": ["hand moves away", "object moves before contact", "reverse progression"],
         })
     return {
         "start_state": clips[0]["start_state"],
@@ -118,7 +130,7 @@ def test_trial_b_style_legacy_poison_is_bypassed_without_manual_cache_delete():
 
         poisoned = router.reason(
             task="motion_planning", prompt=motion_prompt(), schema=MOTION_SCHEMA, tier="HARD",
-            prompt_version="motion-planner/1.0.0", schema_version=MOTION_PLAN_VERSION,
+            prompt_version="motion-planner/1.0.0", schema_version="story-auto-motion-plan/1.0.0",
         )
         with pytest.raises(GeminiQCError, match="HIGH_RISK_ACTION_NOT_DECOMPOSED"):
             validate_motion_plan(poisoned.value, original_action=INTENT["action"])
@@ -132,10 +144,11 @@ def test_trial_b_style_legacy_poison_is_bypassed_without_manual_cache_delete():
         assert not recomputed.cache_hit and recomputed.request_count == 1
         assert reused.cache_hit and reused.request_count == 0
         assert len(calls) == 2
-        assert cache_path.is_file() and read_json(cache_path)["value"] == valid
+        assert cache_path.is_file() and read_json(cache_path)["value"] == invalid
+        assert len(list((Path(directory) / "cache").glob("*.json"))) == 2
         ledger = read_json(Path(directory) / "ledger.json")
-        assert any(item["status"] == "REJECTED" and item.get("source") == "CACHE"
-                   for item in ledger["requests"])
+        assert not any(item["status"] == "REJECTED" and item.get("source") == "CACHE"
+                       for item in ledger["requests"])
 
 
 def test_all_domain_rejections_keep_existing_hard_router_bound_and_canonical_failure():

@@ -189,8 +189,14 @@ class PlanningTests(unittest.TestCase):
         media=compile_media_plan("prj_motion",shot_plan,"full_video_ai",settings)
         requests=compile_generation_requests("prj_motion",shot_plan,media,continuity,settings)
         source=next(item for item in requests["requests"] if item.get("purpose")=="SHOT")
-        clip=lambda action:{"start_state":"still","action":action,"end_state":"changed","natural_stillness":"brief pause"}
-        motion={"records":[{"request_id":source["request_id"],"analysis":{"physical_complexity":"HIGH","anatomy_risk":"MEDIUM","looping_risk":"LOW","interaction_objects":["door"],"hand_object_contact":"bounded","atomic_clips":[clip("hand reaches handle"),clip("door opens once")]}}]}
+        def clip(action, steps, checkpoints, trajectory, forbidden):
+            return {"start_state":"still", "action":action, "end_state":"changed", "natural_stillness":"brief pause",
+                    "direction_sensitive":True, "ordered_action_steps":steps, "progression_checkpoints":checkpoints,
+                    "movement_direction":trajectory, "forbidden_motion":forbidden}
+        motion={"records":[{"request_id":source["request_id"],"analysis":{"physical_complexity":"HIGH","anatomy_risk":"MEDIUM","looping_risk":"LOW","interaction_objects":["door"],"hand_object_contact":"bounded","atomic_clips":[
+            clip("hand reaches handle", ["hand approaches handle", "hand contacts handle"], ["hand away", "hand at handle"], "hand toward handle", ["hand moves away", "object moves before contact", "reverse progression"]),
+            clip("door opens once", ["hand contacts handle", "door opens"], ["door closed", "door open"], "door closed -> open", ["door closes", "object moves before contact", "reverse progression"]),
+        ]}}]}
         resolved=apply_motion_plans(requests,shot_plan,motion)
         parts=sorted((item for item in resolved["requests"] if item.get("purpose")=="SHOT"),key=lambda item:item["part_index"])
         self.assertEqual([item["part_index"] for item in parts],[1,2])

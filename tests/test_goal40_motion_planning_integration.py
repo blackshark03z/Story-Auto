@@ -65,9 +65,15 @@ class OfflineMotionPlanner:
             meaningful_actions = ["reaches for the door", "opens the door"]
             clips = [
                 {"start_state":"hand lowered", "action":"hand reaches the door handle",
-                 "end_state":"hand rests on handle", "natural_stillness":"brief contact pause"},
+                 "end_state":"hand rests on handle", "natural_stillness":"brief contact pause",
+                 "direction_sensitive":True, "ordered_action_steps":["hand approaches handle", "hand contacts handle"],
+                 "progression_checkpoints":["hand lowered", "hand at handle"], "movement_direction":"hand toward handle",
+                 "forbidden_motion":["hand moves away", "object moves before contact", "reverse progression"]},
                 {"start_state":"hand rests on handle", "action":"door opens once",
-                 "end_state":"door remains open", "natural_stillness":"settles without looping"},
+                 "end_state":"door remains open", "natural_stillness":"settles without looping",
+                 "direction_sensitive":True, "ordered_action_steps":["hand contacts handle", "door opens"],
+                 "progression_checkpoints":["door closed", "door open"], "movement_direction":"door closed -> open",
+                 "forbidden_motion":["door closes", "object moves before contact", "reverse progression"]},
             ]
         value = {
             "start_state": clips[0]["start_state"], "end_state": clips[-1]["end_state"],

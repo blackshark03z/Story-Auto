@@ -186,7 +186,12 @@ def compile_qc_corrected_video_request(
         clips = full_motion_plan.get("atomic_clips")
         if not isinstance(clips, list) or len(clips) != 1 or not isinstance(clips[0], dict):
             raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_FULL_MOTION_PLAN_INVALID")
-        clip = clips[0]
+        clip = dict(clips[0])
+        clip.setdefault("direction_sensitive", False)
+        clip.setdefault("ordered_action_steps", [])
+        clip.setdefault("progression_checkpoints", [])
+        clip.setdefault("movement_direction", "")
+        clip.setdefault("forbidden_motion", [])
         required = ("physical_complexity", "anatomy_risk", "looping_risk", "interaction_objects",
                     "hand_object_contact")
         if any(field not in full_motion_plan for field in required):
@@ -199,13 +204,17 @@ def compile_qc_corrected_video_request(
             "looping_risk": full_motion_plan["looping_risk"],
             "interaction_objects": full_motion_plan["interaction_objects"],
             "hand_object_contact": full_motion_plan["hand_object_contact"],
+            "direction_sensitive": clip.get("direction_sensitive", False),
+            "ordered_action_steps": clip.get("ordered_action_steps", []),
+            "progression_checkpoints": clip.get("progression_checkpoints", []),
+            "movement_direction": clip.get("movement_direction", ""),
+            "forbidden_motion": clip.get("forbidden_motion", []),
             "atomic_clip": clip,
         }
     try:
-        validate_motion_plan(
-            full_motion_plan if correction_mode == FULL_REPLAN else {"atomic_clips": [clip]},
-            original_action=corrected_intent["action"],
-        )
+        plan_for_validation = (dict(full_motion_plan, atomic_clips=[clip])
+                               if correction_mode == FULL_REPLAN else {"atomic_clips": [clip]})
+        validate_motion_plan(plan_for_validation, original_action=corrected_intent["action"])
         duration = float(prior_request.get("target_duration", 0))
         if duration <= 0:
             raise ValueError("invalid duration")
