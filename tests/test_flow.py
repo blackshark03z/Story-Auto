@@ -4,11 +4,13 @@ import tempfile
 import unittest
 import hashlib
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
@@ -16,7 +18,9 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 reopen_false_positive_production_qc, reopen_false_positive_temporal_qc, _first_unresolved,
-                                                review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review)
+                                                review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review,
+                                                create_local_temporal_salvage)
+from story_auto.providers.flow.validation import validate_video
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
@@ -638,6 +642,62 @@ class FlowTests(unittest.TestCase):
                              (digest,1,digest))
             from story_auto.providers.flow.service import _provider_generation_retry_authorized
             self.assertFalse(_provider_generation_retry_authorized(entry))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg integration requires ffmpeg and ffprobe")
+    def test_local_temporal_salvage_is_append_only_bounded_and_reenters_fresh_qc(self):
+        """A rejected Flow asset can only yield one local, provenance-bound derivative."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime, cfg, paths = self._project(root)
+            request_id = "req_temporal_salvage"; rel = f"assets/video/{request_id}/attempt_001.mp4"
+            source = paths.artifact_path(rel); source.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=navy:s=320x180:r=24:d=3",
+                            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=3",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(source)],
+                           capture_output=True, text=True, check=True)
+            metadata = validate_video(source); digest = metadata["sha256"]
+            request = {"request_id": request_id, "fingerprint": request_id + "hash", "purpose": "SHOT",
+                       "shot_id": "sh_0007", "media_type": "VIDEO", "prompt": "Elias lowers the letter.",
+                       "depends_on": [], "provider": "google_flow", "target_duration": 2.970833333333333}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [request]})
+            original = {"path": rel, "sha256": digest, "attempt": 1, "metadata": metadata,
+                        "temporal_qc": "REJECTED", "production_qc": "PENDING", "temporal_reviews": [{
+                            "report": {"state": "USABLE_TEMPORAL_WINDOW_INVALID", "eligible": False,
+                                       "usable_start": 0.0, "usable_end": 2.8}}]}
+            entry = {"request_id": request_id, "request_identity_sha256": request["fingerprint"], "media_type": "VIDEO",
+                     "provider": "google_flow", "status": "FAILED_RETRYABLE",
+                     "failure_class": "USABLE_TEMPORAL_WINDOW_INVALID", "provider_submissions": 1,
+                     "attempts": [{"attempt": 1, "status": "SUCCEEDED", "attribution_state": "CONFIRMED",
+                                   "asset_path": rel, "asset_sha256": digest}], "selected_asset": original}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),
+                              {"schema_version": "story-auto-generation-manifest/1.0.0", "project_id": cfg.project_id,
+                               "requests": [entry]})
+            with self.assertRaisesRegex(FlowError, "TEMPORAL_SALVAGE_SLOWDOWN_INVALID"):
+                create_local_temporal_salvage(runtime.root, cfg.project_id, request_id,
+                                              expected_source_sha256=digest, clean_start=0.0, clean_end=2.5,
+                                              target_duration=request["target_duration"])
+            result = create_local_temporal_salvage(runtime.root, cfg.project_id, request_id,
+                                                   expected_source_sha256=digest, clean_start=0.0, clean_end=2.8,
+                                                   target_duration=request["target_duration"])
+            saved = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(saved["temporal_asset_salvages"][0]["source_selected_asset"], original)
+            self.assertEqual((saved["provider_submissions"], len(saved["attempts"]), saved["status"]), (1, 1, "QC_PENDING"))
+            derived = saved["selected_asset"]
+            self.assertEqual((derived["parent_asset_sha256"], derived["temporal_qc"], derived["production_qc"]),
+                             (digest, "PENDING", "PENDING"))
+            self.assertLessEqual(derived["transform"]["slowdown_factor"], 1.08)
+            self.assertEqual(sha256_file(paths.artifact_path(derived["path"])), derived["sha256"])
+            report = {"state": "PASS_TEMPORAL", "eligible": True, "usable_start": 0.0,
+                      "usable_end": derived["metadata"]["duration_seconds"], "review_identity": result["review_epoch"],
+                      "request_id": request_id, "attempt": 1, "media_sha256": derived["sha256"],
+                      "frame_evidence": [{"index": 1, "timestamp": 0.5, "sha256": "a" * 64}]}
+            review_temporal_asset(runtime.root, cfg.project_id, request_id, report)
+            saved = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((saved["selected_asset"]["temporal_qc"], saved["selected_asset"]["production_qc"]),
+                             ("APPROVED", "PENDING"))
+            with self.assertRaisesRegex(FlowError, "TEMPORAL_SALVAGE_NOT_ELIGIBLE"):
+                create_local_temporal_salvage(runtime.root, cfg.project_id, request_id,
+                                              expected_source_sha256=digest, clean_start=0.0, clean_end=2.8,
+                                              target_duration=request["target_duration"])
 
     def test_goal37_r2_reopens_exact_pre_goal37_legacy_rejection_without_rewriting_it(self):
         """The primary compatibility fixture is hand-shaped, never made by r1 QC code."""

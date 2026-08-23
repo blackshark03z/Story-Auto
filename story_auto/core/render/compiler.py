@@ -118,6 +118,45 @@ def compile_video(source: Path, output: Path, *, duration: float, short_policy: 
     return validate_video(output, target=target, silent=True, expected_duration=duration)
 
 
+def derive_trim_retime_video(source: Path, output: Path, *, clean_start: float, clean_end: float,
+                             target_duration: float, maximum_slowdown: float = 1.08) -> dict:
+    """Create a traceable local temporal repair from an already-approved clean window.
+
+    This deliberately performs no visual synthesis: it trims only the supplied
+    clean source interval and changes presentation time by a bounded factor.
+    The caller owns provenance and QC state; this primitive owns just exact
+    media derivation and post-write validation.
+    """
+    source_meta = probe_media(source)
+    duration = float(source_meta["duration_seconds"])
+    if (not math.isfinite(clean_start) or not math.isfinite(clean_end)
+            or not math.isfinite(target_duration) or clean_start < 0
+            or clean_end <= clean_start or clean_end > duration + .05
+            or target_duration <= 0):
+        raise MediaError("TEMPORAL_SALVAGE_WINDOW_INVALID")
+    source_duration = clean_end - clean_start
+    slowdown = target_duration / source_duration
+    if slowdown < 1 or slowdown > maximum_slowdown + 1e-9:
+        raise MediaError("TEMPORAL_SALVAGE_SLOWDOWN_INVALID")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    filter_start = "0" if clean_start == 0 else format_duration(clean_start)
+    video_filter = (f"[0:v]trim=start={filter_start}:end={format_duration(clean_end)},"
+                    f"setpts=PTS*{slowdown:.12f}[v]")
+    command = ["ffmpeg", "-y", "-i", str(source), "-filter_complex", video_filter,
+               "-map", "[v]"]
+    if source_meta["audio"]:
+        audio_filter = (f"[0:a]atrim=start={filter_start}:end={format_duration(clean_end)},"
+                        f"asetpts=PTS-STARTPTS,atempo={1 / slowdown:.12f}[a]")
+        command[5] = video_filter + ";" + audio_filter
+        command.extend(["-map", "[a]", "-c:a", "aac"])
+    else:
+        command.append("-an")
+    command.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", str(output)])
+    run_command(command)
+    return validate_video(output, expected_duration=target_duration)
+
+
 def compile_hold(output: Path, *, duration: float, color: str = "black",
                  target: MediaTarget = MediaTarget()) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)

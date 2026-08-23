@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import shutil
+import copy
 import uuid
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
@@ -27,6 +28,7 @@ from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, TERMINAL_TEMPORAL_FA
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
+from story_auto.core.render import MediaError, derive_trim_retime_video
 from story_auto.core.visual import (
     CAPTION_SAFE_PROMPT_VERSION,
     MediaQualityError,
@@ -145,6 +147,8 @@ LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_OUTPUT_CONFLICT",
     "FLOW_IMAGE_DERIVATIVE_INVALID",
 }
+TEMPORAL_SALVAGE_EVENT = "LOCAL_TEMPORAL_TRIM_RETIME"
+TEMPORAL_SALVAGE_MAX_SLOWDOWN = 1.08
 
 class FlowError(RuntimeError):
     def __init__(self, failure_class: str, detail: str = ""):
@@ -1753,6 +1757,110 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
         entry.update({"status": "SUCCEEDED" if semantic_ready else "QC_PENDING",
                       "failure_class": None if semantic_ready else "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def create_local_temporal_salvage(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                  expected_source_sha256: str, clean_start: float, clean_end: float,
+                                  target_duration: float) -> dict:
+    """Append one bounded trim/retime child asset for a terminal temporal reject.
+
+    This is intentionally not a Flow recovery: provider attempts, dispatch, and
+    attribution are left untouched.  The rejected selected asset is preserved
+    as a complete immutable snapshot in the append-only salvage event while a
+    newly derived byte sequence enters a fresh, asset-bound QC epoch.
+    """
+    expected_sha = expected_source_sha256.lower() if isinstance(expected_source_sha256, str) else ""
+    if (len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha)
+            or not all(isinstance(value, (int, float)) for value in (clean_start, clean_end, target_duration))):
+        raise FlowError("TEMPORAL_SALVAGE_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        try:
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            request = next(item for item in requests if item.get("request_id") == request_id)
+        except Exception as error:
+            raise FlowError("TEMPORAL_SALVAGE_INVALID") from error
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if (not isinstance(entry, dict) or entry.get("media_type") != "VIDEO"
+                or entry.get("status") != "FAILED_RETRYABLE"
+                or entry.get("failure_class") != "USABLE_TEMPORAL_WINDOW_INVALID"
+                or not isinstance(selected, dict) or selected.get("sha256") != expected_sha
+                or selected.get("temporal_qc") != "REJECTED" or not _valid_selected(paths, entry)
+                or entry.get("temporal_asset_salvages") not in (None, [])):
+            raise FlowError("TEMPORAL_SALVAGE_NOT_ELIGIBLE")
+        source_path = paths.artifact_path(selected["path"])
+        if sha256_file(source_path) != expected_sha:
+            raise FlowError("TEMPORAL_SALVAGE_NOT_ELIGIBLE")
+        source_attempt = selected.get("attempt")
+        attempt = next((item for item in entry.get("attempts", [])
+                        if isinstance(item, dict) and item.get("attempt") == source_attempt), None)
+        if (not isinstance(source_attempt, int) or not isinstance(attempt, dict)
+                or attempt.get("attribution_state") != "CONFIRMED"
+                or attempt.get("asset_path") != selected.get("path")
+                or attempt.get("asset_sha256") != expected_sha):
+            raise FlowError("TEMPORAL_SALVAGE_NOT_ELIGIBLE")
+        reviews = selected.get("temporal_reviews")
+        latest = reviews[-1] if isinstance(reviews, list) and reviews else None
+        latest_report = latest.get("report") if isinstance(latest, dict) else None
+        if (not isinstance(latest_report, dict)
+                or latest_report.get("state") != "USABLE_TEMPORAL_WINDOW_INVALID"):
+            raise FlowError("TEMPORAL_SALVAGE_NOT_ELIGIBLE")
+        reported_start = float(latest_report.get("usable_start", -1))
+        reported_end = float(latest_report.get("usable_end", -1))
+        canonical_target = float(request.get("target_duration", 0))
+        if (abs(target_duration - canonical_target) > .0005 or clean_start != reported_start
+                or clean_end > reported_end + 1e-9 or clean_end <= clean_start):
+            raise FlowError("TEMPORAL_SALVAGE_WINDOW_INVALID")
+        slowdown = target_duration / (clean_end - clean_start)
+        if slowdown < 1 or slowdown > TEMPORAL_SALVAGE_MAX_SLOWDOWN + 1e-9:
+            raise FlowError("TEMPORAL_SALVAGE_SLOWDOWN_INVALID")
+        transform = {"operation": TEMPORAL_SALVAGE_EVENT, "parent_asset_sha256": expected_sha,
+                     "parent_asset_path": selected["path"], "parent_provider_attempt": source_attempt,
+                     "clean_start": clean_start, "clean_end": clean_end, "target_duration": target_duration,
+                     "slowdown_factor": slowdown, "maximum_slowdown": TEMPORAL_SALVAGE_MAX_SLOWDOWN,
+                     "synthetic_scene_generation": False, "semantic_content_insertion": False}
+        transform_sha = _json_sha256(transform)
+        rel = f"assets/video/{request_id}/derived/temporal_salvage_{transform_sha[:16]}.mp4"
+        output = paths.artifact_path(rel)
+        if output.exists():
+            raise FlowError("TEMPORAL_SALVAGE_OUTPUT_CONFLICT")
+        staged = output.with_name(output.stem + ".staged" + output.suffix)
+        if staged.exists():
+            raise FlowError("TEMPORAL_SALVAGE_OUTPUT_CONFLICT")
+        try:
+            metadata = derive_trim_retime_video(source_path, staged, clean_start=clean_start, clean_end=clean_end,
+                                                 target_duration=target_duration,
+                                                 maximum_slowdown=TEMPORAL_SALVAGE_MAX_SLOWDOWN)
+            staged.replace(output)
+        except MediaError as error:
+            if staged.exists():
+                staged.unlink()
+            raise FlowError(error.failure_class, str(error)) from error
+        derived_sha = metadata.get("sha256")
+        if not isinstance(derived_sha, str) or sha256_file(output) != derived_sha:
+            raise FlowError("TEMPORAL_SALVAGE_DERIVATIVE_INVALID")
+        salvage_id = "temporal-salvage-" + transform_sha[:20]
+        event = {"event": "TEMPORAL_SALVAGE_CREATED", "salvage_id": salvage_id, "at": _now(),
+                 "source_entry_state": {"status": entry.get("status"), "failure_class": entry.get("failure_class")},
+                 "source_selected_asset": copy.deepcopy(selected), "source_selected_asset_sha256": expected_sha,
+                 "transform": transform, "transform_sha256": transform_sha,
+                 "derived_asset_path": rel, "derived_asset_sha256": derived_sha,
+                 "derived_metadata": metadata}
+        review_epoch = "derived-" + transform_sha[:24]
+        derived = {"path": rel, "sha256": derived_sha, "attempt": source_attempt, "metadata": metadata,
+                   "production_qc": "PENDING", "temporal_qc": "PENDING",
+                   "provenance": TEMPORAL_SALVAGE_EVENT, "parent_asset_path": selected["path"],
+                   "parent_asset_sha256": expected_sha, "parent_provider_attempt": source_attempt,
+                   "transform": transform, "transform_sha256": transform_sha,
+                   "active_temporal_review_epoch": review_epoch}
+        entry.setdefault("temporal_asset_salvages", []).append(event)
+        entry.update({"selected_asset": derived, "status": "QC_PENDING",
+                      "failure_class": "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
+        atomic_write_json(path, manifest)
+        return {"salvage_id": salvage_id, "review_epoch": review_epoch, "selected_asset": derived,
+                "source_asset_sha256": expected_sha, "provider_submissions": entry.get("provider_submissions", 0)}
 
 
 def reopen_uncertain_temporal_qc(runtime_root: Path | str, project_id: str, request_id: str) -> None:
