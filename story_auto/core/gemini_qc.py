@@ -12,7 +12,7 @@ from story_auto.core.artifacts import atomic_write_json, sha256_file
 from story_auto.providers.llm import GeminiReasoningRouter, LLMMedia, ReasoningResult
 
 HOOK_PLAN_VERSION = "story-auto-hook-plan/1.0.0"
-MOTION_PLAN_VERSION = "story-auto-motion-plan/1.1.0"
+MOTION_PLAN_VERSION = "story-auto-motion-plan/1.2.0"
 TEMPORAL_QC_VERSION = "story-auto-temporal-video-qc/1.1.0"
 REPAIR_PLAN_VERSION = "story-auto-repair-plan/1.0.0"
 FLOW_MOTION_PROMPT_VERSION = "story-auto-flow-motion-prompt/1.1.0"
@@ -112,41 +112,114 @@ def plan_hook(router: GeminiReasoningRouter, *, narration: str, start: float, en
     return result.value, result
 
 
-def is_high_risk(action: str) -> bool:
-    lowered = action.lower()
-    return is_direction_sensitive(action) or any(term in lowered for term in HIGH_RISK_TERMS)
+ACTION_NONE = "NONE"
+_FAMILY_TRAJECTORY = {
+    "ASCENT": "ASCENDING", "DESCENT": "DESCENDING", "TOWARD": "TOWARD_TARGET",
+    "AWAY": "AWAY_FROM_TARGET", "FROM_TO": "FROM_TO_DESTINATION", "PICK_UP": "UP_AFTER_CONTACT",
+    "PUT_DOWN": "DOWN_AFTER_CONTACT", "SIT": "SIT_DOWN", "STAND": "STAND_UP",
+    "OPEN": "OPENING", "CLOSE": "CLOSING", "HANDOFF": "TRANSFER_TO_RECIPIENT",
+    "CONTACT": "CONTACT_THEN_OBJECT_MOTION", "ENTER": "ENTERING", "EXIT": "EXITING",
+    "TURN_MOVE": "TURN_THEN_FORWARD",
+}
+_TRAJECTORY_PROMPT = {
+    "ASCENDING": "progress upward from lower to higher position", "DESCENDING": "progress downward from upper to lower position",
+    "TOWARD_TARGET": "move toward the target", "AWAY_FROM_TARGET": "move away from the target",
+    "FROM_TO_DESTINATION": "move from the stated origin to the stated destination", "UP_AFTER_CONTACT": "lift only after contact",
+    "DOWN_AFTER_CONTACT": "lower only after contact", "SIT_DOWN": "progress from standing to seated",
+    "STAND_UP": "progress from seated to standing", "OPENING": "change from closed to open after contact",
+    "CLOSING": "change from open to closed after contact", "TRANSFER_TO_RECIPIENT": "transfer only after hand contact",
+    "CONTACT_THEN_OBJECT_MOTION": "make contact before object movement", "ENTERING": "progress from outside to inside",
+    "EXITING": "progress from inside to outside", "TURN_THEN_FORWARD": "turn before forward movement",
+}
+_FORBIDDEN_PROMPT = {
+    "BACKWARD_MOTION": "backward motion", "DESCENDING": "descending", "ASCENDING": "ascending",
+    "REVERSE_DIRECTION": "reverse direction", "OBJECT_BEFORE_CONTACT": "object movement before contact",
+    "REVERSE_ORDER": "reverse causal order", "RESET": "resetting progress",
+}
+
+
+def classify_motion_action(action: str) -> str:
+    """Return one canonical family for direction- or order-sensitive actions."""
+    text = re.sub(r"\s+", " ", action.lower()).strip()
+    if not text:
+        return ACTION_NONE
+    if re.search(r"\b(?:stand|stands|standing) still\b", text):
+        return ACTION_NONE
+    if re.search(r"\b(?:ascend(?:s|ed|ing)?|ascent|climb(?:s|ed|ing)?|walk(?:s|ed|ing)? up|go(?:es|ing)? up|move(?:s|d|ing)? up)\b", text):
+        return "ASCENT"
+    if re.search(r"\b(?:descend(?:s|ed|ing)?|descent|walk(?:s|ed|ing)? down|go(?:es|ing)? down|move(?:s|d|ing)? down)\b", text):
+        return "DESCENT"
+    if re.search(r"\b(?:pick(?:s|ed|ing)? up|pickup)\b", text):
+        return "PICK_UP"
+    if re.search(r"\b(?:put(?:s|ting)? down|place(?:s|d|ing)? down)\b", text):
+        return "PUT_DOWN"
+    if re.search(r"\b(?:sit|sits|sat|sitting)\b", text):
+        return "SIT"
+    if re.search(r"\b(?:stand|stands|stood|standing)\b", text):
+        return "STAND"
+    if re.search(r"\b(?:enter|enters|entered|entering)\b", text):
+        return "ENTER"
+    if re.search(r"\b(?:exit|exits|exited|exiting|leave|leaves|leaving)\b", text):
+        return "EXIT"
+    if re.search(r"\b(?:open|opens|opened|opening)\b", text):
+        return "OPEN"
+    if re.search(r"\b(?:close|closes|closed|closing)\b", text):
+        return "CLOSE"
+    if re.search(r"\b(?:pass|passes|passed|passing|give|gives|gave|giving)\b|\bhand(?:s|ed|ing)?\s+(?:over|to|(?:the|a|an)\s+\w+\s+to)\b", text):
+        return "HANDOFF"
+    if re.search(r"\b(?:approach|approaches|approached|approaching|reach|reaches|reached|reaching|touch|touches|touched|touching|grasp|grasps|grasped|grasping)\b", text):
+        return "CONTACT"
+    if re.search(r"\b(?:walk|walks|walked|walking|go|goes|went|going|move|moves|moved|moving|step|steps|stepped|stepping|travel|travels|travelled|traveling)\b.*\bfrom\b.*\bto\b", text):
+        return "FROM_TO"
+    if re.search(r"\b(?:toward|towards)\b", text):
+        return "TOWARD"
+    if re.search(r"\baway from\b", text):
+        return "AWAY"
+    if re.search(r"\bturn(?:s|ed|ing)?\b.*\b(?:then\s+)?(?:walk|go|move|step)(?:s|d|ing)?\b", text):
+        return "TURN_MOVE"
+    return ACTION_NONE
 
 
 def is_direction_sensitive(action: str) -> bool:
-    """Identify actions whose intended order or direction is production-critical."""
-    lowered = action.lower()
-    terms = ("stair", "ladder", "ascend", "ascent", "descend", "descent", "enter", "exit",
-             "sit", "stand", "pick up", "picks up", "pickup", "put down", "puts down", "place down", "open", "close",
-             "hand", "pass", "give", "turn then", "then move", "toward", "away from")
-    return any(term in lowered for term in terms) or ("from " in lowered and " to " in lowered)
+    return classify_motion_action(action) != ACTION_NONE
 
 
-def _motion_text(value: Any) -> str:
-    if isinstance(value, list):
-        return " ".join(str(item).lower() for item in value)
-    return str(value).lower()
+def is_high_risk(action: str) -> bool:
+    return (is_direction_sensitive(action)
+            or bool(re.search(r"\b(?:door|handle|tool|piano|instrument|finger)\b", action.lower())))
 
 
-def _first_step(steps: list[str], terms: tuple[str, ...]) -> int:
-    return next((index for index, step in enumerate(steps) if any(term in step.lower() for term in terms)), -1)
+def _require_ordered_steps(steps: list[str], expected: tuple[str, ...]) -> None:
+    normalized = [item.strip().upper() for item in steps]
+    positions = [normalized.index(item) if item in normalized else -1 for item in expected]
+    if min(positions) < 0 or positions != sorted(positions):
+        raise GeminiQCError("MOTION_ORDERED_ACTION_STEPS_INVALID")
+
+
+def _require_progression(checkpoints: list[str], *, ascending: bool) -> None:
+    normalized = [item.strip().upper() for item in checkpoints]
+    canonical = ("LOWER", "MIDDLE", "UPPER")
+    positions = [canonical.index(item) if item in canonical else -1 for item in normalized]
+    if (len(normalized) < 2 or min(positions) < 0 or normalized[0] != ("LOWER" if ascending else "UPPER")
+            or normalized[-1] != ("UPPER" if ascending else "LOWER")
+            or positions != sorted(positions, reverse=not ascending)):
+        raise GeminiQCError("MOTION_DIRECTIONAL_PROGRESSION_INVALID")
 
 
 def _validate_directional_contract(clip: dict[str, Any]) -> None:
     """Fail closed when a direction/order-sensitive clip lacks usable structure."""
     action = str(clip.get("action", ""))
+    family = classify_motion_action(action)
     declared = clip.get("direction_sensitive")
     has_contract = any(field in clip for field in MOTION_CONTRACT_FIELDS)
-    if not is_direction_sensitive(action) and not has_contract:
+    if family == ACTION_NONE and not has_contract:
         return
     if declared is False and all(not clip.get(field) for field in MOTION_CONTRACT_FIELDS if field != "direction_sensitive"):
-        if is_direction_sensitive(action):
+        if family != ACTION_NONE:
             raise GeminiQCError("MOTION_DIRECTIONAL_CONTRACT_REQUIRED")
         return
+    if family == ACTION_NONE:
+        raise GeminiQCError("MOTION_DIRECTIONAL_CONTRACT_NOT_APPLICABLE")
     if declared is not True:
         raise GeminiQCError("MOTION_DIRECTIONAL_CONTRACT_REQUIRED")
     steps = clip.get("ordered_action_steps")
@@ -162,38 +235,39 @@ def _validate_directional_contract(clip: dict[str, Any]) -> None:
             or any(not isinstance(item, str) or not item.strip() or len(item) > 300 for item in forbidden)):
         raise GeminiQCError("MOTION_DIRECTIONAL_CONTRACT_INVALID")
 
-    lowered = action.lower()
-    step_text, forbidden_text, trajectory_text = _motion_text(steps), _motion_text(forbidden), trajectory.lower()
-    if (any(term in lowered for term in ("ascend", "ascent"))
-            or (any(term in lowered for term in ("stair", "ladder"))
-                and not any(term in lowered for term in ("descend", "descent")))):
-        if (not any(term in trajectory_text for term in ("upward", "higher", "lower to upper", "lower -> upper"))
-                or re.search(r"\bupper\s*(?:->|to)\s*(?:middle\s*(?:->|to)\s*)?lower\b", trajectory_text)):
-            raise GeminiQCError("MOTION_DIRECTIONAL_TRAJECTORY_INVALID")
-        if not all(term in forbidden_text for term in ("backward", "descend", "reverse")):
-            raise GeminiQCError("MOTION_DIRECTIONAL_FORBIDDEN_MOTION_INVALID")
-    if any(term in lowered for term in ("descend", "descent")):
-        if not any(term in trajectory_text for term in ("down", "lower", "upper to lower", "upper -> lower")):
-            raise GeminiQCError("MOTION_DIRECTIONAL_TRAJECTORY_INVALID")
-        if not all(term in forbidden_text for term in ("backward", "ascend", "reverse")):
-            raise GeminiQCError("MOTION_DIRECTIONAL_FORBIDDEN_MOTION_INVALID")
-    if any(term in lowered for term in ("pick up", "picks up", "pickup")):
-        approach, contact, move = (_first_step(steps, ("approach",)), _first_step(steps, ("contact",)),
-                                   _first_step(steps, ("lift", "move", "raise")))
-        if min(approach, contact, move) < 0 or not approach < contact < move:
-            raise GeminiQCError("MOTION_ORDERED_ACTION_STEPS_INVALID")
-        if "before contact" not in forbidden_text:
-            raise GeminiQCError("MOTION_DIRECTIONAL_FORBIDDEN_MOTION_INVALID")
-    if "sit" in lowered:
-        standing, lowering, seated = (_first_step(steps, ("standing", "stand")), _first_step(steps, ("lower",)),
-                                      _first_step(steps, ("seated", "sit")))
-        if min(standing, lowering, seated) < 0 or not standing < lowering < seated:
-            raise GeminiQCError("MOTION_ORDERED_ACTION_STEPS_INVALID")
-    if "stand" in lowered and "sit" not in lowered:
-        seated, rising, standing = (_first_step(steps, ("seated", "sit")), _first_step(steps, ("rise", "lift")),
-                                    _first_step(steps, ("standing", "stand")))
-        if min(seated, rising, standing) < 0 or not seated < rising < standing:
-            raise GeminiQCError("MOTION_ORDERED_ACTION_STEPS_INVALID")
+    expected_trajectory = _FAMILY_TRAJECTORY[family]
+    if trajectory.strip().upper() != expected_trajectory:
+        raise GeminiQCError("MOTION_DIRECTIONAL_TRAJECTORY_INVALID")
+    forbidden_codes = {item.strip().upper() for item in forbidden}
+    required_forbidden = {
+        "ASCENT": {"BACKWARD_MOTION", "DESCENDING", "REVERSE_DIRECTION"},
+        "DESCENT": {"BACKWARD_MOTION", "ASCENDING", "REVERSE_DIRECTION"},
+        "PICK_UP": {"OBJECT_BEFORE_CONTACT", "REVERSE_ORDER"},
+        "PUT_DOWN": {"OBJECT_BEFORE_CONTACT", "REVERSE_ORDER"},
+        "SIT": {"REVERSE_ORDER"}, "STAND": {"REVERSE_ORDER"},
+    }.get(family, {"REVERSE_DIRECTION"})
+    if not required_forbidden.issubset(forbidden_codes):
+        raise GeminiQCError("MOTION_DIRECTIONAL_FORBIDDEN_MOTION_INVALID")
+    if family == "ASCENT":
+        _require_progression(checkpoints, ascending=True)
+    elif family == "DESCENT":
+        _require_progression(checkpoints, ascending=False)
+    elif family == "PICK_UP":
+        _require_ordered_steps(steps, ("APPROACH", "CONTACT", "LIFT"))
+    elif family == "PUT_DOWN":
+        _require_ordered_steps(steps, ("CONTACT", "LOWER", "RELEASE"))
+    elif family == "SIT":
+        _require_ordered_steps(steps, ("STANDING", "LOWERING", "SEATED"))
+    elif family == "STAND":
+        _require_ordered_steps(steps, ("SEATED", "RISING", "STANDING"))
+    elif family == "OPEN":
+        _require_ordered_steps(steps, ("CONTACT", "OPEN"))
+    elif family == "CLOSE":
+        _require_ordered_steps(steps, ("CONTACT", "CLOSE"))
+    elif family == "CONTACT":
+        _require_ordered_steps(steps, ("APPROACH", "CONTACT"))
+    elif family == "HANDOFF":
+        _require_ordered_steps(steps, ("CONTACT", "TRANSFER"))
 
 
 def validate_motion_plan(plan: dict[str, Any], *, original_action: str,
@@ -221,6 +295,8 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
                          if required_clip_count is not None else "")
     prompt = ("Decompose this production VIDEO intent into physically plausible cinematic states. Default to one meaningful action per generated clip. "
               "Split high-risk contact mechanics with cuts. For direction- or order-sensitive actions, every affected atomic clip must set direction_sensitive=true and provide ordered_action_steps, progression_checkpoints, movement_direction, and forbidden_motion. "
+              "movement_direction is a canonical code selected from the action family: ASCENDING, DESCENDING, TOWARD_TARGET, AWAY_FROM_TARGET, FROM_TO_DESTINATION, UP_AFTER_CONTACT, DOWN_AFTER_CONTACT, SIT_DOWN, STAND_UP, OPENING, CLOSING, TRANSFER_TO_RECIPIENT, CONTACT_THEN_OBJECT_MOTION, ENTERING, EXITING, or TURN_THEN_FORWARD. "
+              "For stair or ladder ascent use LOWER, MIDDLE, UPPER checkpoints; for descent use UPPER, MIDDLE, LOWER. Use canonical ordered steps such as APPROACH, CONTACT, LIFT and canonical forbidden codes such as BACKWARD_MOTION, REVERSE_DIRECTION, OBJECT_BEFORE_CONTACT, and REVERSE_ORDER. "
               "Treat stair/ladder traversal, entering/exiting, sitting/standing, object pickup/place-down, opening/closing, hand-offs, turns before movement, and explicit toward/away motion as elevated risk. "
               "Use atomic clips when several causal actions cannot be safely executed together. Natural stillness is valid."
               + count_instruction + " Return JSON only. Intent:\n"
@@ -229,7 +305,7 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
         validate_motion_plan(plan, original_action=str(intent.get("action", "")),
                              required_atomic_clip_count=required_clip_count)
     result = router.reason(task="motion_planning", prompt=prompt, schema=MOTION_SCHEMA, tier="HARD",
-        prompt_version="motion-planner/1.1.0", schema_version=MOTION_PLAN_VERSION,
+        prompt_version="motion-planner/1.2.0", schema_version=MOTION_PLAN_VERSION,
         acceptance_validator=accept_motion_plan)
     validate_motion_plan(result.value, original_action=str(intent.get("action", "")),
                          required_atomic_clip_count=required_clip_count)
@@ -244,9 +320,10 @@ def compile_flow_motion_prompt(*, subject: str, location: str, clip: dict[str, A
     if clip.get("direction_sensitive") is True:
         steps = " -> ".join(item.strip() for item in clip["ordered_action_steps"])
         checkpoints = " -> ".join(item.strip() for item in clip["progression_checkpoints"])
-        forbidden = "; ".join(item.strip() for item in clip["forbidden_motion"])
+        trajectory = _TRAJECTORY_PROMPT[clip["movement_direction"].strip().upper()]
+        forbidden = "; ".join(_FORBIDDEN_PROMPT.get(item.strip().upper(), item.strip()) for item in clip["forbidden_motion"])
         directional = (f"Required ordered action sequence: {steps}. Required checkpoint progression: {checkpoints}. "
-                       f"Trajectory intent: {clip['movement_direction'].strip()}. Follow this progression only. "
+                       f"Trajectory intent: {trajectory}. Follow this progression only. "
                        f"Forbidden motion: {forbidden}. ")
     return (f"Fictional subject: {subject}. Location: {location}. Start state: {clip['start_state']}. "
             f"One visible action only: {action}. End state: {clip['end_state']}. "

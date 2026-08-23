@@ -8,7 +8,8 @@ import pytest
 from story_auto.providers.llm.router import ReasoningResult
 
 from story_auto.core.gemini_qc import (GeminiQCError, combine_temporal_qc, compile_flow_motion_prompt,
-    is_high_risk, sample_dense_frames, temporal_video_qc, validate_hook_plan, validate_motion_plan, validate_usable_window)
+    classify_motion_action, is_direction_sensitive, is_high_risk, sample_dense_frames, temporal_video_qc,
+    validate_hook_plan, validate_motion_plan, validate_usable_window)
 
 
 def beat(start, end, info, action, risk="LOW"):
@@ -45,9 +46,9 @@ def test_high_risk_motion_requires_atomic_decomposition():
 def test_flow_prompt_is_deterministic_bounded_and_contact_safe():
     clip = {"start_state":"hand away from handle", "action":"hand approaches and rests on handle",
             "end_state":"hand resting on handle; door closed", "natural_stillness":"one breath",
-            "direction_sensitive":True, "ordered_action_steps":["hand approaches handle", "hand contacts handle"],
-            "progression_checkpoints":["hand away", "hand at handle"], "movement_direction":"hand toward handle",
-            "forbidden_motion":["hand moves away", "object moves before contact", "reverse progression"]}
+            "direction_sensitive":True, "ordered_action_steps":["APPROACH", "CONTACT"],
+            "progression_checkpoints":["HAND_AWAY", "HAND_AT_HANDLE"], "movement_direction":"CONTACT_THEN_OBJECT_MOTION",
+            "forbidden_motion":["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]}
     prompt = compile_flow_motion_prompt(subject="fictional conductor", location="academy corridor", clip=clip, duration=4)
     assert "One visible action only" in prompt and "before they move" in prompt and "Required ordered action sequence" in prompt and "no reset" in prompt
 
@@ -56,36 +57,48 @@ def directional_clip(action="ascends the staircase"):
     return {"start_state":"lower stair position, body oriented upward", "action":action,
             "end_state":"upper landing, higher position", "natural_stillness":"settles at the landing",
             "direction_sensitive":True,
-            "ordered_action_steps":["lower stair position", "middle stair position", "upper landing"],
-            "progression_checkpoints":["lower", "middle", "upper"], "movement_direction":"lower -> middle -> upper, forward and upward",
-            "forbidden_motion":["backward ascent", "descending", "reverse progression", "unexplained direction reversal"]}
+            "ordered_action_steps":["LOWER", "MIDDLE", "UPPER"],
+            "progression_checkpoints":["LOWER", "MIDDLE", "UPPER"], "movement_direction":"ASCENDING",
+            "forbidden_motion":["BACKWARD_MOTION", "DESCENDING", "REVERSE_DIRECTION"]}
+
+
+def descent_clip():
+    return {"start_state":"upper landing", "action":"descends the staircase", "end_state":"lower stair position",
+            "natural_stillness":"settles at the bottom", "direction_sensitive":True,
+            "ordered_action_steps":["UPPER", "MIDDLE", "LOWER"], "progression_checkpoints":["UPPER", "MIDDLE", "LOWER"],
+            "movement_direction":"DESCENDING", "forbidden_motion":["BACKWARD_MOTION", "ASCENDING", "REVERSE_DIRECTION"]}
 
 
 def test_stair_ascent_contract_rejects_reverse_trajectory_and_accepts_forward_progression():
     valid = directional_clip()
     validate_motion_plan({"meaningful_actions":["ascend stairs"], "atomic_clips":[valid]}, original_action=valid["action"])
     reversed_clip = directional_clip()
-    reversed_clip["movement_direction"] = "upper -> middle -> lower, downward"
+    reversed_clip["movement_direction"] = "DESCENDING"
     with pytest.raises(GeminiQCError, match="MOTION_DIRECTIONAL_TRAJECTORY_INVALID"):
         validate_motion_plan({"meaningful_actions":["ascend stairs"], "atomic_clips":[reversed_clip]}, original_action=reversed_clip["action"])
+    descent = descent_clip()
+    validate_motion_plan({"meaningful_actions":["descend stairs"], "atomic_clips":[descent]}, original_action=descent["action"])
+    descent["movement_direction"] = "ASCENDING"
+    with pytest.raises(GeminiQCError, match="MOTION_DIRECTIONAL_TRAJECTORY_INVALID"):
+        validate_motion_plan({"meaningful_actions":["descend stairs"], "atomic_clips":[descent]}, original_action=descent["action"])
 
 
 def test_pickup_and_sit_contracts_reject_reversed_causal_order():
     pickup = {"start_state":"hand away from cup", "action":"picks up the cup", "end_state":"cup lifted",
               "natural_stillness":"holds still", "direction_sensitive":True,
-              "ordered_action_steps":["hand approaches cup", "hand contacts cup", "cup lifts"],
-              "progression_checkpoints":["hand away", "contact", "cup raised"], "movement_direction":"hand -> cup -> raised cup",
-              "forbidden_motion":["object moves before contact", "reverse progression"]}
+              "ordered_action_steps":["APPROACH", "CONTACT", "LIFT"],
+              "progression_checkpoints":["HAND_AWAY", "CONTACT", "CUP_RAISED"], "movement_direction":"UP_AFTER_CONTACT",
+              "forbidden_motion":["OBJECT_BEFORE_CONTACT", "REVERSE_ORDER"]}
     validate_motion_plan({"meaningful_actions":["pick up cup"], "atomic_clips":[pickup]}, original_action=pickup["action"])
-    pickup["ordered_action_steps"] = ["cup lifts", "hand approaches cup", "hand contacts cup"]
+    pickup["ordered_action_steps"] = ["LIFT", "APPROACH", "CONTACT"]
     with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
         validate_motion_plan({"meaningful_actions":["pick up cup"], "atomic_clips":[pickup]}, original_action=pickup["action"])
     sit = {"start_state":"standing", "action":"sits in chair", "end_state":"seated", "natural_stillness":"settles",
-           "direction_sensitive":True, "ordered_action_steps":["standing", "lowering toward chair", "seated"],
-           "progression_checkpoints":["standing", "lowering", "seated"], "movement_direction":"standing -> seated, downward",
-           "forbidden_motion":["standing up", "reverse progression"]}
+           "direction_sensitive":True, "ordered_action_steps":["STANDING", "LOWERING", "SEATED"],
+           "progression_checkpoints":["STANDING", "LOWERING", "SEATED"], "movement_direction":"SIT_DOWN",
+           "forbidden_motion":["REVERSE_ORDER"]}
     validate_motion_plan({"meaningful_actions":["sit"], "atomic_clips":[sit]}, original_action=sit["action"])
-    sit["ordered_action_steps"] = ["seated", "lowering toward chair", "standing"]
+    sit["ordered_action_steps"] = ["SEATED", "LOWERING", "STANDING"]
     with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
         validate_motion_plan({"meaningful_actions":["sit"], "atomic_clips":[sit]}, original_action=sit["action"])
 
@@ -94,6 +107,32 @@ def test_non_directional_still_motion_remains_unconstrained():
     clip = {"start_state":"still", "action":"observes the quiet corridor", "end_state":"still", "natural_stillness":"one breath"}
     validate_motion_plan({"meaningful_actions":["observe"], "atomic_clips":[clip]}, original_action=clip["action"])
     assert "Required ordered action sequence" not in compile_flow_motion_prompt(subject="caretaker", location="corridor", clip=clip, duration=4)
+
+
+@pytest.mark.parametrize("action", ["understands the warning", "the situation remains tense", "stands still on the stairs",
+                                    "carries a ladder across the yard", "rests a hand at the side"])
+def test_phrase_aware_classifier_rejects_lexical_false_positives(action):
+    clip = {"start_state":"still", "action":action, "end_state":"still", "natural_stillness":"one breath"}
+    assert classify_motion_action(action) == "NONE"
+    assert not is_direction_sensitive(action)
+    validate_motion_plan({"meaningful_actions":[action], "atomic_clips":[clip]}, original_action=action)
+    assert "Required ordered action sequence" not in compile_flow_motion_prompt(subject="caretaker", location="yard", clip=clip, duration=4)
+
+
+def test_canonical_action_families_cover_toward_pickup_sit_and_stand():
+    assert classify_motion_action("hands the envelope to the guard") == "HANDOFF"
+    toward = {"start_state":"at the gate", "action":"walks toward the door", "end_state":"at the door", "natural_stillness":"pauses",
+              "direction_sensitive":True, "ordered_action_steps":["ORIGIN", "TARGET"], "progression_checkpoints":["ORIGIN", "TARGET"],
+              "movement_direction":"TOWARD_TARGET", "forbidden_motion":["REVERSE_DIRECTION"]}
+    validate_motion_plan({"meaningful_actions":["walk toward door"], "atomic_clips":[toward]}, original_action=toward["action"])
+    stand = {"start_state":"seated", "action":"stands up from the chair", "end_state":"standing", "natural_stillness":"balances",
+             "direction_sensitive":True, "ordered_action_steps":["SEATED", "RISING", "STANDING"],
+             "progression_checkpoints":["SEATED", "RISING", "STANDING"], "movement_direction":"STAND_UP",
+             "forbidden_motion":["REVERSE_ORDER"]}
+    validate_motion_plan({"meaningful_actions":["stand"], "atomic_clips":[stand]}, original_action=stand["action"])
+    stand["ordered_action_steps"] = ["STANDING", "RISING", "SEATED"]
+    with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
+        validate_motion_plan({"meaningful_actions":["stand"], "atomic_clips":[stand]}, original_action=stand["action"])
 
 
 def test_complex_directional_action_requires_atomic_decomposition():
