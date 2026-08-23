@@ -34,14 +34,14 @@ def motion_plan(*, valid: bool) -> dict:
             "action": "door opens once",
             "end_state": "door remains open",
             "natural_stillness": "settles without looping",
-            "direction_sensitive": True,
+            "direction_sensitive": True, "action_family": "OPEN",
             "ordered_action_steps": ["CONTACT", "OPEN"],
             "progression_checkpoints": ["DOOR_CLOSED", "DOOR_OPEN"],
             "movement_direction": "OPENING",
             "forbidden_motion": ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"],
         })
         clips[0].update({
-            "direction_sensitive": True,
+            "direction_sensitive": True, "action_family": "CONTACT",
             "ordered_action_steps": ["APPROACH", "CONTACT"],
             "progression_checkpoints": ["HAND_LOWERED", "HAND_AT_HANDLE"],
             "movement_direction": "CONTACT_THEN_OBJECT_MOTION",

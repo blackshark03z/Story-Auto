@@ -189,13 +189,13 @@ class PlanningTests(unittest.TestCase):
         media=compile_media_plan("prj_motion",shot_plan,"full_video_ai",settings)
         requests=compile_generation_requests("prj_motion",shot_plan,media,continuity,settings)
         source=next(item for item in requests["requests"] if item.get("purpose")=="SHOT")
-        def clip(action, steps, checkpoints, trajectory, forbidden):
+        def clip(action, family, steps, checkpoints, trajectory, forbidden):
             return {"start_state":"still", "action":action, "end_state":"changed", "natural_stillness":"brief pause",
-                    "direction_sensitive":True, "ordered_action_steps":steps, "progression_checkpoints":checkpoints,
+                    "direction_sensitive":True, "action_family":family, "ordered_action_steps":steps, "progression_checkpoints":checkpoints,
                     "movement_direction":trajectory, "forbidden_motion":forbidden}
         motion={"records":[{"request_id":source["request_id"],"analysis":{"physical_complexity":"HIGH","anatomy_risk":"MEDIUM","looping_risk":"LOW","interaction_objects":["door"],"hand_object_contact":"bounded","atomic_clips":[
-            clip("hand reaches handle", ["APPROACH", "CONTACT"], ["HAND_AWAY", "HAND_AT_HANDLE"], "CONTACT_THEN_OBJECT_MOTION", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
-            clip("door opens once", ["CONTACT", "OPEN"], ["DOOR_CLOSED", "DOOR_OPEN"], "OPENING", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
+            clip("hand reaches handle", "CONTACT", ["APPROACH", "CONTACT"], ["HAND_AWAY", "HAND_AT_HANDLE"], "CONTACT_THEN_OBJECT_MOTION", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
+            clip("door opens once", "OPEN", ["CONTACT", "OPEN"], ["DOOR_CLOSED", "DOOR_OPEN"], "OPENING", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
         ]}}]}
         resolved=apply_motion_plans(requests,shot_plan,motion)
         parts=sorted((item for item in resolved["requests"] if item.get("purpose")=="SHOT"),key=lambda item:item["part_index"])

@@ -482,6 +482,7 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
         for index, clip in enumerate(clips):
             clip = dict(clip)
             clip.setdefault("direction_sensitive", False)
+            clip.setdefault("action_family", "NONE")
             clip.setdefault("ordered_action_steps", [])
             clip.setdefault("progression_checkpoints", [])
             clip.setdefault("movement_direction", "")
@@ -495,7 +496,7 @@ def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str,
                 "motion_risk_analysis":{"schema_version":MOTION_PLAN_VERSION,"source_request_id":request["request_id"],
                     "physical_complexity":analysis.get("physical_complexity"),"anatomy_risk":analysis.get("anatomy_risk"),
                     "looping_risk":analysis.get("looping_risk"),"interaction_objects":analysis.get("interaction_objects",[]),
-                    "hand_object_contact":analysis.get("hand_object_contact"),"direction_sensitive":clip.get("direction_sensitive", False),
+                    "hand_object_contact":analysis.get("hand_object_contact"),"direction_sensitive":clip.get("direction_sensitive", False),"action_family":clip.get("action_family", "NONE"),
                     "ordered_action_steps":clip.get("ordered_action_steps",[]),"progression_checkpoints":clip.get("progression_checkpoints",[]),
                     "movement_direction":clip.get("movement_direction", ""),"forbidden_motion":clip.get("forbidden_motion",[]),
                     "atomic_clip":clip}})
@@ -626,7 +627,7 @@ def validate_generation_requests(value: Any, media_plan: dict[str, Any], continu
                 if any(not isinstance(clip.get(name), str) or not clip[name].strip()
                        for name in ("start_state", "action", "end_state", "natural_stillness")):
                     raise GeminiQCError("MOTION_PLAN_INVALID")
-                contract_fields = ("direction_sensitive", "ordered_action_steps", "progression_checkpoints", "movement_direction", "forbidden_motion")
+                contract_fields = ("direction_sensitive", "action_family", "ordered_action_steps", "progression_checkpoints", "movement_direction", "forbidden_motion")
                 present = [field for field in contract_fields if field in evidence or field in clip]
                 # Pre-Goal44 requests are immutable correction inputs.  They have no
                 # directional fields at all; new compilation always emits all five.

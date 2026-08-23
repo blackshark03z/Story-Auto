@@ -66,12 +66,12 @@ class OfflineMotionPlanner:
             clips = [
                 {"start_state":"hand lowered", "action":"hand reaches the door handle",
                  "end_state":"hand rests on handle", "natural_stillness":"brief contact pause",
-                 "direction_sensitive":True, "ordered_action_steps":["APPROACH", "CONTACT"],
+                 "direction_sensitive":True, "action_family":"CONTACT", "ordered_action_steps":["APPROACH", "CONTACT"],
                  "progression_checkpoints":["HAND_LOWERED", "HAND_AT_HANDLE"], "movement_direction":"CONTACT_THEN_OBJECT_MOTION",
                  "forbidden_motion":["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]},
                 {"start_state":"hand rests on handle", "action":"door opens once",
                  "end_state":"door remains open", "natural_stillness":"settles without looping",
-                 "direction_sensitive":True, "ordered_action_steps":["CONTACT", "OPEN"],
+                 "direction_sensitive":True, "action_family":"OPEN", "ordered_action_steps":["CONTACT", "OPEN"],
                  "progression_checkpoints":["DOOR_CLOSED", "DOOR_OPEN"], "movement_direction":"OPENING",
                  "forbidden_motion":["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]},
             ]

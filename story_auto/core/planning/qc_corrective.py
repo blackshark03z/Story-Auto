@@ -188,6 +188,7 @@ def compile_qc_corrected_video_request(
             raise QCCorrectiveReplanError("QC_CORRECTIVE_REPLAN_FULL_MOTION_PLAN_INVALID")
         clip = dict(clips[0])
         clip.setdefault("direction_sensitive", False)
+        clip.setdefault("action_family", "NONE")
         clip.setdefault("ordered_action_steps", [])
         clip.setdefault("progression_checkpoints", [])
         clip.setdefault("movement_direction", "")
@@ -205,6 +206,7 @@ def compile_qc_corrected_video_request(
             "interaction_objects": full_motion_plan["interaction_objects"],
             "hand_object_contact": full_motion_plan["hand_object_contact"],
             "direction_sensitive": clip.get("direction_sensitive", False),
+            "action_family": clip.get("action_family", "NONE"),
             "ordered_action_steps": clip.get("ordered_action_steps", []),
             "progression_checkpoints": clip.get("progression_checkpoints", []),
             "movement_direction": clip.get("movement_direction", ""),
