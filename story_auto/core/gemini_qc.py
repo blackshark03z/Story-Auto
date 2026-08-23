@@ -12,7 +12,7 @@ from story_auto.core.artifacts import atomic_write_json, sha256_file
 from story_auto.providers.llm import GeminiReasoningRouter, LLMMedia, ReasoningResult
 
 HOOK_PLAN_VERSION = "story-auto-hook-plan/1.0.0"
-MOTION_PLAN_VERSION = "story-auto-motion-plan/1.3.0"
+MOTION_PLAN_VERSION = "story-auto-motion-plan/1.4.0"
 TEMPORAL_QC_VERSION = "story-auto-temporal-video-qc/1.1.0"
 REPAIR_PLAN_VERSION = "story-auto-repair-plan/1.0.0"
 FLOW_MOTION_PROMPT_VERSION = "story-auto-flow-motion-prompt/1.1.0"
@@ -116,14 +116,25 @@ def plan_hook(router: GeminiReasoningRouter, *, narration: str, start: float, en
 
 
 ACTION_NONE = "NONE"
-_FAMILY_TRAJECTORY = {
-    "ASCENT": "ASCENDING", "DESCENT": "DESCENDING", "TOWARD": "TOWARD_TARGET",
-    "AWAY": "AWAY_FROM_TARGET", "FROM_TO": "FROM_TO_DESTINATION", "PICK_UP": "UP_AFTER_CONTACT",
-    "PUT_DOWN": "DOWN_AFTER_CONTACT", "SIT": "SIT_DOWN", "STAND": "STAND_UP",
-    "OPEN": "OPENING", "CLOSE": "CLOSING", "HANDOFF": "TRANSFER_TO_RECIPIENT",
-    "CONTACT": "CONTACT_THEN_OBJECT_MOTION", "ENTER": "ENTERING", "EXIT": "EXITING",
-    "TURN_MOVE": "TURN_THEN_FORWARD",
+_FAMILY_STRUCTURE = {
+    "ASCENT": {"movement_direction":"ASCENDING", "ordered_steps":("LOWER", "MIDDLE", "UPPER"), "checkpoints":("LOWER", "MIDDLE", "UPPER"), "forbidden":("BACKWARD_MOTION", "DESCENDING", "REVERSE_DIRECTION")},
+    "DESCENT": {"movement_direction":"DESCENDING", "ordered_steps":("UPPER", "MIDDLE", "LOWER"), "checkpoints":("UPPER", "MIDDLE", "LOWER"), "forbidden":("BACKWARD_MOTION", "ASCENDING", "REVERSE_DIRECTION")},
+    "TOWARD": {"movement_direction":"TOWARD_TARGET", "ordered_steps":("ORIGIN", "TARGET"), "checkpoints":("ORIGIN", "TARGET"), "forbidden":("REVERSE_DIRECTION",)},
+    "AWAY": {"movement_direction":"AWAY_FROM_TARGET", "ordered_steps":("ORIGIN", "AWAY"), "checkpoints":("ORIGIN", "AWAY"), "forbidden":("REVERSE_DIRECTION",)},
+    "FROM_TO": {"movement_direction":"FROM_TO_DESTINATION", "ordered_steps":("ORIGIN", "DESTINATION"), "checkpoints":("ORIGIN", "DESTINATION"), "forbidden":("REVERSE_DIRECTION",)},
+    "PICK_UP": {"movement_direction":"UP_AFTER_CONTACT", "ordered_steps":("APPROACH", "CONTACT", "LIFT"), "checkpoints":("HAND_AWAY", "CONTACT", "CUP_RAISED"), "forbidden":("OBJECT_BEFORE_CONTACT", "REVERSE_ORDER")},
+    "PUT_DOWN": {"movement_direction":"DOWN_AFTER_CONTACT", "ordered_steps":("CONTACT", "LOWER", "RELEASE"), "checkpoints":("HELD", "SURFACE"), "forbidden":("OBJECT_BEFORE_CONTACT", "REVERSE_ORDER")},
+    "SIT": {"movement_direction":"SIT_DOWN", "ordered_steps":("STANDING", "LOWERING", "SEATED"), "checkpoints":("STANDING", "LOWERING", "SEATED"), "forbidden":("REVERSE_ORDER",)},
+    "STAND": {"movement_direction":"STAND_UP", "ordered_steps":("SEATED", "RISING", "STANDING"), "checkpoints":("SEATED", "RISING", "STANDING"), "forbidden":("REVERSE_ORDER",)},
+    "OPEN": {"movement_direction":"OPENING", "ordered_steps":("CONTACT", "OPEN"), "checkpoints":("CLOSED", "OPEN"), "forbidden":("REVERSE_DIRECTION",)},
+    "CLOSE": {"movement_direction":"CLOSING", "ordered_steps":("CONTACT", "CLOSE"), "checkpoints":("OPEN", "CLOSED"), "forbidden":("REVERSE_DIRECTION",)},
+    "HANDOFF": {"movement_direction":"TRANSFER_TO_RECIPIENT", "ordered_steps":("CONTACT", "TRANSFER"), "checkpoints":("HELD", "RECIPIENT"), "forbidden":("REVERSE_DIRECTION",)},
+    "CONTACT": {"movement_direction":"CONTACT_THEN_OBJECT_MOTION", "ordered_steps":("APPROACH", "CONTACT"), "checkpoints":("AWAY", "CONTACT"), "forbidden":("REVERSE_DIRECTION",)},
+    "ENTER": {"movement_direction":"ENTERING", "ordered_steps":("OUTSIDE", "INSIDE"), "checkpoints":("OUTSIDE", "INSIDE"), "forbidden":("REVERSE_DIRECTION",)},
+    "EXIT": {"movement_direction":"EXITING", "ordered_steps":("INSIDE", "OUTSIDE"), "checkpoints":("INSIDE", "OUTSIDE"), "forbidden":("REVERSE_DIRECTION",)},
+    "TURN_MOVE": {"movement_direction":"TURN_THEN_FORWARD", "ordered_steps":("TURN", "MOVE"), "checkpoints":("FACING_OLD", "FACING_NEW"), "forbidden":("REVERSE_DIRECTION",)},
 }
+_FAMILY_TRAJECTORY = {family: value["movement_direction"] for family, value in _FAMILY_STRUCTURE.items()}
 _TRAJECTORY_PROMPT = {
     "ASCENDING": "progress upward from lower to higher position", "DESCENDING": "progress downward from upper to lower position",
     "TOWARD_TARGET": "move toward the target", "AWAY_FROM_TARGET": "move away from the target",
@@ -191,21 +202,9 @@ def is_high_risk(action: str) -> bool:
             or bool(re.search(r"\b(?:door|handle|tool|piano|instrument|finger)\b", action.lower())))
 
 
-def _require_ordered_steps(steps: list[str], expected: tuple[str, ...]) -> None:
-    normalized = [item.strip().upper() for item in steps]
-    positions = [normalized.index(item) if item in normalized else -1 for item in expected]
-    if min(positions) < 0 or positions != sorted(positions):
-        raise GeminiQCError("MOTION_ORDERED_ACTION_STEPS_INVALID")
-
-
-def _require_progression(checkpoints: list[str], *, ascending: bool) -> None:
-    normalized = [item.strip().upper() for item in checkpoints]
-    canonical = ("LOWER", "MIDDLE", "UPPER")
-    positions = [canonical.index(item) if item in canonical else -1 for item in normalized]
-    if (len(normalized) < 2 or min(positions) < 0 or normalized[0] != ("LOWER" if ascending else "UPPER")
-            or normalized[-1] != ("UPPER" if ascending else "LOWER")
-            or positions != sorted(positions, reverse=not ascending)):
-        raise GeminiQCError("MOTION_DIRECTIONAL_PROGRESSION_INVALID")
+def _require_canonical_sequence(values: list[str], expected: tuple[str, ...], failure_class: str) -> None:
+    if tuple(item.strip().upper() for item in values) != expected:
+        raise GeminiQCError(failure_class)
 
 
 def _validate_directional_contract(clip: dict[str, Any]) -> None:
@@ -247,39 +246,14 @@ def _validate_directional_contract(clip: dict[str, Any]) -> None:
             or any(not isinstance(item, str) or not item.strip() or len(item) > 300 for item in forbidden)):
         raise GeminiQCError("MOTION_DIRECTIONAL_CONTRACT_INVALID")
 
-    expected_trajectory = _FAMILY_TRAJECTORY[family]
-    if trajectory.strip().upper() != expected_trajectory:
+    structure = _FAMILY_STRUCTURE[family]
+    if trajectory.strip().upper() != structure["movement_direction"]:
         raise GeminiQCError("MOTION_DIRECTIONAL_TRAJECTORY_INVALID")
     forbidden_codes = {item.strip().upper() for item in forbidden}
-    required_forbidden = {
-        "ASCENT": {"BACKWARD_MOTION", "DESCENDING", "REVERSE_DIRECTION"},
-        "DESCENT": {"BACKWARD_MOTION", "ASCENDING", "REVERSE_DIRECTION"},
-        "PICK_UP": {"OBJECT_BEFORE_CONTACT", "REVERSE_ORDER"},
-        "PUT_DOWN": {"OBJECT_BEFORE_CONTACT", "REVERSE_ORDER"},
-        "SIT": {"REVERSE_ORDER"}, "STAND": {"REVERSE_ORDER"},
-    }.get(family, {"REVERSE_DIRECTION"})
-    if not required_forbidden.issubset(forbidden_codes):
+    if not set(structure["forbidden"]).issubset(forbidden_codes):
         raise GeminiQCError("MOTION_DIRECTIONAL_FORBIDDEN_MOTION_INVALID")
-    if family == "ASCENT":
-        _require_progression(checkpoints, ascending=True)
-    elif family == "DESCENT":
-        _require_progression(checkpoints, ascending=False)
-    elif family == "PICK_UP":
-        _require_ordered_steps(steps, ("APPROACH", "CONTACT", "LIFT"))
-    elif family == "PUT_DOWN":
-        _require_ordered_steps(steps, ("CONTACT", "LOWER", "RELEASE"))
-    elif family == "SIT":
-        _require_ordered_steps(steps, ("STANDING", "LOWERING", "SEATED"))
-    elif family == "STAND":
-        _require_ordered_steps(steps, ("SEATED", "RISING", "STANDING"))
-    elif family == "OPEN":
-        _require_ordered_steps(steps, ("CONTACT", "OPEN"))
-    elif family == "CLOSE":
-        _require_ordered_steps(steps, ("CONTACT", "CLOSE"))
-    elif family == "CONTACT":
-        _require_ordered_steps(steps, ("APPROACH", "CONTACT"))
-    elif family == "HANDOFF":
-        _require_ordered_steps(steps, ("CONTACT", "TRANSFER"))
+    _require_canonical_sequence(steps, structure["ordered_steps"], "MOTION_ORDERED_ACTION_STEPS_INVALID")
+    _require_canonical_sequence(checkpoints, structure["checkpoints"], "MOTION_DIRECTIONAL_PROGRESSION_INVALID")
 
 
 def validate_motion_plan(plan: dict[str, Any], *, original_action: str,
@@ -310,7 +284,7 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
               "Split high-risk contact mechanics with cuts. For direction- or order-sensitive actions, every affected atomic clip must set direction_sensitive=true and provide action_family, ordered_action_steps, progression_checkpoints, movement_direction, and forbidden_motion. "
               "action_family is the structured semantic authority and must be one of ASCENT, DESCENT, TOWARD, AWAY, FROM_TO, PICK_UP, PUT_DOWN, SIT, STAND, OPEN, CLOSE, HANDOFF, CONTACT, ENTER, EXIT, or TURN_MOVE. Use NONE only when direction_sensitive=false. "
               "movement_direction is a canonical code selected from the action family: ASCENDING, DESCENDING, TOWARD_TARGET, AWAY_FROM_TARGET, FROM_TO_DESTINATION, UP_AFTER_CONTACT, DOWN_AFTER_CONTACT, SIT_DOWN, STAND_UP, OPENING, CLOSING, TRANSFER_TO_RECIPIENT, CONTACT_THEN_OBJECT_MOTION, ENTERING, EXITING, or TURN_THEN_FORWARD. "
-              "For stair or ladder ascent use LOWER, MIDDLE, UPPER checkpoints; for descent use UPPER, MIDDLE, LOWER. Use canonical ordered steps such as APPROACH, CONTACT, LIFT and canonical forbidden codes such as BACKWARD_MOTION, REVERSE_DIRECTION, OBJECT_BEFORE_CONTACT, and REVERSE_ORDER. "
+              "Use the exact canonical family structures: ASCENT LOWER,MIDDLE,UPPER; DESCENT UPPER,MIDDLE,LOWER; TOWARD ORIGIN,TARGET; AWAY ORIGIN,AWAY; FROM_TO ORIGIN,DESTINATION; SIT STANDING,LOWERING,SEATED; STAND SEATED,RISING,STANDING; OPEN CONTACT,OPEN with CLOSED,OPEN checkpoints; CLOSE CONTACT,CLOSE with OPEN,CLOSED checkpoints; HANDOFF CONTACT,TRANSFER with HELD,RECIPIENT checkpoints; CONTACT APPROACH,CONTACT with AWAY,CONTACT checkpoints; ENTER OUTSIDE,INSIDE; EXIT INSIDE,OUTSIDE; TURN_MOVE TURN,MOVE with FACING_OLD,FACING_NEW checkpoints; PICK_UP APPROACH,CONTACT,LIFT with HAND_AWAY,CONTACT,CUP_RAISED checkpoints; PUT_DOWN CONTACT,LOWER,RELEASE with HELD,SURFACE checkpoints. Use canonical forbidden codes such as BACKWARD_MOTION, REVERSE_DIRECTION, OBJECT_BEFORE_CONTACT, and REVERSE_ORDER. "
               "Treat stair/ladder traversal, entering/exiting, sitting/standing, object pickup/place-down, opening/closing, hand-offs, turns before movement, and explicit toward/away motion as elevated risk. "
               "Use atomic clips when several causal actions cannot be safely executed together. Natural stillness is valid."
               + count_instruction + " Return JSON only. Intent:\n"
@@ -319,7 +293,7 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
         validate_motion_plan(plan, original_action=str(intent.get("action", "")),
                              required_atomic_clip_count=required_clip_count)
     result = router.reason(task="motion_planning", prompt=prompt, schema=MOTION_SCHEMA, tier="HARD",
-        prompt_version="motion-planner/1.3.0", schema_version=MOTION_PLAN_VERSION,
+        prompt_version="motion-planner/1.4.0", schema_version=MOTION_PLAN_VERSION,
         acceptance_validator=accept_motion_plan)
     validate_motion_plan(result.value, original_action=str(intent.get("action", "")),
                          required_atomic_clip_count=required_clip_count)

@@ -47,7 +47,7 @@ def test_flow_prompt_is_deterministic_bounded_and_contact_safe():
     clip = {"start_state":"hand away from handle", "action":"hand approaches and rests on handle",
             "end_state":"hand resting on handle; door closed", "natural_stillness":"one breath",
             "direction_sensitive":True, "action_family":"CONTACT", "ordered_action_steps":["APPROACH", "CONTACT"],
-            "progression_checkpoints":["HAND_AWAY", "HAND_AT_HANDLE"], "movement_direction":"CONTACT_THEN_OBJECT_MOTION",
+            "progression_checkpoints":["AWAY", "CONTACT"], "movement_direction":"CONTACT_THEN_OBJECT_MOTION",
             "forbidden_motion":["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]}
     prompt = compile_flow_motion_prompt(subject="fictional conductor", location="academy corridor", clip=clip, duration=4)
     assert "One visible action only" in prompt and "before they move" in prompt and "Required ordered action sequence" in prompt and "no reset" in prompt
@@ -160,6 +160,32 @@ def test_structured_action_family_covers_remaining_canonical_actions():
     turn = clip("turns", "TURN_MOVE", "TURN_THEN_FORWARD", ["TURN", "MOVE"], ["FACING_OLD", "FACING_NEW"], ["REVERSE_DIRECTION"])
     move = clip("moves forward", "TURN_MOVE", "TURN_THEN_FORWARD", ["TURN", "MOVE"], ["FACING_OLD", "FACING_NEW"], ["REVERSE_DIRECTION"])
     validate_motion_plan({"meaningful_actions":["turn", "move"], "atomic_clips":[turn, move]}, original_action="turns then moves forward")
+
+
+@pytest.mark.parametrize(("action", "family", "direction"), [
+    ("enters the room", "ENTER", "ENTERING"), ("exits the room", "EXIT", "EXITING"),
+    ("walks toward the gate", "TOWARD", "TOWARD_TARGET"), ("walks away from the gate", "AWAY", "AWAY_FROM_TARGET"),
+    ("walks from the gate to the car", "FROM_TO", "FROM_TO_DESTINATION"), ("turns", "TURN_MOVE", "TURN_THEN_FORWARD"),
+])
+def test_arbitrary_steps_and_checkpoints_reject_for_every_review_probe(action, family, direction):
+    invalid = {"start_state":"start", "action":action, "end_state":"end", "natural_stillness":"settles",
+               "direction_sensitive":True, "action_family":family, "movement_direction":direction,
+               "ordered_action_steps":["BANANA", "MOON"], "progression_checkpoints":["X", "Y"],
+               "forbidden_motion":["REVERSE_DIRECTION"]}
+    with pytest.raises(GeminiQCError, match="MOTION_ORDERED_ACTION_STEPS_INVALID"):
+        validate_motion_plan({"meaningful_actions":[action], "atomic_clips":[invalid]}, original_action=action)
+
+
+@pytest.mark.parametrize(("action", "family", "direction", "steps", "forbidden"), [
+    ("opens the door", "OPEN", "OPENING", ["CONTACT", "OPEN"], ["REVERSE_DIRECTION"]),
+    ("hands the envelope to the guard", "HANDOFF", "TRANSFER_TO_RECIPIENT", ["CONTACT", "TRANSFER"], ["REVERSE_DIRECTION"]),
+])
+def test_valid_steps_with_arbitrary_checkpoints_reject(action, family, direction, steps, forbidden):
+    invalid = {"start_state":"start", "action":action, "end_state":"end", "natural_stillness":"settles",
+               "direction_sensitive":True, "action_family":family, "movement_direction":direction,
+               "ordered_action_steps":steps, "progression_checkpoints":["X", "Y"], "forbidden_motion":forbidden}
+    with pytest.raises(GeminiQCError, match="MOTION_DIRECTIONAL_PROGRESSION_INVALID"):
+        validate_motion_plan({"meaningful_actions":[action], "atomic_clips":[invalid]}, original_action=action)
 
 
 def test_structured_family_can_pass_when_text_inference_is_none_but_contradiction_fails_closed():

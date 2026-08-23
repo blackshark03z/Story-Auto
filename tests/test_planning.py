@@ -194,8 +194,8 @@ class PlanningTests(unittest.TestCase):
                     "direction_sensitive":True, "action_family":family, "ordered_action_steps":steps, "progression_checkpoints":checkpoints,
                     "movement_direction":trajectory, "forbidden_motion":forbidden}
         motion={"records":[{"request_id":source["request_id"],"analysis":{"physical_complexity":"HIGH","anatomy_risk":"MEDIUM","looping_risk":"LOW","interaction_objects":["door"],"hand_object_contact":"bounded","atomic_clips":[
-            clip("hand reaches handle", "CONTACT", ["APPROACH", "CONTACT"], ["HAND_AWAY", "HAND_AT_HANDLE"], "CONTACT_THEN_OBJECT_MOTION", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
-            clip("door opens once", "OPEN", ["CONTACT", "OPEN"], ["DOOR_CLOSED", "DOOR_OPEN"], "OPENING", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
+            clip("hand reaches handle", "CONTACT", ["APPROACH", "CONTACT"], ["AWAY", "CONTACT"], "CONTACT_THEN_OBJECT_MOTION", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
+            clip("door opens once", "OPEN", ["CONTACT", "OPEN"], ["CLOSED", "OPEN"], "OPENING", ["OBJECT_BEFORE_CONTACT", "REVERSE_DIRECTION"]),
         ]}}]}
         resolved=apply_motion_plans(requests,shot_plan,motion)
         parts=sorted((item for item in resolved["requests"] if item.get("purpose")=="SHOT"),key=lambda item:item["part_index"])
