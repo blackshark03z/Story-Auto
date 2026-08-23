@@ -564,6 +564,38 @@ class FlowTests(unittest.TestCase):
             final=next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"] if item["request_id"]==request_id)
             self.assertEqual(final["status"],"SUCCEEDED")
 
+    def test_visible_watermark_false_positive_reopen_is_exact_fresh_and_idempotent(self):
+        """A cleaned Flow image can be re-reviewed without a provider retry."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,_executor,calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry["failure_class"]="VISIBLE_PROVIDER_WATERMARK"
+            entry["quality_reviews"][-1]["failure_class"]="VISIBLE_PROVIDER_WATERMARK"
+            original=json.loads(json.dumps(entry["quality_reviews"][-1]))
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            event=reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,
+                expected_asset_sha256=asset_sha,reviewer="exact-byte reviewer",reason="cleaned PNG has no visible provider watermark")
+            again=reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,
+                expected_asset_sha256=asset_sha,reviewer="exact-byte reviewer",reason="idempotent repeat")
+            reopened=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(reopened["quality_reviews"][-1],original)
+            self.assertEqual((event["idempotent"],again["idempotent"],event["selected_attempt"],
+                              reopened["selected_asset"]["production_qc"]),(False,True,1,"PENDING"))
+            self.assertEqual(reopened["selected_asset"]["active_production_review_epoch"],event["review_epoch"])
+            stale=self._production_report()
+            stale.update({"review_identity":event["review_epoch"],"request_id":request_id,"attempt":2,"media_sha256":asset_sha})
+            with self.assertRaisesRegex(FlowError,"PRODUCTION_QC_FRESH_EVIDENCE_INVALID"):
+                review_production_asset(runtime.root,cfg.project_id,request_id,stale)
+            fresh=self._production_report()
+            fresh.update({"review_identity":event["review_epoch"],"request_id":request_id,"attempt":1,"media_sha256":asset_sha})
+            review_production_asset(runtime.root,cfg.project_id,request_id,fresh)
+            final=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            review=final["quality_reviews"][-1]
+            self.assertEqual((final["status"],final["selected_asset"]["production_qc"],
+                              final["selected_asset"]["completed_production_review_epoch"],review["review_epoch"],len(calls)),
+                             ("SUCCEEDED","APPROVED",event["review_epoch"],event["review_epoch"],1))
+
     def test_temporal_false_positive_supersession_is_exact_append_only_and_idempotent(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths,request_id,digest,original=self._temporal_false_positive_fixture(root)
@@ -799,12 +831,12 @@ class FlowTests(unittest.TestCase):
                 reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
                                                     reviewer="tech-lead",reason="second appeal")
 
-    def test_goal37_reopen_denies_non_naturalness_invalid_bytes_and_current_replacement(self):
+    def test_goal37_reopen_denies_ineligible_failure_invalid_bytes_and_current_replacement(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths,_executor,_calls,rejected=self._goal37_rejected_fixture(root)
             request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
             manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
-            entry["failure_class"]="VISIBLE_PROVIDER_WATERMARK"; entry["quality_reviews"][-1]["failure_class"]="VISIBLE_PROVIDER_WATERMARK"
+            entry["failure_class"]="VISUAL_NARRATION_ALIGNMENT_MISMATCH"; entry["quality_reviews"][-1]["failure_class"]="VISUAL_NARRATION_ALIGNMENT_MISMATCH"
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
             with self.assertRaisesRegex(FlowError,"QC_FALSE_POSITIVE_REOPEN_INVALID"):
                 reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,expected_asset_sha256=asset_sha,
