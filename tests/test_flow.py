@@ -16,6 +16,7 @@ from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
                                                 adopt_exact_flow_recovery, adopt_manual_recovery,
                                                 recover_interrupted_pre_dispatch_attempt, reject_selected_asset,
+                                                recover_confirmed_output_after_manifest_persistence_failure,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 reopen_false_positive_production_qc, reopen_false_positive_temporal_qc, _first_unresolved,
                                                 review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review,
@@ -24,6 +25,8 @@ from story_auto.providers.flow.validation import validate_video
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
 from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
+from story_auto.providers.flow.live import ProviderPollEvidenceTimeline
+from story_auto.providers.flow.postprocess import process_flow_image
 from story_auto.providers.flow.cdp import CdpPage, MAX_UNMATCHED_CDP_MESSAGES
 import story_auto.providers.flow.service as flow_service
 
@@ -120,6 +123,55 @@ class FlowTests(unittest.TestCase):
                "selected_asset":{"path":rel,"sha256":digest,"attempt":1,"production_qc":"REJECTED"},"quality_reviews":[rejection]}
         atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
         return runtime,cfg,paths,executor,calls,entry
+
+    def test_confirmed_output_manifest_persistence_recovery_binds_existing_attempt_only(self):
+        """A failed final manifest replace must not require another Flow activation."""
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root)
+            request_id="req_manifest_persistence_recovery"
+            requests=read_json(paths.artifact_path("output/generation_requests.json"))
+            request=next(item for item in requests["requests"] if item["request_id"]=="ref")
+            request.update({"request_id":request_id,"fingerprint":request_id+"hash","execution_tier":"STANDARD_PRODUCTION"})
+            next(item for item in requests["requests"] if item["request_id"]=="shot")["depends_on"]=[request_id]
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            raw_rel=f"assets/image/{request_id}/attempt_001_raw.png"
+            clean_rel=f"assets/image/{request_id}/attempt_001_clean.png"
+            raw=paths.artifact_path(raw_rel); clean=paths.artifact_path(clean_rel)
+            raw.parent.mkdir(parents=True,exist_ok=True)
+            Image.new("RGB",(1280,720),"navy").save(raw,"PNG")
+            processed=process_flow_image(raw,clean)
+            raw_before,clean_before=raw.read_bytes(),clean.read_bytes()
+            timeline=ProviderPollEvidenceTimeline(max_observations=8)
+            source=timeline.append({
+                "phase":"POST_DISPATCH",
+                "current_identity_set":[{"identity":"asset:recovered","card_id":"card-recovered","asset_id":"recovered","media_type":"IMAGE","state":"READY"}],
+                "candidate_identities":[{"identity":"asset:recovered","card_id":"card-recovered","asset_id":"recovered"}],
+                "attribution_evidence_state":"CONFIRMED","dispatch_evidence_state":"CONFIRMED",
+                "durable_dispatch_identity":"asset:recovered",
+            })
+            timeline.append_decision_binding(source,dispatch_state="CONFIRMED",dispatch_signal="verified_activation_provider_ui_job",
+                                             dispatch_signal_state="DISPATCH_CONFIRMED",attribution_state="CONFIRMED",
+                                             durable_identity="asset:recovered")
+            timeline.finish("CONFIRMED_OUTPUT")
+            evidence=paths.artifact_path(f"assets/attempts/{request_id}/attempt_001/provider_poll_evidence.json")
+            evidence.parent.mkdir(parents=True,exist_ok=True); atomic_write_json(evidence,timeline.snapshot())
+            entry={"request_id":request_id,"request_identity_sha256":request_id+"hash","media_type":"IMAGE","provider":"google_flow",
+                   "status":"GENERATING","provider_submissions":1,"selected_asset":None,
+                   "attempts":[{"attempt":1,"status":"SUBMITTED","dispatch_confirmed":False,
+                                "provider_execution_state":"PROVIDER_BOUNDARY_ENTERED"}]}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":cfg.project_id,"requests":[entry]})
+            selected=recover_confirmed_output_after_manifest_persistence_failure(runtime.root,cfg.project_id,request_id)
+            recovered=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            attempt=recovered["attempts"][0]
+            self.assertEqual((recovered["status"],recovered["provider_submissions"],len(recovered["attempts"])),("QC_PENDING",1,1))
+            self.assertEqual((selected["path"],selected["sha256"]),(clean_rel,processed["output_sha256"]))
+            self.assertEqual((attempt["dispatch_confirmation_state"],attempt["attribution_state"],attempt["asset_sha256"]),
+                             ("CONFIRMED","CONFIRMED",processed["source_sha256"]))
+            self.assertEqual((raw.read_bytes(),clean.read_bytes()),(raw_before,clean_before))
+            self.assertEqual(recovered["manifest_persistence_recoveries"][-1]["selected_sha256"],processed["output_sha256"])
+            with self.assertRaisesRegex(FlowError,"MANIFEST_PERSISTENCE_RECOVERY_INVALID"):
+                recover_confirmed_output_after_manifest_persistence_failure(runtime.root,cfg.project_id,request_id)
 
     def _temporal_false_positive_fixture(self, root):
         """Exact-style sh_0007 fixture: a persisted black-frame claim disproven by fresh evidence."""

@@ -1505,6 +1505,173 @@ def recover_interrupted_pre_dispatch_attempt(runtime_root: Path | str, project_i
         atomic_write_json(path, manifest)
 
 
+def recover_confirmed_output_after_manifest_persistence_failure(
+        runtime_root: Path | str, project_id: str, request_id: str) -> dict:
+    """Finish one provider-bound IMAGE attempt whose result write was interrupted.
+
+    This is deliberately not a retry or an operator adoption path.  It accepts
+    only the exact attempt-scoped, hash-verified provider timeline and the
+    deterministic clean derivative already produced from that attempt's raw
+    bytes.  The original submitted attempt remains the sole provider attempt;
+    recovery appends durable state to it after the manifest becomes writable.
+    """
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        if not isinstance(entry, dict):
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_INVALID")
+        attempts = entry.get("attempts")
+        attempt = attempts[-1] if isinstance(attempts, list) and attempts else None
+        attempt_number = attempt.get("attempt") if isinstance(attempt, dict) else None
+        if (
+            entry.get("status") != "GENERATING"
+            or entry.get("selected_asset") is not None
+            or not isinstance(attempt_number, int)
+            or attempt.get("status") != "SUBMITTED"
+            or attempt.get("provider_execution_state") != "PROVIDER_BOUNDARY_ENTERED"
+            or attempt.get("dispatch_confirmed") is not False
+            or attempt.get("attribution_state") not in {None, "NOT_ATTEMPTED"}
+            or int(entry.get("provider_submissions", 0)) != attempt_number
+        ):
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_INVALID")
+        try:
+            request = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                           if item.get("request_id") == request_id)
+        except Exception as error:
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_INVALID") from error
+        if request.get("media_type") != "IMAGE" or request.get("execution_tier") != "STANDARD_PRODUCTION":
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_INVALID")
+
+        evidence_path = paths.artifact_path(
+            f"assets/attempts/{request_id}/attempt_{attempt_number:03d}/provider_poll_evidence.json"
+        )
+        raw_rel = f"assets/image/{request_id}/attempt_{attempt_number:03d}_raw.png"
+        clean_rel = f"assets/image/{request_id}/attempt_{attempt_number:03d}_clean.png"
+        raw_path = paths.artifact_path(raw_rel)
+        clean_path = paths.artifact_path(clean_rel)
+        if not evidence_path.is_file() or not raw_path.is_file() or not clean_path.is_file():
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_EVIDENCE_MISSING")
+        try:
+            from .live import ProviderPollEvidenceTimeline
+            evidence = read_json(evidence_path)
+            verified = ProviderPollEvidenceTimeline.verify_snapshot(evidence)
+            binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified)
+            raw_metadata = validate_image(raw_path)
+            clean_metadata = validate_image(clean_path)
+        except (ValueError, AssetValidationError, OSError) as error:
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_EVIDENCE_INVALID") from error
+        if (
+            not verified.get("evidence_complete")
+            or binding.get("resulting_dispatch_state") != "CONFIRMED"
+            or binding.get("resulting_attribution_state") != "CONFIRMED"
+            or not isinstance(binding.get("durable_identity_used"), str)
+            or not binding["durable_identity_used"]
+        ):
+            raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_EVIDENCE_INVALID")
+
+        # Rebuild a disposable deterministic derivative to prove that the
+        # already-present clean file is exactly derived from this raw provider
+        # output.  The verified production file itself is never overwritten.
+        verification_path = clean_path.with_name(
+            f".{clean_path.stem}.manifest-recovery-{uuid.uuid4().hex}{clean_path.suffix}"
+        )
+        try:
+            processed = process_flow_image(raw_path, verification_path)
+            if processed.get("output_sha256") != clean_metadata.get("sha256"):
+                raise FlowError("MANIFEST_PERSISTENCE_RECOVERY_DERIVATIVE_MISMATCH")
+        except FlowImagePostprocessError as error:
+            raise FlowError(error.failure_class, str(error)) from error
+        finally:
+            verification_path.unlink(missing_ok=True)
+
+        at = _now()
+        original_attempt_sha256 = _json_sha256(attempt)
+        recovery = {
+            "recovered_at": at,
+            "recovery_kind": "CONFIRMED_OUTPUT_AFTER_MANIFEST_PERSISTENCE_FAILURE",
+            "pre_recovery_attempt_sha256": original_attempt_sha256,
+            "provider_poll_evidence_path": str(evidence_path.relative_to(paths.root)).replace("\\", "/"),
+            "provider_poll_evidence_sha256": sha256_file(evidence_path),
+            "authoritative_binding_sha256": binding.get("binding_sha256"),
+            "durable_provider_identity": binding["durable_identity_used"],
+            "raw_path": raw_rel,
+            "raw_sha256": raw_metadata["sha256"],
+            "selected_path": clean_rel,
+            "selected_sha256": clean_metadata["sha256"],
+        }
+        attempt.update({
+            "status": "SUCCEEDED",
+            "completed_at": at,
+            "dispatch_confirmed": True,
+            "dispatch_confirmation_state": "CONFIRMED",
+            "dispatch_confirmation_signal": binding.get("resulting_dispatch_signal"),
+            "durable_dispatch_identity": binding["durable_identity_used"],
+            "attribution_state": "CONFIRMED",
+            "attribution_method": "persisted_provider_poll_timeline",
+            "attribution_method_version": "flow-provider-tile-lineage/1.0.0",
+            "attributed_provider_identity": {"identity": binding["durable_identity_used"]},
+            "attribution_confirmation_timestamp": at,
+            "asset_path": raw_rel,
+            "asset_sha256": raw_metadata["sha256"],
+            "downloaded_raw_path": raw_rel,
+            "raw_sha256": raw_metadata["sha256"],
+            "metadata": raw_metadata,
+            "production_image_postprocess_required": True,
+            "provider_settings": {
+                "provider_poll_evidence": verified,
+                "provider_poll_authoritative_binding": binding,
+                "dispatch_confirmation_state": "CONFIRMED",
+                "dispatch_confirmation_signal": binding.get("resulting_dispatch_signal"),
+                "attribution_state": "CONFIRMED",
+                "attributed_provider_identity": {"identity": binding["durable_identity_used"]},
+            },
+        })
+        attempt.setdefault("attribution_events", []).append({
+            "at": at, "state": "CONFIRMED", "method": attempt["attribution_method"],
+            "provider_identity": attempt["attributed_provider_identity"],
+            "recovered_after_manifest_persistence_failure": True,
+        })
+        attempt.setdefault("manifest_persistence_recoveries", []).append(recovery)
+        processing_number = len(entry.setdefault("postprocess_attempts", [])) + 1
+        entry["postprocess_attempts"].append({
+            "processing_attempt": processing_number,
+            "status": "SUCCEEDED",
+            "source_provider_attempt": attempt_number,
+            "source_path": raw_rel,
+            "source_sha256": raw_metadata["sha256"],
+            "output_path": clean_rel,
+            "output_sha256": clean_metadata["sha256"],
+            "processor_name": processed["processor_name"],
+            "processor_version": processed["processor_version"],
+            "flow_mark_profile_version": processed["profile_version"],
+            "profile_sha256": processed["profile_sha256"],
+            "mask_sha256": processed["mask_sha256"],
+            "completed_at": at,
+            "recovered_after_manifest_persistence_failure": True,
+        })
+        selected = {
+            "path": clean_rel,
+            "sha256": clean_metadata["sha256"],
+            "attempt": attempt_number,
+            "metadata": clean_metadata,
+            "production_qc": "PENDING",
+            "source_provider_attempt": attempt_number,
+            "source_path": raw_rel,
+            "source_sha256": raw_metadata["sha256"],
+            "postprocess_attempt": processing_number,
+            "processor_name": processed["processor_name"],
+            "processor_version": processed["processor_version"],
+            "flow_mark_profile_version": processed["profile_version"],
+            "mask_sha256": processed["mask_sha256"],
+            "provenance": "CONFIRMED_OUTPUT_MANIFEST_PERSISTENCE_RECOVERY",
+        }
+        entry.setdefault("manifest_persistence_recoveries", []).append(recovery)
+        entry.update({"selected_asset": selected, "status": "QC_PENDING", "failure_class": None, "updated_at": at})
+        atomic_write_json(path, manifest)
+        return selected
+
+
 def review_production_asset(runtime_root: Path | str, project_id: str, request_id: str, report: dict) -> None:
     """Approve or reject selected bytes using the complete production QC rubric."""
     paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
