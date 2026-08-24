@@ -3336,6 +3336,18 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
             and isinstance(item.get("pre_dispatch_supersession_request_id"), str)):
         # The dedicated parent validator below verifies this outgoing edge.
         return True
+    # A pre-dispatch child can later receive an ordinary mandatory-QC
+    # replacement.  Its outgoing QC edge is checked separately; this branch
+    # proves the retained incoming pre-dispatch origin without mistaking the
+    # QC replacement child for that origin.
+    if (item.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
+            and item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+            and item.get("correction_reason") == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON):
+        request_id = item.get("request_id")
+        parent_id = item.get("supersedes_request_id")
+        return (isinstance(request_id, str) and bool(request_id)
+                and isinstance(parent_id, str) and bool(parent_id)
+                and _qc_corrective_pre_dispatch_transaction(paths, project_id, parent_id, request_id) is not None)
     # A canonical unresolved replay retains its semantic correction metadata
     # while replacing only the unsafe provider epoch.  Its committed replay
     # transaction binds that full inherited request; the QC-ancestry validator
@@ -3345,6 +3357,15 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
         request_id = item.get("request_id")
         return (isinstance(request_id, str) and bool(request_id)
                 and _unresolved_replay_transaction(paths, project_id, replay_parent, request_id) is not None)
+    # A mandatory-QC replacement may retain the semantic/pre-dispatch fields
+    # of its parent.  Its immediate immutable origin is nevertheless the QC
+    # replacement transaction, not the inherited corrective edge.
+    if item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON:
+        request_id = item.get("request_id")
+        parent_id = item.get("replacement_of")
+        return (isinstance(request_id, str) and bool(request_id)
+                and isinstance(parent_id, str) and bool(parent_id)
+                and _qc_rejected_asset_replacement_transaction(paths, project_id, parent_id, request_id) is not None)
     request_id = item.get("request_id")
     parent_id = item.get("supersedes_request_id")
     if (not isinstance(request_id, str) or not request_id
