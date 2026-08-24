@@ -1,7 +1,7 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
   busy: false, busyLabel: '', error: null, lastAction: null, runToken: null,
-  wizard: { step: 1, content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook', ambientStyle: 'quiet_verdict' }
+  wizard: { step: 1, content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook', ambientStyle: 'quiet_verdict', creating: false }
 };
 
 const $ = selector => document.querySelector(selector);
@@ -506,7 +506,8 @@ async function advanceWizard() {
     if (wizard.mode === 'ambient_story' && !['quiet_verdict','hidden_mastery'].includes(wizard.ambientStyle)) { showWizardError('Choose an Ambient Story style.','ambientStyleField'); return; }
     wizard.step = 3; renderWizard(); focusWizardStep(); return;
   }
-  const button = $('#wizardNext'); button.disabled = true; button.textContent = 'Creating…';
+  if (wizard.creating) return;
+  const button = $('#wizardNext'); wizard.creating = true; button.disabled = true; button.textContent = 'Creating…';
   try {
     const settings = clone(state.settings.creation_defaults || {});
     const existingKokoro = settings.tts?.kokoro_local || {};
@@ -514,8 +515,10 @@ async function advanceWizard() {
     settings.ui = {production_style:wizard.style};
     if (wizard.mode === 'ambient_story') settings.ambient_style = wizard.ambientStyle; else delete settings.ambient_style;
     const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,ambient_style:wizard.mode === 'ambient_story' ? wizard.ambientStyle : null,content:wizard.content,settings})});
-    closeWizard(); state.wizard = {step:1,content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode,ambientStyle:wizard.ambientStyle}; toast('Video project created.'); await loadProjects(); state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
-  } catch (error) { showWizardError(friendlyError(error).message); button.disabled = false; button.textContent = 'Create video'; }
+    state.projects = [created,...state.projects.filter(project => project.project_id !== created.project_id)];
+    state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
+    closeWizard(); state.wizard = {step:1,content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode,ambientStyle:wizard.ambientStyle,creating:false}; toast('Video project created.');
+  } catch (error) { wizard.creating = false; showWizardError(friendlyError(error).message); button.disabled = false; button.textContent = 'Create video'; }
 }
 
 function closeWizard() { const dialog = $('#newVideoDialog'); if (dialog.open) dialog.close(); }
