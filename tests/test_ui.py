@@ -7,10 +7,12 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from story_auto.ui import create_server
+from story_auto.providers.tts.kokoro_local import KokoroReadiness
 
 
 class OperatorUiTests(unittest.TestCase):
@@ -73,7 +75,9 @@ class OperatorUiTests(unittest.TestCase):
         chrome=Path(os.environ.get("PROGRAMFILES(X86)",r"C:\\Program Files (x86)"))/"Google/Chrome/Application/chrome.exe"
         if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the focused UI regression")
         from playwright.sync_api import sync_playwright
-        with tempfile.TemporaryDirectory() as root:
+        with tempfile.TemporaryDirectory() as root, \
+             patch("story_auto.application.operator.available_voices",return_value=("bm_george",)), \
+             patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=KokoroReadiness("READY","Kokoro is ready",None)):
             server=create_server(root,port=0)
             service=server.RequestHandlerClass.service
             original_list_projects=service.list_projects

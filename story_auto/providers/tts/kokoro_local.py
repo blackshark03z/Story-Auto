@@ -252,7 +252,8 @@ def require_kokoro_ready(settings: dict[str, Any], *, runner: Callable[..., subp
 
 def available_voices(settings: dict[str, Any]) -> tuple[str, ...]:
     runtime = discover_runtime(settings)
-    return tuple(sorted(path.stem for path in runtime.voices_dir.glob("*.pt") if path.is_file()))
+    return tuple(sorted(path.stem for path in runtime.voices_dir.glob("*.pt")
+                        if path.is_file() and path.stat().st_size > 0))
 
 
 def _wav_metadata(path: Path) -> tuple[int, int, int, int, float]:

@@ -211,6 +211,8 @@ class KokoroLocalTests(unittest.TestCase):
     def test_voice_enumeration_uses_only_local_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             settings=self._runtime(directory)
+            voices=Path(settings["model_cache"])/"snapshots"/SNAPSHOT/"voices"
+            (voices/"stale_empty.pt").write_bytes(b"")
             self.assertEqual(available_voices(settings),("am_michael",))
 
     def test_worker_maps_kokoro_whitespace_outside_display_graphemes(self) -> None:

@@ -27,7 +27,7 @@ from story_auto.providers.flow.service import (queue_regeneration, replay_unreso
                                                reopen_false_positive_production_qc, review_production_asset,
                                                supersede_ambiguous_request)
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
-from story_auto.providers.tts.kokoro_local import KokoroLocalProvider
+from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
 
 
 class OperatorServiceError(RuntimeError):
@@ -35,6 +35,36 @@ class OperatorServiceError(RuntimeError):
 
 
 _ATTENTION = {
+    "KOKORO_VOICE_NOT_FOUND": {
+        "title": "Selected narrator is unavailable",
+        "message": "This project is explicitly bound to a Kokoro voice that is not installed. Choose an installed narrator before continuing.",
+        "action": "Open settings",
+        "action_id": "settings",
+    },
+    "KOKORO_RUNTIME_NOT_FOUND": {
+        "title": "Local narrator is unavailable",
+        "message": "Kokoro is not installed at this project's configured location.",
+        "action": "Open settings",
+        "action_id": "settings",
+    },
+    "KOKORO_MODEL_NOT_FOUND": {
+        "title": "Local narrator model is unavailable",
+        "message": "The configured Kokoro model files are missing.",
+        "action": "Open settings",
+        "action_id": "settings",
+    },
+    "KOKORO_RUNTIME_LOAD_FAILED": {
+        "title": "Local narrator needs attention",
+        "message": "Kokoro could not load the selected narrator before narration generation.",
+        "action": "Open settings",
+        "action_id": "settings",
+    },
+    "KOKORO_CONFIGURATION_INVALID": {
+        "title": "Local narrator settings are invalid",
+        "message": "Review the configured Kokoro narrator settings before continuing.",
+        "action": "Open settings",
+        "action_id": "settings",
+    },
     "VALID_NARRATION_REQUIRED": {
         "title": "Content needs attention",
         "message": "Add one Narration section before Story Auto can begin.",
@@ -144,6 +174,40 @@ def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any
     return result
 
 
+_VOICE_NAMES = {"bm_george": "George", "am_michael": "Michael", "af_heart": "Heart"}
+
+
+def _kokoro_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    tts = settings.get("tts", {}) if isinstance(settings, dict) else {}
+    value = tts.get("kokoro_local", {}) if isinstance(tts, dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def _kokoro_voice_options(settings: dict[str, Any]) -> tuple[list[dict[str, str]], str | None]:
+    """Expose only identities present in the canonical local voice inventory."""
+    try:
+        voice_ids = available_voices(_kokoro_settings(settings))
+    except Exception as error:
+        return [], getattr(error, "failure_class", "KOKORO_CONFIGURATION_INVALID")
+    return ([{"voice_id": voice_id, "name": _VOICE_NAMES.get(voice_id, voice_id)} for voice_id in voice_ids], None)
+
+
+def _validate_new_project_narrator(settings: dict[str, Any]) -> None:
+    """Reject a new Kokoro project whose selected identity is not installed.
+
+    Existing projects are loaded unchanged so their historical binding remains
+    visible and truthfully blocked instead of being rewritten at read time.
+    """
+    tts = settings.get("tts") if isinstance(settings, dict) else None
+    if not isinstance(tts, dict) or tts.get("provider") != "kokoro_local":
+        return
+    readiness = KokoroLocalProvider().readiness(_kokoro_settings(settings))
+    if not readiness.ready:
+        from story_auto.core.audio import AudioPipelineError
+        raise AudioPipelineError(readiness.technical_code or "KOKORO_CONFIGURATION_INVALID",
+                                 provider="kokoro_local", stage="preflight")
+
+
 def _safe_json(path: Path, default: Any) -> Any:
     try: return read_json(path)
     except Exception: return default
@@ -174,6 +238,7 @@ class OperatorService:
         ident=project_id or "prj_"+uuid.uuid4().hex
         resolved_settings=dict(settings or {})
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
+        _validate_new_project_narrator(resolved_settings)
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         return self.snapshot(paths.project_id)
 
@@ -200,6 +265,18 @@ class OperatorService:
             "content_manifest.json","alignment.json","story_timeline.json","continuity_bible.json","shot_plan.json",
             "media_plan.json","generation_requests.json","render_plan.json","final.mp4","publishing_package.json")}
         blocked=[]
+        tts = config.settings.get("tts", {})
+        narrator = {"provider": tts.get("provider", "NOT_CONFIGURED"), "voice_id": None,
+                    "name": "Not configured", "status": "Not configured", "technical_code": None}
+        if tts.get("provider") == "kokoro_local":
+            kokoro = _kokoro_settings(config.settings)
+            narrator["voice_id"] = kokoro.get("voice_id")
+            narrator["name"] = _VOICE_NAMES.get(narrator["voice_id"], narrator["voice_id"] or "Selected narrator")
+            readiness = KokoroLocalProvider().readiness(kokoro)
+            narrator.update({"status": "Ready" if readiness.ready else "Needs attention",
+                             "technical_code": readiness.technical_code})
+            if not readiness.ready and readiness.technical_code:
+                blocked.append(readiness.technical_code)
         visual_planning=review.get("visual_planning",{}) if isinstance(review,dict) else {}
         if content_status!="VALID": blocked.append("VALID_NARRATION_REQUIRED")
         if visual_planning.get("status")=="NEEDS_REGENERATION": blocked.append("VISUAL_PLANNING_REGENERATION_REQUIRED")
@@ -267,7 +344,7 @@ class OperatorService:
         return {"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
                 "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
-                "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),
+                "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
                 "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
                 "continuity_status":"READY" if artifacts["continuity_bible.json"] else "NOT_STARTED",
                 "shot_plan_status":"READY" if artifacts["shot_plan.json"] else "NOT_STARTED",
@@ -395,21 +472,28 @@ class OperatorService:
         flow_auth=any("FLOW_AUTH_REQUIRED" in item.get("blocked",[]) for item in projects)
         usage=shutil.disk_usage(self.runtime.root)
         voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
-        voices={"bm_george":"George","am_michael":"Michael","af_heart":"Heart"}
+        inventory_settings = latest_settings if provider == "kokoro_local" else _creation_settings({}, voice_id)
+        voice_options, inventory_failure = _kokoro_voice_options(inventory_settings)
+        installed_voice_ids={item["voice_id"] for item in voice_options}
+        default_voice_available=voice_id in installed_voice_ids
         creation_defaults=_creation_settings(latest_settings,voice_id)
         kokoro_readiness=None
         if provider=="kokoro_local":
             kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
             voice_row={"name":"Voice",
-                       "detail":f"{voices.get(voice_id,voice_id)} — local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
+                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
                        "status":"Ready" if kokoro_readiness.ready else "Needs attention",
                        "technical_code":kokoro_readiness.technical_code}
         else:
-            voice_row={"name":"Voice","detail":f"{voices.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
+            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
                        "status":"Ready" if provider else "Not configured"}
         return {
-            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,"voice_name":voices.get(voice_id,voice_id),"production_style":"Natural cinematic"},
+            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":"Natural cinematic",
+                        "narrator_available":default_voice_available,
+                        "narrator_message":None if default_voice_available else "The saved default narrator is not installed. Choose one of the installed narrators before creating a video."},
             "creation_defaults":creation_defaults,
+            "voice_options":voice_options,
+            "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
                 {"name":"Visual generation","detail":"Google Flow","status":"Sign-in required" if flow_auth else ("Ready" if flow else "Not configured")},

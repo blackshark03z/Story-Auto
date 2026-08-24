@@ -9,7 +9,10 @@ from unittest.mock import patch
 from PIL import Image
 
 from story_auto.application import OperatorService, OperatorServiceError
+from story_auto.core.audio import AudioPipelineError
 from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
+from story_auto.providers.tts.kokoro_local import KokoroReadiness
 
 
 class OperatorApplicationTests(unittest.TestCase):
@@ -126,6 +129,50 @@ class OperatorApplicationTests(unittest.TestCase):
             self.assertEqual(settings["creation_defaults"]["tts"]["provider"],"kokoro_local")
             self.assertEqual(settings["creation_defaults"]["tts"]["kokoro_local"]["voice_id"],"bm_george")
             self.assertNotIn("api_key",str(settings).lower())
+
+    def test_new_project_with_installed_default_is_ready_without_narration_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            settings={"tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,
+                              "kokoro_local":{"runtime_path":"D:/kokoro","voice_id":"bm_george"}}}
+            ready=KokoroReadiness("READY","Kokoro is ready",None)
+            with patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=ready):
+                created=app.create_project(project_id="prj_installed_default",content="# Default\n\n## Narration\n\nA ready narrator.\n",settings=settings)
+            self.assertEqual((created["user_status"],created["narrator"]),
+                             ("Ready to start",{"provider":"kokoro_local","voice_id":"bm_george","name":"George","status":"Ready","technical_code":None}))
+
+    def test_missing_default_is_exposed_and_rejected_at_new_project_boundary(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            settings={"tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,
+                              "kokoro_local":{"runtime_path":"D:/kokoro","voice_id":"am_michael"}}}
+            missing=KokoroReadiness("VOICE_NOT_FOUND","The selected Kokoro voice is missing","KOKORO_VOICE_NOT_FOUND")
+            with patch("story_auto.application.operator.available_voices",return_value=("bm_george",)), \
+                 patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=missing):
+                create_project(RuntimeLayout.from_root(root),ProjectConfig("prj_stale_default",settings=settings),"# Old\n\n## Narration\n\nA stale narrator.\n")
+                overview=app.settings_overview()
+                self.assertFalse(overview["defaults"]["narrator_available"])
+                self.assertEqual(overview["voice_options"],[{"voice_id":"bm_george","name":"George"}])
+                self.assertIn("not installed",overview["defaults"]["narrator_message"])
+                with self.assertRaises(AudioPipelineError) as caught:
+                    app.create_project(project_id="prj_rejected_default",content="# Missing\n\n## Narration\n\nNo silent inheritance.\n",settings=settings)
+            self.assertEqual(caught.exception.failure_class,"KOKORO_VOICE_NOT_FOUND")
+            self.assertFalse((Path(root)/"projects"/"prj_rejected_default").exists())
+
+    def test_existing_project_with_missing_custom_voice_remains_truthfully_blocked(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=RuntimeLayout.from_root(root)
+            settings={"tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,
+                              "kokoro_local":{"runtime_path":"D:/kokoro","voice_id":"custom_removed"}}}
+            paths=create_project(runtime,ProjectConfig("prj_legacy_voice",settings=settings),"# Legacy\n\n## Narration\n\nKeep this binding.\n")
+            missing=KokoroReadiness("VOICE_NOT_FOUND","The selected Kokoro voice is missing","KOKORO_VOICE_NOT_FOUND")
+            with patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=missing):
+                snapshot=OperatorService(root).snapshot("prj_legacy_voice")
+            self.assertEqual(snapshot["narrator"]["voice_id"],"custom_removed")
+            self.assertEqual(snapshot["narrator"]["status"],"Needs attention")
+            self.assertEqual(snapshot["blocked"],["KOKORO_VOICE_NOT_FOUND"])
+            self.assertEqual(snapshot["attention"][0]["title"],"Selected narrator is unavailable")
+            self.assertEqual(read_json(paths.project_file)["settings"]["tts"]["kokoro_local"]["voice_id"],"custom_removed")
 
     def test_new_video_defaults_allowlist_excludes_project_specific_and_token_like_values(self):
         with tempfile.TemporaryDirectory() as root:
