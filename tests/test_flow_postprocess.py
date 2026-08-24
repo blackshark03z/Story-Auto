@@ -269,6 +269,7 @@ class FlowImagePostprocessTests(unittest.TestCase):
     def test_video_mark_removal_is_one_bounded_local_derivative(self):
         with tempfile.TemporaryDirectory() as root:
             request = self._request("video", purpose="SHOT", media_type="VIDEO")
+            request["motion_risk_analysis"] = {"anatomy_risk": "LOW"}
             runtime, config, paths = self._project(root, [request])
             rel = "assets/video/video/attempt_001.mp4"; source = paths.artifact_path(rel)
             self._write_flow_video(source); digest = sha256_file(source)
@@ -288,6 +289,15 @@ class FlowImagePostprocessTests(unittest.TestCase):
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"),
                               {"schema_version": "story-auto-generation-manifest/1.0.0",
                                "project_id": config.project_id, "requests": [entry]})
+            calls = []
+            blocked = execute_generation(runtime.root, config.project_id,
+                                         executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True),
+                                                               lambda *_: calls.append("provider")),
+                                         execute=True, request_ids={"video"})
+            unchanged = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((blocked["new_submissions"], calls, unchanged["status"],
+                              unchanged["failure_class"], len(unchanged.get("video_postprocess_attempts", []))),
+                             (0, [], "FAILED_RETRYABLE", "VISIBLE_PROVIDER_WATERMARK", 0))
             result = create_local_video_mark_removal(runtime.root, config.project_id, "video",
                                                      expected_source_sha256=digest)
             saved = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]

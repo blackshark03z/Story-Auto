@@ -2137,7 +2137,11 @@ def _repair_local_video(paths, entry: dict, request: dict) -> bool:
     selected = entry.get("selected_asset")
     lineage_matches = isinstance(selected, dict) and selected.get("source_provider_attempt") == attempt.get("attempt")
     local_failure = entry.get("failure_class") in LOCAL_VIDEO_FAILURES
-    derivative_invalid = lineage_matches and not _valid_selected(paths, entry)
+    # A production/temporal rejection is durable evidence about these exact
+    # selected bytes.  It is never a missing derivative and must not be
+    # silently turned back into QC_PENDING by local reconciliation.
+    derivative_invalid = (entry.get("status") in {"SUCCEEDED", "QC_PENDING"}
+                          and lineage_matches and not _valid_selected(paths, entry))
     if not local_failure and not derivative_invalid:
         return False
     try:
