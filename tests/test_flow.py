@@ -648,6 +648,37 @@ class FlowTests(unittest.TestCase):
                               final["selected_asset"]["completed_production_review_epoch"],review["review_epoch"],len(calls)),
                              ("SUCCEEDED","APPROVED",event["review_epoch"],event["review_epoch"],1))
 
+    def test_missing_shot_alignment_reopens_the_identical_confirmed_asset_without_generation(self):
+        """A UI-omitted alignment verdict is re-reviewed, never regenerated."""
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,executor,calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            requests=read_json(paths.artifact_path("output/generation_requests.json"))
+            request=next(item for item in requests["requests"] if item["request_id"]==request_id)
+            request.update({"purpose":"SHOT","shot_id":"sh_0001"})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry["failure_class"]="VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED"
+            entry["quality_reviews"][-1]["failure_class"]="VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED"
+            original=json.loads(json.dumps(entry["quality_reviews"][-1]))
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            event=reopen_false_positive_production_qc(runtime.root,cfg.project_id,request_id,
+                expected_asset_sha256=asset_sha,reviewer="exact-byte reviewer",
+                reason="the prior UI could not submit the required scene alignment verdict")
+            reopened=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(reopened["quality_reviews"][-1],original)
+            self.assertEqual((reopened["status"],reopened["selected_asset"]["sha256"],
+                              reopened["selected_asset"]["production_qc"],event["disposition"]),
+                             ("QC_PENDING",asset_sha,"PENDING","FALSE_POSITIVE_REOPENED"))
+            resumed=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={request_id})
+            self.assertEqual((resumed["new_submissions"],len(calls)),(0,1))
+            review_production_asset(runtime.root,cfg.project_id,request_id,
+                                    self._production_report(alignment_classification="PASS_DIRECT"))
+            final=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((final["status"],final["selected_asset"]["production_qc"],
+                              final["selected_asset"]["alignment_classification"]),
+                             ("SUCCEEDED","APPROVED","PASS_DIRECT"))
+
     def test_temporal_false_positive_supersession_is_exact_append_only_and_idempotent(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths,request_id,digest,original=self._temporal_false_positive_fixture(root)
