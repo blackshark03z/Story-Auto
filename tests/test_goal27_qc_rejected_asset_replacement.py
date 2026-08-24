@@ -105,6 +105,31 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             entries = {entry["request_id"]: entry for entry in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
             self.assertTrue(_runnable(read_json(paths.artifact_path("output/generation_requests.json"))["requests"][1], entries))
 
+    def test_operator_regenerate_of_confirmed_qc_pending_asset_creates_one_fresh_epoch(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths, _old, selected, attempt = self._project(root)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            parent = manifest["requests"][0]
+            parent.update({"status": "QC_PENDING", "failure_class": None, "quality_reviews": [], "selected_asset": selected})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            result = queue_regeneration(runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="visible duplicate seam")
+            again = queue_regeneration(runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="same UI action retry")
+
+            self.assertFalse(result["idempotent"])
+            self.assertTrue(again["idempotent"])
+            self.assertEqual(result["replacement_request_id"], again["replacement_request_id"])
+            entries = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]
+            parent = entries[0]
+            child = entries[1]
+            self.assertEqual(parent["attempts"], [attempt])
+            self.assertEqual(parent["selected_asset"], selected)
+            self.assertEqual(parent["status"], "QC_REJECTED_ASSET_REPLACED")
+            self.assertEqual(parent["failure_class"], "CREATIVE_REJECTED")
+            self.assertEqual(parent["creative_rejections"][0]["provenance"], "OPERATOR_REGENERATE_ACTION")
+            self.assertFalse(_provider_generation_retry_authorized(parent))
+            self.assertEqual((child["attempts"], child["provider_submissions"], child["status"]), ([], 0, "PENDING"))
+
     def test_replacement_epoch_cannot_start_an_unbounded_qc_replacement_loop(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths, _old, _selected, _attempt = self._project(root)

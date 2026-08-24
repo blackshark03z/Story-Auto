@@ -2243,7 +2243,14 @@ def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:
     qc_rejected = (isinstance(failure, str) and failure.endswith("_QC_REJECTED")) or (
         isinstance(reviews, list) and any(isinstance(item, dict) and item.get("status") == "REJECTED" for item in reviews)
     )
-    if not qc_rejected:
+    creative_rejections = entry.get("creative_rejections")
+    creative_rejected = (
+        failure == "CREATIVE_REJECTED"
+        and isinstance(creative_rejections, list)
+        and any(isinstance(item, dict) and isinstance(item.get("reason"), str) and item["reason"].strip()
+                for item in creative_rejections)
+    )
+    if not (qc_rejected or creative_rejected):
         return False
     attempts = entry.get("attempts")
     selected_attempt = entry["selected_asset"].get("attempt")
@@ -3926,9 +3933,30 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
         if not entry or entry.get("status") in {"GENERATING", "AMBIGUOUS"}: raise FlowError("REGENERATION_NOT_ALLOWED")
-        if _owned_mandatory_qc_rejection(entry):
+        if entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS or _owned_mandatory_qc_rejection(entry):
             # Release before the replacement operation takes its own project lock.
             pass
+        elif (
+            entry.get("status") == "QC_PENDING"
+            and _confirmed_selected_attempt(entry)
+        ) or (
+            entry.get("status") == "FAILED_RETRYABLE"
+            and entry.get("failure_class") == "OPERATOR_REGENERATION"
+            and _confirmed_selected_attempt(entry)
+            and any(isinstance(action, dict) and action.get("action") == "REGENERATE"
+                    for action in entry.get("operator_actions", []))
+        ):
+            # The UI's Regenerate control is an explicit creative rejection.
+            # Preserve the provider-bound original, then create one fresh
+            # replacement epoch below; it must never reopen the old attempt.
+            selected = entry["selected_asset"]
+            entry.setdefault("creative_rejections", []).append({
+                "rejected_at": _now(), "asset_path": selected.get("path"),
+                "asset_sha256": selected.get("sha256"), "reason": reason.strip(),
+                "provenance": "OPERATOR_REGENERATE_ACTION",
+            })
+            entry.update({"status": "FAILED_RETRYABLE", "failure_class": "CREATIVE_REJECTED", "updated_at": _now()})
+            atomic_write_json(path, manifest)
         else:
             raw_attempt, _ = _successful_raw_image(paths, entry)
             retry_local = raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES
