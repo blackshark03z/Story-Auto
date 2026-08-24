@@ -689,6 +689,33 @@ class Goal43QcCorrectiveReplanTests(unittest.TestCase):
             self.assertTrue(again["idempotent"])
             self.assertEqual(again["replacement_request_id"], new_id)
 
+    def test_direct_pending_reference_capacity_conflict_is_superseded_before_provider(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            requests_data = read_json(paths.artifact_path("output/generation_requests.json"))
+            extra = copy.deepcopy(requests_data["requests"][0])
+            extra.update({"request_id": "req_prop", "fingerprint": "prop-fingerprint", "entity_id": "prop_official_envelope",
+                          "reference_type": "PROP_REFERENCE", "prompt": "sealed official envelope on a kitchen table"})
+            requests_data["requests"].append(extra)
+            requests_data["requests"][1]["reference_asset_ids"].append("prop_official_envelope")
+            requests_data["requests"][1]["depends_on"].append("req_prop")
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests_data)
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"].append({"request_id": "req_prop", "request_identity_sha256": "prop-fingerprint",
+                "related_identity": "prop_official_envelope", "media_type": "IMAGE", "provider": "google_flow",
+                "prompt_sha256": "prop", "reference_asset_hashes": [], "attempts": [], "provider_submissions": 1,
+                "selected_asset": {"path": "assets/image/prop.png", "sha256": "b" * 64}, "status": "SUCCEEDED"})
+            root_entry = next(item for item in manifest["requests"] if item["request_id"] == self.ROOT)
+            root_entry.update({"status": "PENDING", "attempts": [], "provider_submissions": 0,
+                               "selected_asset": None, "attribution_claim": "NONE"})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            result = supersede_invalid_pending_qc_corrective_child(runtime.root, config.project_id, self.ROOT,
+                reason="capacity would select arbitrary reference family")
+            self.assertEqual(result["provider_submissions"], 0)
+            child = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                         if item["request_id"] == result["replacement_request_id"])
+            self.assertEqual((child["reference_asset_ids"], child["depends_on"]), ([], []))
+
 
 if __name__ == "__main__":
     unittest.main()

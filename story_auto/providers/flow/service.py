@@ -3037,9 +3037,9 @@ def _semantic_reset_parent_valid(paths, project_id: str, entry: dict, requests: 
         and core.get("interaction") == "INDEX_FINGER_TRACES_TRANSACTION_LIST"
         and isinstance(core.get("forbidden"), list) and {"exterior", "porch", "outdoor", "veranda"}.issubset(set(core["forbidden"]))
         and child.get("reference_asset_ids") == core.get("compatible_reference_asset_ids")
-        and isinstance(child_entry.get("attempts"), list) and child_entry["attempts"] == []
-        and child_entry.get("provider_submissions") == 0 and child_entry.get("selected_asset") is None
-        and child_entry.get("attribution_claim") == "NONE" and child_entry.get("status") == "PENDING"
+        and isinstance(child_entry.get("attempts"), list)
+        and child_entry.get("status") in {"PENDING", "GENERATING", "NOT_DISPATCHED", "AMBIGUOUS", "FAILED_RETRYABLE",
+                                           "QC_PENDING", "SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
         and isinstance(stored_child, dict) and stored_child == child
         and isinstance(stored_entry, dict) and stored_entry.get("attempts") == []
         and stored_entry.get("provider_submissions") == 0 and stored_entry.get("selected_asset") is None
@@ -3275,7 +3275,7 @@ def _qc_corrective_pre_dispatch_supersession_valid(paths, project_id: str, entry
     if (entry.get("status") != QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS
             or entry.get("selected_asset") is not None
             or entry.get("attempts") != []
-            or entry.get("provider_submissions") != 0):
+            or entry.get("provider_submissions", 0) != 0):
         return False
     child_id = entry.get("pre_dispatch_supersession_request_id")
     events = entry.get("pre_dispatch_supersession_events")
@@ -4535,14 +4535,23 @@ def supersede_invalid_pending_qc_corrective_child(runtime_root: Path | str, proj
                         "status": QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
                         "idempotent": True}
             raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_ALREADY_COMPLETED")
+        direct_pending_reference_conflict = (
+            old_request.get("purpose") == "SHOT"
+            and old_request.get("correction_reason") is None
+            and old_request.get("root_request_id") is None
+            and old_request.get("supersedes_request_id") is None
+            and isinstance(old_request.get("reference_asset_ids"), list)
+            and len(old_request["reference_asset_ids"]) > FLOW_REFERENCE_CAPACITY
+        )
         if (old_request.get("purpose") != "SHOT"
-                or old_request.get("correction_reason") != QC_CORRECTIVE_REPLAN_REASON
+                or (old_request.get("correction_reason") != QC_CORRECTIVE_REPLAN_REASON
+                    and not direct_pending_reference_conflict)
                 or not isinstance(old_entry, dict)
                 or old_entry.get("status") != "PENDING"
                 or old_entry.get("attempts") != []
-                or old_entry.get("provider_submissions") != 0
+                or old_entry.get("provider_submissions", 0) != 0
                 or old_entry.get("selected_asset") is not None
-                or old_entry.get("attribution_claim") != "NONE"
+                or old_entry.get("attribution_claim", "NONE") != "NONE"
                 or not _qc_corrective_metadata_has_direct_origin(paths, project_id, old_request)):
             raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_NOT_ELIGIBLE")
         selected_entities = list(old_request.get("reference_asset_ids", []))
@@ -4553,22 +4562,30 @@ def supersede_invalid_pending_qc_corrective_child(runtime_root: Path | str, proj
             if (candidate_request.get("purpose") == "REFERENCE" and entity_id in selected_entities
                     and isinstance(candidate_entry, dict) and candidate_entry.get("status") == "SUCCEEDED"):
                 candidate_by_entity[entity_id] = _safe_reference_candidate(candidate_request, candidate_entry, None)
-        policy = _corrective_reference_policy(
-            old_request.get("corrected_semantic_intent"), list(candidate_by_entity.values()))
+        corrected_intent = old_request.get("corrected_semantic_intent")
+        if direct_pending_reference_conflict:
+            corrected_intent = {
+                "selected_reference_entity_ids": selected_entities,
+                "location": old_request.get("prompt", ""),
+                "continuity_requirements": [],
+                "exclusions": ["reference capacity conflict must not select an arbitrary visual family"],
+            }
+        policy = _corrective_reference_policy(corrected_intent, list(candidate_by_entity.values()))
         if (len(policy["selected_reference_entity_ids"]) <= policy["reference_capacity"]
                 and not policy["conflicts"]):
             raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_NOT_ELIGIBLE")
         old_request_snapshot = json.loads(json.dumps(old_request, ensure_ascii=False))
         old_entry_snapshot = json.loads(json.dumps(old_entry, ensure_ascii=False))
+        root_request_id = old_request.get("root_request_id") or request_id
         epoch = int(old_request.get("correction_epoch", 0)) + 1
         nonce = uuid.uuid4().hex
         identity = {
-            "root_request_id": old_request.get("root_request_id"),
+            "root_request_id": root_request_id,
             "supersedes_request_id": request_id,
             "correction_epoch": epoch,
             "correction_nonce": nonce,
             "prompt": old_request.get("prompt"),
-            "corrected_semantic_intent": old_request.get("corrected_semantic_intent"),
+            "corrected_semantic_intent": corrected_intent,
             "effective_reference_entity_ids": [],
         }
         fingerprint = _json_sha256(identity)
@@ -4576,7 +4593,7 @@ def supersede_invalid_pending_qc_corrective_child(runtime_root: Path | str, proj
         if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):
             raise FlowError("QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_IDENTITY_COLLISION")
         provenance = {
-            "root_request_id": old_request.get("root_request_id"),
+            "root_request_id": root_request_id,
             "supersedes_request_id": request_id,
             "correction_epoch": epoch,
             "reference_capacity": FLOW_REFERENCE_CAPACITY,
@@ -4588,12 +4605,14 @@ def supersede_invalid_pending_qc_corrective_child(runtime_root: Path | str, proj
         replacement.update({
             "request_id": replacement_id,
             "fingerprint": fingerprint,
-            "reference_asset_ids": [],
-            "depends_on": [],
-            "supersedes_request_id": request_id,
+                "reference_asset_ids": [],
+                "depends_on": [],
+                "root_request_id": root_request_id,
+                "supersedes_request_id": request_id,
             "correction_epoch": epoch,
             "correction_nonce": nonce,
             "correction_reason": QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON,
+            "corrected_semantic_intent": corrected_intent,
             "pre_dispatch_supersession_provenance": provenance,
         })
         if _qc_corrective_pre_dispatch_genesis_projection(replacement) is None:
