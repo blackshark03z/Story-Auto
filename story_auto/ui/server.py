@@ -80,6 +80,9 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="resume_generation": result=self.service.generate(project_id,max_requests=body.get("max_requests"))
             elif action=="open_flow_sign_in": result=self.service.open_flow_sign_in(project_id)
             elif action=="approve_asset": result=self.service.review_asset(project_id,body["request_id"],body["report"])
+            elif action=="reopen_production_qc": result=self.service.reopen_false_positive_production_qc(
+                project_id, body["request_id"], expected_asset_sha256=body["expected_asset_sha256"],
+                reviewer=body.get("reviewer", "local_operator"), reason=body.get("reason", ""))
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))
             elif action=="regenerate": result=self.service.regenerate(project_id,body["request_id"],body.get("reason","operator requested regeneration"))
             elif action=="edit_prompt": result=self.service.edit_prompt(project_id,body["request_id"],body.get("prompt",""))

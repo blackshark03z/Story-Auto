@@ -347,9 +347,9 @@ function qualityCards(items) {
   return `<div class="quality-grid">${items.map(item => `<div class="quality-card"><small>${esc(item.label)}</small><strong class="${item.status === 'Passed' ? 'passed' : item.status === 'Needs review' ? 'needs-review' : ''}">${esc(item.status)}</strong></div>`).join('')}</div>`;
 }
 
-function qcReport() {
+function qcReport(alignmentClassification = null) {
   const keys = ['SKIN_REALISM','LIGHTING_NATURALISM','MATERIAL_REALISM','COMPOSITION_NATURALISM','AI_POLISH','CONTINUITY','TECHNICAL_VALIDITY'];
-  return {results:Object.fromEntries(keys.map(key => [key,'PASS'])),visible_provider_watermark:false,reviewer:'local_operator',notes:'Approved in Story Auto review'};
+  return {results:Object.fromEntries(keys.map(key => [key,'PASS'])),visible_provider_watermark:false,reviewer:'local_operator',notes:'Approved in Story Auto review',...(alignmentClassification ? {alignment_classification:alignmentClassification} : {})};
 }
 
 async function showReview() {
@@ -364,7 +364,10 @@ async function showReview() {
       const createAgain = ['CREDIT_BLOCKED','FAILED_PERMANENT','CANCELLED','AUTH_REQUIRED'].includes(issue.status);
       const recovery = issue.recovery_action === 'flow_sign_in_then_requeue' ? '<button class="button-primary" data-review-flow type="button">Open Flow sign-in</button>' : issue.recovery_action === 'manual_asset' ? '<button data-recover-file type="button">Use recovered file</button>' : '';
       const recoveryForm = issue.recovery_action === 'manual_asset' ? `<div class="recovery-form" data-recovery-form hidden><div class="field"><label>Recovered file path<input data-recovered-path type="text" autocomplete="off" placeholder="C:\\Downloads\\recovered-visual.png"></label><small>Use the exact image or video downloaded from this Flow result. Story Auto will preserve the original attempt.</small><p class="recovery-error" data-recovery-error role="alert" hidden></p></div><button class="button-primary" data-use-recovered="${esc(issue.request_id)}" type="button">Attach recovered file</button></div>` : '';
-      return `<article class="issue">${preview}<h3>${esc(issue.label)}</h3><p>${esc(issue.message)}</p><div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button">Approve ${esc(issue.label).toLowerCase()}</button>` : ''}${recovery}${issue.retryable ? `<button data-regenerate="${esc(issue.request_id)}" type="button">${createAgain ? 'Create again' : 'Regenerate'}</button>` : ''}</div>${recoveryForm}<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.technical_code || issue.request_id)}</div></details></article>`;
+      const needsAlignment = item.request?.purpose === 'SHOT';
+      const alignmentControl = issue.status === 'QC_PENDING' && needsAlignment ? `<div class="field review-alignment"><label>Scene-to-narration match<select data-alignment="${esc(issue.request_id)}"><option value="" selected disabled>Choose a match verdict</option><option value="PASS_DIRECT">Directly shows this narrated moment</option><option value="PASS_SUPPORTIVE">Supports this narrated moment</option><option value="PASS_ATMOSPHERIC">Atmospheric only</option></select></label><small>Required before approving a scene. Choose atmospheric only when the shot plan allows it.</small></div>` : '';
+      const reopen = (issue.failure_class || issue.technical_code) === 'VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED' && selected ? `<button data-reopen-qc="${esc(issue.request_id)}" data-asset-sha="${esc(selected.sha256)}" type="button">Reopen quality review</button>` : '';
+      return `<article class="issue">${preview}<h3>${esc(issue.label)}</h3><p>${esc(issue.message)}</p>${alignmentControl}<div class="button-row">${issue.status === 'QC_PENDING' ? `<button class="button-primary" data-approve="${esc(issue.request_id)}" type="button"${needsAlignment ? ' disabled' : ''}>Approve ${esc(issue.label).toLowerCase()}</button>` : ''}${reopen}${recovery}${issue.retryable && !reopen ? `<button data-regenerate="${esc(issue.request_id)}" type="button">${createAgain ? 'Create again' : 'Regenerate'}</button>` : ''}</div>${recoveryForm}<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(issue.status)}\n${esc(issue.technical_code || issue.request_id)}</div></details></article>`;
     }).join('');
     const publishing = review.publishing || {};
     $('#view').innerHTML = `<section class="surface"><div class="surface-head"><div><h2>Quality review</h2><p>${review.final_path ? `Final duration ${esc(formatDuration(review.duration_seconds))}.` : 'Review flagged scenes before production continues.'}</p></div>${review.final_path ? `<a class="button button-primary" href="${assetUrl(state.project,review.final_path)}" target="_blank" rel="noopener">Open final video</a>` : ''}</div>${qualityCards(review.quality)}</section>
@@ -372,10 +375,19 @@ async function showReview() {
       <section class="surface"><div class="surface-head"><div><h2>Items needing review</h2><p>${review.issues.length ? `${review.issues.length} item${review.issues.length === 1 ? ' needs' : 's need'} a decision.` : 'No remaining quality issues were found.'}</p></div></div><div class="issue-list">${issues || '<div class="empty-library"><strong>Quality checks are clear.</strong><p>No item needs your attention.</p></div>'}</div></section>`;
     $('#backProject').addEventListener('click', () => openProject(state.project));
     $('#copyPublishing')?.addEventListener('click', async () => { await navigator.clipboard.writeText(`${publishing.selected_title || review.title}\n\n${publishing.description}`); toast('Title and description copied.'); });
+    document.querySelectorAll('[data-alignment]').forEach(select => select.addEventListener('change', () => {
+      select.closest('.issue').querySelector('[data-approve]').disabled = !select.value;
+    }));
     document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', async () => {
       const projectId=state.project; button.disabled=true;
-      try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport()})}); toast('Scene approved.'); await showReview(); }
+      const alignment = button.closest('.issue').querySelector('[data-alignment]')?.value || null;
+      try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport(alignment)})}); toast('Scene approved.'); await showReview(); }
       catch (error) { const friendly=friendlyError(error); state.error=friendly; toast(friendly.title,true); await openProject(projectId); state.error=friendly; renderProject(); }
+    }));
+    document.querySelectorAll('[data-reopen-qc]').forEach(button => button.addEventListener('click', async () => {
+      const projectId=state.project; button.disabled=true;
+      try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'reopen_production_qc',request_id:button.dataset.reopenQc,expected_asset_sha256:button.dataset.assetSha,reviewer:'local_operator',reason:'The prior UI approval omitted the required scene-to-narration verdict; review the same confirmed asset again.'})}); toast('Quality review reopened for the same asset.'); await showReview(); }
+      catch (error) { const friendly=friendlyError(error); toast(friendly.title,true); button.disabled=false; }
     }));
     document.querySelectorAll('[data-regenerate]').forEach(button => button.addEventListener('click', async () => {
       const projectId=state.project; button.disabled=true;
