@@ -95,8 +95,8 @@ def _write_mask(path: Path, profile: FlowMarkProfile) -> str:
 
 def process_flow_image(source: Path, output: Path, *, runner=subprocess.run) -> dict[str, Any]:
     """Create and validate one clean derivative from an immutable Flow image."""
-    source = Path(source)
-    output = Path(output)
+    source = Path(source).resolve()
+    output = Path(output).resolve()
     try:
         if source.resolve() == output.resolve():
             raise FlowImagePostprocessError("FLOW_IMAGE_POSTPROCESS_OUTPUT_CONFLICT")
@@ -151,8 +151,8 @@ def process_flow_image(source: Path, output: Path, *, runner=subprocess.run) -> 
 
 def process_flow_video(source: Path, output: Path, *, runner=subprocess.run) -> dict[str, Any]:
     """Create and validate one clean derivative from immutable Flow video bytes."""
-    source = Path(source)
-    output = Path(output)
+    source = Path(source).resolve()
+    output = Path(output).resolve()
     try:
         if source.resolve() == output.resolve():
             raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_OUTPUT_CONFLICT")

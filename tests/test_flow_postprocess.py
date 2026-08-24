@@ -127,6 +127,15 @@ class FlowImagePostprocessTests(unittest.TestCase):
             self.assertEqual((result["output_metadata"]["width"], result["output_metadata"]["height"]), (1280, 720))
             self.assertLess(abs(result["output_metadata"]["duration_seconds"] - result["source_metadata"]["duration_seconds"]), .05)
             self.assertEqual(result["processor_name"], "flow-video-removelogo")
+            self.assertEqual(result["profile_version"], "flow-sparkle-1280x720-v1")
+
+    def test_video_cleanup_resolves_relative_paths_before_entering_its_work_directory(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as root:
+            raw = Path(root) / "raw.mp4"; clean = Path(root) / "clean.mp4"
+            self._write_flow_video(raw)
+            result = process_flow_video(raw.relative_to(Path.cwd()), clean.relative_to(Path.cwd()))
+            self.assertTrue(clean.is_file())
+            self.assertEqual(result["profile_version"], "flow-sparkle-1280x720-v1")
 
     def test_production_image_preserves_raw_and_selects_lineaged_derivative(self):
         with tempfile.TemporaryDirectory() as root:
