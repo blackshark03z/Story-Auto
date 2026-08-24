@@ -2948,6 +2948,15 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
             and isinstance(item.get("pre_dispatch_supersession_request_id"), str)):
         # The dedicated parent validator below verifies this outgoing edge.
         return True
+    # A canonical unresolved replay retains its semantic correction metadata
+    # while replacing only the unsafe provider epoch.  Its committed replay
+    # transaction binds that full inherited request; the QC-ancestry validator
+    # independently proves the retained direct QC edge.
+    replay_parent = item.get("replays_unresolved_request_id")
+    if isinstance(replay_parent, str) and replay_parent:
+        request_id = item.get("request_id")
+        return (isinstance(request_id, str) and bool(request_id)
+                and _unresolved_replay_transaction(paths, project_id, replay_parent, request_id) is not None)
     request_id = item.get("request_id")
     parent_id = item.get("supersedes_request_id")
     if (not isinstance(request_id, str) or not request_id

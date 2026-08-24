@@ -16,6 +16,7 @@ from story_auto.providers.flow.service import (
     _runnable,
     execute_generation,
     queue_regeneration,
+    replay_unresolved_request,
     replace_qc_rejected_asset,
     review_production_asset,
 )
@@ -196,6 +197,42 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
                 queue_regeneration(runtime.root, config.project_id, epoch3, reason="must not create epoch four")
             self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json")), before_manifest)
             self.assertEqual(read_json(paths.artifact_path("output/generation_requests.json")), before_requests)
+
+    def test_full_creative_correction_can_replay_an_unresolved_provider_epoch(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths, _old, selected, attempt = self._project(root)
+            epoch1 = replace_qc_rejected_asset(
+                runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="first correction"
+            )["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            epoch1_entry = next(item for item in manifest["requests"] if item["request_id"] == epoch1)
+            epoch1_entry.update({"status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
+                                 "attempts": [attempt], "provider_submissions": 1})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            epoch2 = queue_regeneration(runtime.root, config.project_id, epoch1, reason="full replan")["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            epoch2_entry = next(item for item in manifest["requests"] if item["request_id"] == epoch2)
+            unresolved_attempt = {"attempt": 1, "status": "AMBIGUOUS", "dispatch_confirmed": False,
+                                  "dispatch_confirmation_state": "UNCERTAIN", "attribution_state": "UNCERTAIN"}
+            epoch2_entry.update({"status": "AMBIGUOUS", "failure_class": "FLOW_DISPATCH_UNCERTAIN",
+                                 "attempts": [unresolved_attempt], "provider_submissions": 1})
+            epoch2_entry.pop("selected_asset", None)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            replay = replay_unresolved_request(
+                runtime.root, config.project_id, epoch2,
+                reason="preserve unresolved correction epoch and create one fresh replay",
+                acknowledge_previous_dispatch_or_cost_may_have_occurred=True,
+                acknowledge_previous_output_ownership_unresolved=True,
+                acknowledge_replacement_may_consume_provider_credit=True,
+            )
+            self.assertEqual(replay["provider_submissions"], 0)
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            entries = {item["request_id"]: item for item in manifest["requests"]}
+            child = next(item for item in requests if item["request_id"] == replay["replacement_request_id"])
+            self.assertEqual(child["replays_unresolved_request_id"], epoch2)
+            self.assertEqual((entries[child["request_id"]]["attempts"], entries[child["request_id"]].get("provider_submissions")), ([], None))
+            self.assertIsNone(_first_invalid_request_replacement(paths, config.project_id, entries, requests))
 
     def test_broken_immutable_lineage_history_or_duplicate_replacement_fails_closed(self):
         mutations = {
