@@ -19,7 +19,7 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
                                                 recover_confirmed_output_after_manifest_persistence_failure,
                                                 reopen_uncertain_temporal_qc, reopen_verified_false_dispatch, reuse_exact_flow_asset,
                                                 reopen_false_positive_production_qc, reopen_false_positive_temporal_qc, _first_unresolved,
-                                                review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review,
+                                                reopen_malformed_production_qc_report, review_production_asset, review_temporal_asset, run_fresh_temporal_qc_review,
                                                 create_local_temporal_salvage)
 from story_auto.providers.flow.validation import validate_video
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
@@ -596,6 +596,47 @@ class FlowTests(unittest.TestCase):
             reviewed=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual(reviewed["quality_reviews"][-1]["failure_class"], "VISIBLE_PROVIDER_WATERMARK")
             self.assertEqual(len(reviewed["attempts"]),1)
+
+    def test_malformed_production_qc_is_not_persisted(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); executor,_=self._executor()
+            requests=read_json(paths.artifact_path("output/generation_requests.json"))
+            requests["requests"][0]["execution_tier"]="STANDARD_PRODUCTION"
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"),requests)
+            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            malformed={"results":{"old_field":"PASS"},"visible_provider_watermark":True,"reviewer":"operator"}
+            with self.assertRaisesRegex(FlowError,"MEDIA_QC_INVALID"):
+                review_production_asset(runtime.root,cfg.project_id,"ref",malformed)
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((entry["status"],entry["failure_class"],entry.get("quality_reviews")),("QC_PENDING",None,None))
+
+    def test_malformed_production_qc_reopen_preserves_legacy_rejection_and_requires_fresh_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths,executor,calls,rejected=self._goal37_rejected_fixture(root)
+            request_id="req_2ed7c6b9c1ce863d8e9d"; asset_sha=rejected["selected_asset"]["sha256"]
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json")); entry=manifest["requests"][0]
+            entry["failure_class"]="MEDIA_QC_INVALID"
+            entry["quality_reviews"][-1].update({"failure_class":"MEDIA_QC_INVALID", "report":{
+                "results":{"legacy_field":"PASS"}, "visible_provider_watermark":True, "reviewer":"legacy-ui"}})
+            original=json.loads(json.dumps(entry["quality_reviews"][-1]))
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            event=reopen_malformed_production_qc_report(runtime.root,cfg.project_id,request_id,
+                expected_asset_sha256=asset_sha,reviewer="operator",reason="legacy UI submitted obsolete rubric field names")
+            again=reopen_malformed_production_qc_report(runtime.root,cfg.project_id,request_id,
+                expected_asset_sha256=asset_sha,reviewer="operator",reason="idempotent repeat")
+            reopened=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(reopened["quality_reviews"][-1],original)
+            self.assertEqual((event["idempotent"],again["idempotent"],reopened["status"],
+                              reopened["selected_asset"]["production_qc"],len(calls)),(False,True,"QC_PENDING","PENDING",1))
+            stale=self._production_report()
+            stale.update({"review_identity":event["review_epoch"],"request_id":request_id,"attempt":2,"media_sha256":asset_sha})
+            with self.assertRaisesRegex(FlowError,"PRODUCTION_QC_FRESH_EVIDENCE_INVALID"):
+                review_production_asset(runtime.root,cfg.project_id,request_id,stale)
+            fresh=self._production_report()
+            fresh.update({"review_identity":event["review_epoch"],"request_id":request_id,"attempt":1,"media_sha256":asset_sha})
+            review_production_asset(runtime.root,cfg.project_id,request_id,fresh)
+            final=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((final["status"],final["selected_asset"]["production_qc"],len(calls)),("SUCCEEDED","APPROVED",1))
 
     def test_goal37_false_positive_reopen_fixture_preserves_rejection_and_requires_normal_qc(self):
         """Sanitized exact-style Trial A fixture; no live project or provider is used."""

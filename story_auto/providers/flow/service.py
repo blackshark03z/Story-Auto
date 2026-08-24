@@ -1817,6 +1817,12 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
                     if not shot.get("atmospheric"):
                         raise MediaQualityError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
         except MediaQualityError as error:
+            # A malformed operator submission is not a quality finding.  Do
+            # not turn it into a durable rejection: there is no reviewed
+            # evidence to supersede, and the caller can submit the completed
+            # rubric again without any generation action.
+            if error.failure_class == "MEDIA_QC_INVALID":
+                raise FlowError(error.failure_class) from error
             # Bind every new rejection to the selected bytes.  A later appeal
             # can then prove it is asking to re-review this asset, not a
             # different file substituted after the original decision.
@@ -1852,6 +1858,102 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         entry.update({"status": "SUCCEEDED" if temporal_ready else "QC_PENDING",
                       "failure_class": None if temporal_ready else "TEMPORAL_VIDEO_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def reopen_malformed_production_qc_report(runtime_root: Path | str, project_id: str, request_id: str,
+                                          *, expected_asset_sha256: str, reviewer: str, reason: str) -> dict:
+    """Reopen one exact asset after a legacy malformed-QC rejection.
+
+    Older callers could persist ``MEDIA_QC_INVALID`` as a rejection even
+    though no naturalness decision was made.  This narrow recovery preserves
+    that record, proves it still binds the current confirmed bytes, and starts
+    a fresh identity-bound QC epoch.  It never calls a provider or changes an
+    attempt.
+    """
+    if (not isinstance(expected_asset_sha256, str)
+            or len(expected_asset_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in expected_asset_sha256.lower())
+            or not isinstance(reviewer, str) or not reviewer.strip()
+            or not isinstance(reason, str) or not reason.strip()):
+        raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        matches = [item for item in manifest["requests"]
+                   if isinstance(item, dict) and item.get("request_id") == request_id]
+        if len(matches) != 1:
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        entry = matches[0]
+        selected = entry.get("selected_asset")
+        events = entry.get("malformed_production_qc_reopen_events")
+        if events not in (None, []) and not isinstance(events, list):
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        if events:
+            existing = events[-1] if len(events) == 1 and isinstance(events[-1], dict) else None
+            if (isinstance(existing, dict) and existing.get("request_id") == request_id
+                    and existing.get("selected_asset_sha256") == expected_asset_sha256.lower()
+                    and isinstance(selected, dict)
+                    and existing.get("selected_attempt") == selected.get("attempt")
+                    and selected.get("active_production_review_epoch") == existing.get("review_epoch")
+                    and entry.get("status") == "QC_PENDING"):
+                return {**existing, "idempotent": True}
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        if (entry.get("status") != "FAILED_RETRYABLE"
+                or entry.get("failure_class") != "MEDIA_QC_INVALID"
+                or not isinstance(selected, dict)
+                or selected.get("sha256") != expected_asset_sha256.lower()
+                or not _valid_selected(paths, entry)):
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        reviews = entry.get("quality_reviews")
+        rejection = reviews[-1] if isinstance(reviews, list) and reviews else None
+        if (not isinstance(rejection, dict) or rejection.get("status") != "REJECTED"
+                or rejection.get("failure_class") != "MEDIA_QC_INVALID"
+                or rejection.get("selected_asset_path") != selected.get("path")
+                or rejection.get("selected_asset_sha256") != expected_asset_sha256.lower()
+                or not isinstance(rejection.get("report"), dict)):
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        try:
+            validate_production_qc(rejection["report"], provider=entry.get("provider"), media_type=entry.get("media_type"))
+        except MediaQualityError as error:
+            if error.failure_class != "MEDIA_QC_INVALID":
+                raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID") from error
+        else:
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        selected_attempt = selected.get("attempt")
+        attempts = entry.get("attempts")
+        attempt = next((item for item in attempts if isinstance(item, dict) and item.get("attempt") == selected_attempt), None) if isinstance(attempts, list) else None
+        if (not isinstance(selected_attempt, int) or not isinstance(attempt, dict)
+                or attempt.get("status") != "SUCCEEDED" or attempt.get("attribution_state") != "CONFIRMED"):
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        try:
+            requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
+        except Exception as error:
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID") from error
+        descendants = [item for item in [*requests, *manifest["requests"]] if isinstance(item, dict)
+                       and item.get("request_id") != request_id
+                       and (item.get("replacement_of") == request_id or item.get("replaces_request_id") == request_id)]
+        if entry.get("replacement_request_id") or descendants:
+            raise FlowError("MALFORMED_PRODUCTION_QC_REOPEN_INVALID")
+        rejection_index = len(reviews) - 1
+        rejection_sha256 = _json_sha256(rejection)
+        event = {
+            "at": _now(), "event": "MALFORMED_PRODUCTION_QC_REOPENED",
+            "disposition": "MALFORMED_REPORT_SUPERSEDED", "reviewer": reviewer.strip(),
+            "reason": reason.strip(), "request_id": request_id,
+            "selected_asset_path": selected.get("path"), "selected_asset_sha256": expected_asset_sha256.lower(),
+            "selected_attempt": selected_attempt, "superseded_rejection_index": rejection_index,
+            "rejection_event_sha256": rejection_sha256,
+            "review_epoch": "production-qc-malformed-" + _json_sha256({
+                "request_id": request_id, "asset_sha256": expected_asset_sha256.lower(),
+                "attempt": selected_attempt, "rejection_event_sha256": rejection_sha256,
+            })[:24],
+        }
+        entry.setdefault("malformed_production_qc_reopen_events", []).append(event)
+        selected["production_qc"] = "PENDING"
+        selected["active_production_review_epoch"] = event["review_epoch"]
+        entry.update({"status": "QC_PENDING", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(path, manifest)
+        return {**event, "idempotent": False}
 
 
 def reopen_false_positive_production_qc(runtime_root: Path | str, project_id: str, request_id: str,
