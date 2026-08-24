@@ -12,7 +12,7 @@ from story_auto.core.artifacts import atomic_write_json, sha256_file
 from story_auto.providers.llm import GeminiReasoningRouter, LLMMedia, ReasoningResult
 
 HOOK_PLAN_VERSION = "story-auto-hook-plan/1.0.0"
-MOTION_PLAN_VERSION = "story-auto-motion-plan/1.4.0"
+MOTION_PLAN_VERSION = "story-auto-motion-plan/1.5.0"
 TEMPORAL_QC_VERSION = "story-auto-temporal-video-qc/1.1.0"
 REPAIR_PLAN_VERSION = "story-auto-repair-plan/1.0.0"
 FLOW_MOTION_PROMPT_VERSION = "story-auto-flow-motion-prompt/1.1.0"
@@ -280,6 +280,15 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
         raise GeminiQCError("MOTION_PLAN_ATOMIC_CLIP_COUNT_INVALID")
     count_instruction = (f" Return exactly {required_clip_count} atomic clip(s); do not split this request."
                          if required_clip_count is not None else "")
+    original_action = str(intent.get("action", ""))
+    action_family = classify_motion_action(original_action)
+    static_contract = (
+        "The original action is unambiguously non-directional. For every atomic clip, set direction_sensitive=false "
+        "and action_family=NONE; omit ordered_action_steps, progression_checkpoints, movement_direction, and forbidden_motion. "
+        if action_family == ACTION_NONE else
+        "The original action is direction-sensitive and its atomic clip action_family must match "
+        f"{action_family}; use that family's exact canonical structure. "
+    )
     prompt = ("Decompose this production VIDEO intent into physically plausible cinematic states. Default to one meaningful action per generated clip. "
               "Split high-risk contact mechanics with cuts. For direction- or order-sensitive actions, every affected atomic clip must set direction_sensitive=true and provide action_family, ordered_action_steps, progression_checkpoints, movement_direction, and forbidden_motion. "
               "action_family is the structured semantic authority and must be one of ASCENT, DESCENT, TOWARD, AWAY, FROM_TO, PICK_UP, PUT_DOWN, SIT, STAND, OPEN, CLOSE, HANDOFF, CONTACT, ENTER, EXIT, or TURN_MOVE. Use NONE only when direction_sensitive=false. "
@@ -287,13 +296,14 @@ def plan_motion(router: GeminiReasoningRouter, intent: dict[str, Any]) -> tuple[
               "Use the exact canonical family structures: ASCENT LOWER,MIDDLE,UPPER; DESCENT UPPER,MIDDLE,LOWER; TOWARD ORIGIN,TARGET; AWAY ORIGIN,AWAY; FROM_TO ORIGIN,DESTINATION; SIT STANDING,LOWERING,SEATED; STAND SEATED,RISING,STANDING; OPEN CONTACT,OPEN with CLOSED,OPEN checkpoints; CLOSE CONTACT,CLOSE with OPEN,CLOSED checkpoints; HANDOFF CONTACT,TRANSFER with HELD,RECIPIENT checkpoints; CONTACT APPROACH,CONTACT with AWAY,CONTACT checkpoints; ENTER OUTSIDE,INSIDE; EXIT INSIDE,OUTSIDE; TURN_MOVE TURN,MOVE with FACING_OLD,FACING_NEW checkpoints; PICK_UP APPROACH,CONTACT,LIFT with HAND_AWAY,CONTACT,CUP_RAISED checkpoints; PUT_DOWN CONTACT,LOWER,RELEASE with HELD,SURFACE checkpoints. Use canonical forbidden codes such as BACKWARD_MOTION, REVERSE_DIRECTION, OBJECT_BEFORE_CONTACT, and REVERSE_ORDER. "
               "Treat stair/ladder traversal, entering/exiting, sitting/standing, object pickup/place-down, opening/closing, hand-offs, turns before movement, and explicit toward/away motion as elevated risk. "
               "Use atomic clips when several causal actions cannot be safely executed together. Natural stillness is valid."
+              + static_contract
               + count_instruction + " Return JSON only. Intent:\n"
               + json.dumps(intent, ensure_ascii=False, sort_keys=True))
     def accept_motion_plan(plan: dict[str, Any]) -> None:
         validate_motion_plan(plan, original_action=str(intent.get("action", "")),
                              required_atomic_clip_count=required_clip_count)
     result = router.reason(task="motion_planning", prompt=prompt, schema=MOTION_SCHEMA, tier="HARD",
-        prompt_version="motion-planner/1.4.0", schema_version=MOTION_PLAN_VERSION,
+        prompt_version="motion-planner/1.5.0", schema_version=MOTION_PLAN_VERSION,
         acceptance_validator=accept_motion_plan)
     validate_motion_plan(result.value, original_action=str(intent.get("action", "")),
                          required_atomic_clip_count=required_clip_count)

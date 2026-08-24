@@ -10,6 +10,7 @@ from story_auto.core.artifacts import read_json
 from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, MOTION_SCHEMA,
                                        GeminiQCError, plan_motion,
                                        validate_motion_plan)
+from story_auto.providers.llm import ReasoningResult
 from story_auto.providers.llm.gemini import LLMResponse
 from story_auto.providers.llm.router import HARD_MODELS, GeminiReasoningRouter
 
@@ -162,3 +163,38 @@ def test_all_domain_rejections_keep_existing_hard_router_bound_and_canonical_fai
         assert not (Path(directory) / "cache").exists()
         assert all(item["status"] != "SUCCEEDED"
                    for item in read_json(Path(directory) / "ledger.json")["requests"])
+
+
+def test_non_directional_production_action_receives_an_explicit_static_contract_instruction():
+    class CapturingRouter:
+        def __init__(self) -> None:
+            self.prompt = ""
+
+        def reason(self, **kwargs):
+            self.prompt = kwargs["prompt"]
+            value = {
+                "start_state": "Efe is seated at the table",
+                "end_state": "Efe settles after a brief derisive chuckle",
+                "meaningful_actions": ["Efe chuckles derisively"],
+                "interaction_objects": [], "hand_object_contact": "none",
+                "action_dependencies": [], "physical_complexity": "LOW",
+                "anatomy_risk": "LOW", "looping_risk": "LOW",
+                "atomic_clips": [{
+                    "start_state": "Efe is seated at the table",
+                    "action": "Efe chuckles derisively",
+                    "end_state": "Efe settles after a brief derisive chuckle",
+                    "natural_stillness": "brief quiet after the reaction",
+                    "direction_sensitive": False,
+                    "action_family": "NONE",
+                }],
+            }
+            return ReasoningResult(value, "fixture", "fixture", "fixture", False, 1, 1, "fixture")
+
+    router = CapturingRouter()
+    plan_motion(router, {
+        "action": "Efe chuckles derisively at the dining table.",
+        "subject": "Efe", "location": "family dining room",
+    })
+
+    assert "unambiguously non-directional" in router.prompt
+    assert "direction_sensitive=false and action_family=NONE" in router.prompt
