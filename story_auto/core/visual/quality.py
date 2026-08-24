@@ -36,10 +36,7 @@ def validate_production_qc(
     if not isinstance(raw_watermark, bool):
         raise MediaQualityError("MEDIA_QC_INVALID", "visible_provider_watermark must be boolean")
     if visible_watermark:
-        if provider != "google_flow" or media_type == "IMAGE":
-            raise MediaQualityError("VISIBLE_PROVIDER_WATERMARK")
-        if media_type != "VIDEO":
-            raise MediaQualityError("MEDIA_QC_INVALID", "media_type is required for a visible Flow watermark")
+        raise MediaQualityError("VISIBLE_PROVIDER_WATERMARK")
     failures = [field for field, value in results.items() if value == "FAIL"]
     if failures:
         raise MediaQualityError("NATURALNESS_QC_REJECTED", ",".join(failures))
@@ -49,10 +46,7 @@ def validate_production_qc(
     return {
         "results": dict(results),
         "visible_provider_watermark": visible_watermark,
-        "watermark_disposition": (
-            "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION" if visible_watermark
-            else "NO_VISIBLE_PROVIDER_WATERMARK"
-        ),
+        "watermark_disposition": "NO_VISIBLE_PROVIDER_WATERMARK",
         "reviewer": reviewer.strip(),
         "notes": str(report.get("notes", "")).strip(),
     }

@@ -199,12 +199,11 @@ class FlowImagePostprocessTests(unittest.TestCase):
             self.assertEqual(selected["production_qc"], "PENDING")
             self.assertEqual(selected["source_lineage"]["lineage_kind"], "RAW_TO_DERIVATIVE")
 
-    def test_watermark_qc_is_media_type_aware(self):
-        with self.assertRaises(MediaQualityError) as image_error:
-            validate_production_qc(_report(visible=True), provider="google_flow", media_type="IMAGE")
-        self.assertEqual(image_error.exception.failure_class, "VISIBLE_PROVIDER_WATERMARK")
-        accepted = validate_production_qc(_report(visible=True), provider="google_flow", media_type="VIDEO")
-        self.assertEqual(accepted["watermark_disposition"], "FLOW_VISIBLE_WATERMARK_ACCEPTED_KNOWN_LIMITATION")
+    def test_visible_provider_watermark_rejects_every_media_type(self):
+        for media_type in ("IMAGE", "VIDEO"):
+            with self.subTest(media_type=media_type), self.assertRaises(MediaQualityError) as error:
+                validate_production_qc(_report(visible=True), provider="google_flow", media_type=media_type)
+            self.assertEqual(error.exception.failure_class, "VISIBLE_PROVIDER_WATERMARK")
 
     def test_render_plan_resolves_exact_clean_selected_path_and_hash(self):
         with tempfile.TemporaryDirectory() as root:
