@@ -141,6 +141,7 @@ class Goal25NoDispatchSemanticAuthorityTests(unittest.TestCase):
             "attributed_identity_exists": nested_change(("attributed_provider_identity",), {"identity": "asset:unexpected"}),
             "attribution_uncertain": nested_change(("attribution_state",), "UNCERTAIN"),
             "attribution_ambiguous": nested_change(("attribution_state",), "AMBIGUOUS"),
+            "provider_boundary_entered": nested_change(("provider_execution_state",), "PROVIDER_BOUNDARY_ENTERED"),
             "timeout_without_positive_proof": replace_with({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_TIMEOUT"}),
             "failed_retryable_without_positive_proof": replace_with({"status": "FAILED_RETRYABLE", "dispatch_confirmed": False}),
             "missing_provider_job_only": replace_with({"provider_job_id": None}),

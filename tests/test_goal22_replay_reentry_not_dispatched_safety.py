@@ -24,7 +24,7 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
         manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
         return next(item for item in manifest["requests"] if item["request_id"] == request_id)
 
-    def test_exact_pre_dispatch_not_dispatched_shape_reenters_without_second_epoch(self):
+    def test_post_boundary_input_not_dispatched_signal_remains_ambiguous(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths = self._project(root)
             replacement_id = self._replay(runtime, config)["replacement_request_id"]
@@ -58,18 +58,19 @@ class Goal22ReplayReentrySafetyTests(Goal20UnresolvedReplayTests):
             first = execute_generation(runtime.root, config.project_id, executor=executor, execute=True,
                                        request_ids={replacement_id}, max_requests=1)
             replacement = self._entry(paths, replacement_id)
-            self.assertEqual((first["new_submissions"], replacement["status"]), (0, "NOT_DISPATCHED"))
+            self.assertEqual((first["new_submissions"], replacement["status"]), (0, "AMBIGUOUS"))
             self.assertEqual((replacement["attempts"][-1]["dispatch_confirmed"],
                               replacement["attempts"][-1]["provider_job_id"],
                               replacement["attempts"][-1]["attribution_state"]), (False, None, "NOT_ATTEMPTED"))
+            self.assertFalse(replacement["attempts"][-1].get("provider_boundary_entered_at") is None)
             self.assertTrue(self._replay(runtime, config)["idempotent"])
             self.assertEqual(len(read_json(paths.artifact_path("output/generation_requests.json"))["requests"]), 2)
 
             second = execute_generation(runtime.root, config.project_id, executor=executor, execute=True,
                                         request_ids={replacement_id}, max_requests=1)
             replacement = self._entry(paths, replacement_id)
-            self.assertEqual((second["new_submissions"], replacement["status"], generator.calls), (1, "SUCCEEDED", 2))
-            self.assertIn("selected_asset", replacement)
+            self.assertEqual((second["blocked"], replacement["status"], generator.calls), (True, "AMBIGUOUS", 1))
+            self.assertNotIn("selected_asset", replacement)
             self.assertEqual(self._entry(paths, self.OLD_ID)["attempts"], old_before)
 
     def test_immutable_replay_facts_and_transaction_lineage_fail_closed(self):

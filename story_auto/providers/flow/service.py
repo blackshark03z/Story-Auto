@@ -377,6 +377,14 @@ def _proven_safe_pre_dispatch_attempt(attempt: dict) -> bool:
     """Retry only after persisted evidence proves that input never dispatched."""
     if not isinstance(attempt, dict):
         return False
+    # The activation record can only authorize a retry when it was produced
+    # before the durable executor/provider boundary.  An adapter may discover
+    # an input-not-dispatched condition after that boundary, but it is not a
+    # sufficient substitute for the pre-boundary proof: a crash or a provider
+    # surface race could otherwise turn an ambiguous attempt into a retry.
+    if (attempt.get("provider_execution_state") not in {None, "NOT_STARTED"}
+            or attempt.get("provider_boundary_entered_at") is not None):
+        return False
     if attempt.get("dispatch_confirmed") is not False:
         return False
     if attempt.get("provider_job_id") is not None or attempt.get("durable_dispatch_identity") is not None:
@@ -403,6 +411,9 @@ def _verified_historical_no_dispatch_attempt(attempt: dict) -> bool:
     evidence.
     """
     if not isinstance(attempt, dict):
+        return False
+    if (attempt.get("provider_execution_state") not in {None, "NOT_STARTED"}
+            or attempt.get("provider_boundary_entered_at") is not None):
         return False
     if attempt.get("dispatch_confirmed") is not False:
         return False
@@ -4394,6 +4405,40 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
     return isinstance(attempt, dict) and attempt.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
 
 
+def _fail_closed_unproven_not_dispatched_entries(manifest: dict) -> int:
+    """Correct a legacy misclassification without making its attempt runnable.
+
+    Earlier execution paths could label a post-boundary adapter failure as
+    ``NOT_DISPATCHED`` based solely on adapter-local evidence.  Preserve the
+    original record, append a classification event, and restore the serial
+    ambiguity barrier before any lineage validator or execution selector
+    consumes it.
+    """
+    corrected = 0
+    for entry in manifest.get("requests", []):
+        attempts = entry.get("attempts") if isinstance(entry, dict) else None
+        attempt = attempts[-1] if isinstance(attempts, list) and attempts else None
+        if (entry.get("status") != "NOT_DISPATCHED" or not isinstance(attempt, dict)
+                or canonical_no_dispatch_proof(attempt)):
+            continue
+        if (attempt.get("provider_execution_state") in {None, "NOT_STARTED"}
+                and attempt.get("provider_boundary_entered_at") is None):
+            continue
+        event = {
+            "at": _now(), "state": "FAIL_CLOSED_UNPROVEN_NOT_DISPATCHED",
+            "prior_status": attempt.get("status"),
+            "reason": "provider boundary entered without canonical no-dispatch proof",
+        }
+        attempt.setdefault("reconciliation_events", []).append(event)
+        attempt["status"] = "AMBIGUOUS"
+        entry.setdefault("reconciliation_events", []).append({
+            "at": event["at"], "attempt": attempt.get("attempt"), "state": event["state"],
+        })
+        entry.update({"status": "AMBIGUOUS", "updated_at": event["at"]})
+        corrected += 1
+    return corrected
+
+
 def _first_unresolved(paths, project_id: str, requests: list[dict], entries: dict[str, dict]) -> tuple[dict, dict] | None:
     malformed = _first_invalid_request_replacement(paths, project_id, entries, requests)
     if malformed is not None:
@@ -4723,6 +4768,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
+        if _fail_closed_unproven_not_dispatched_entries(manifest):
+            atomic_write_json(path, manifest)
+            entries = {entry["request_id"]: entry for entry in manifest["requests"]}
         malformed = _first_invalid_request_replacement(paths, project_id, entries, requests)
         if malformed is not None:
             return {"selected": len(selected), "new_submissions": 0, "paused": False,

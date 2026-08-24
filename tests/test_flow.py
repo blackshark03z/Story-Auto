@@ -266,7 +266,7 @@ class FlowTests(unittest.TestCase):
                         durable_evidence_serialized=True)
         self.assertEqual((tracker.state,tracker.signal,tracker.confirmation_count),("CONFIRMED","verified_activation_provider_ui_output",1))
 
-    def test_not_dispatched_remains_runnable(self):
+    def test_post_boundary_not_dispatched_signal_remains_blocked(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]
             class NoDispatch:
@@ -278,10 +278,10 @@ class FlowTests(unittest.TestCase):
             no_dispatch=NoDispatch()
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_dispatch)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            self.assertEqual(len(calls),2)
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual((len(calls), result["blocked"]), (1, True))
 
-    def test_verified_pre_dispatch_activation_failure_remains_runnable(self):
+    def test_post_boundary_activation_failure_remains_blocked(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); calls=[]
             class NoActivation:
@@ -293,8 +293,8 @@ class FlowTests(unittest.TestCase):
             no_activation=NoActivation()
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),no_activation)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            self.assertEqual(len(calls),2)
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            self.assertEqual((len(calls), result["blocked"]), (1, True))
 
     def test_interrupted_pre_dispatch_attempt_can_be_safely_reopened(self):
         with tempfile.TemporaryDirectory() as root:
@@ -515,7 +515,7 @@ class FlowTests(unittest.TestCase):
             execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate),execute=True,request_ids={"shot"},production_batch=True)
             self.assertEqual(calls,["shot"])
 
-    def test_attempt_provenance_is_append_only_across_safe_retry(self):
+    def test_post_boundary_activation_failure_never_starts_a_second_attempt(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
             class SequencedGenerator:
@@ -530,11 +530,11 @@ class FlowTests(unittest.TestCase):
                     destination.parent.mkdir(parents=True,exist_ok=True); Image.new("RGB",(1280,720),"blue").save(destination,"PNG"); return destination
             generate=SequencedGenerator(); executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),generate)
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
-            execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             attempts=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["attempts"]
-            self.assertEqual([item["status"] for item in attempts],["NOT_DISPATCHED","SUCCEEDED"])
-            self.assertEqual([item["activation_time"] for item in attempts],["time-1","time-2"])
-            self.assertEqual(attempts[1]["dispatch_confirmation_signal"],"new_attributable_output")
+            self.assertEqual(([item["status"] for item in attempts], generate.calls, result["blocked"]),
+                             (["AMBIGUOUS"], 1, True))
+            self.assertEqual(attempts[0]["activation_time"],"time-1")
     def test_execution_gate(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,_=self._project(root); executor,_=self._executor()
