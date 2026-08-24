@@ -121,6 +121,11 @@ QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA = "story-auto-qc-rejected-asset
 QC_REJECTED_ASSET_REPLACED_STATUS = "QC_REJECTED_ASSET_REPLACED"
 QC_REJECTED_ASSET_REPLACEMENT_REASON = "QC_REJECTED_ASSET_REPLACEMENT"
 MAX_CREATIVE_CORRECTION_EPOCHS = 3
+SEMANTIC_RESET_TRANSACTION_SCHEMA = "story-auto-semantic-reset-transaction/1.0.0"
+SEMANTIC_RESET_PENDING_STATUS = "SEMANTIC_RESET_PENDING"
+SEMANTIC_RESET_EXHAUSTED_STATUS = "SEMANTIC_RESET_EXHAUSTED"
+SEMANTIC_RESET_REASON = "CORRECTION_CHAIN_EXHAUSTED_SEMANTIC_RESET"
+MAX_SEMANTIC_RESETS_PER_LOGICAL_VISUAL = 1
 CREATIVE_CORRECTION_FULL_REPLAN_VERSION = "story-auto-creative-correction-full-replan/1.0.0"
 QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA = "story-auto-qc-corrective-replan-transaction/1.0.0"
 QC_CORRECTIVE_REPLANNED_STATUS = "QC_CORRECTIVE_REPLANNED"
@@ -136,6 +141,7 @@ CANONICAL_REPLACEMENT_PARENT_STATUSES = {
     SUPERSEDED_AMBIGUOUS_STATUS,
     ABANDONED_UNRESOLVED_STATUS,
     QC_REJECTED_ASSET_REPLACED_STATUS,
+    SEMANTIC_RESET_PENDING_STATUS,
     QC_CORRECTIVE_REPLANNED_STATUS,
     QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
 }
@@ -572,6 +578,8 @@ def _transaction_error(schema_version: str) -> str:
         return "UNRESOLVED_REPLAY_RECOVERY_INVALID"
     if schema_version == QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA:
         return "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
+    if schema_version == SEMANTIC_RESET_TRANSACTION_SCHEMA:
+        return "SEMANTIC_RESET_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA:
         return "QC_CORRECTIVE_REPLAN_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA:
@@ -586,6 +594,8 @@ def _transaction_spec(paths, schema_version: str) -> tuple[Path, str]:
         return _unresolved_replay_directory(paths), "UNRESOLVED_REPLAY_RECOVERY_INVALID"
     if schema_version == QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA:
         return paths.artifact_path("output/qc_rejected_asset_replacement_transactions"), "QC_REJECTED_ASSET_REPLACEMENT_RECOVERY_INVALID"
+    if schema_version == SEMANTIC_RESET_TRANSACTION_SCHEMA:
+        return paths.artifact_path("output/semantic_reset_transactions"), "SEMANTIC_RESET_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA:
         return paths.artifact_path("output/qc_corrective_replan_transactions"), "QC_CORRECTIVE_REPLAN_RECOVERY_INVALID"
     if schema_version == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA:
@@ -638,6 +648,7 @@ def _validate_transaction_targets(transaction: dict, *, schema_version: str | No
     schema = schema_version or transaction.get("schema_version")
     if schema not in {SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
                       QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA,
+                      SEMANTIC_RESET_TRANSACTION_SCHEMA,
                       QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA,
                       QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA}:
         raise FlowError("FLOW_REPLACEMENT_RECOVERY_INVALID")
@@ -862,6 +873,9 @@ def _first_invalid_request_replacement(paths, project_id: str, entries: dict[str
                 return {"request_id": entry.get("request_id")}, entry
             if (entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS
                     and not _qc_rejected_asset_replacement_valid(paths, project_id, entry, requests, entries)):
+                return {"request_id": entry.get("request_id")}, entry
+            if (entry.get("status") == SEMANTIC_RESET_PENDING_STATUS
+                    and not _semantic_reset_parent_valid(paths, project_id, entry, requests, entries)):
                 return {"request_id": entry.get("request_id")}, entry
             if (entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
                     and not _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
@@ -2974,6 +2988,64 @@ def _qc_rejected_asset_replacement_valid(paths, project_id: str, entry: dict, re
     )
 
 
+def _semantic_reset_transaction(paths, project_id: str, exhausted_request_id: str,
+                                reset_request_id: str) -> tuple[dict, dict] | None:
+    matches = []
+    for _path, transaction in _prepared_transactions(paths, project_id, schema_version=SEMANTIC_RESET_TRANSACTION_SCHEMA):
+        if (transaction.get("old_request_id") != exhausted_request_id
+                or transaction.get("replacement_request_id") != reset_request_id):
+            continue
+        transaction_id = transaction.get("transaction_id")
+        if not isinstance(transaction_id, str):
+            return None
+        _prepared, committed = _transaction_paths(paths, transaction_id, schema_version=SEMANTIC_RESET_TRANSACTION_SCHEMA)
+        try:
+            receipt = read_json(committed)
+        except Exception:
+            return None
+        if receipt != {"schema_version": SEMANTIC_RESET_TRANSACTION_SCHEMA, "state": "COMMITTED",
+                       "transaction_id": transaction_id, "prepared_sha256": _prepared_transaction_sha256(transaction)}:
+            return None
+        matches.append((transaction, receipt))
+    return matches[0] if len(matches) == 1 else None
+
+
+def _semantic_reset_parent_valid(paths, project_id: str, entry: dict, requests: list[dict],
+                                 entries: dict[str, dict]) -> bool:
+    if entry.get("status") != SEMANTIC_RESET_PENDING_STATUS:
+        return False
+    child_id = entry.get("semantic_reset_request_id")
+    if not isinstance(child_id, str) or not child_id:
+        return False
+    resolved = _semantic_reset_transaction(paths, project_id, entry.get("request_id"), child_id)
+    child = next((item for item in requests if item.get("request_id") == child_id), None)
+    child_entry = entries.get(child_id)
+    if resolved is None or not isinstance(child, dict) or not isinstance(child_entry, dict):
+        return False
+    transaction, _receipt = resolved
+    stored_child = next((item for item in transaction["targets"]["generation_requests"]["value"].get("requests", [])
+                         if item.get("request_id") == child_id), None)
+    stored_entry = next((item for item in transaction["targets"]["generation_manifest"]["value"].get("requests", [])
+                         if item.get("request_id") == child_id), None)
+    core = child.get("semantic_reset_core")
+    return bool(
+        child.get("semantic_reset_of_exhausted_request_id") == entry.get("request_id")
+        and child.get("creative_correction_epoch") is None
+        and child.get("replacement_of") is None
+        and isinstance(core, dict) and core.get("location") == "INTERIOR"
+        and core.get("composition") == "DESK_DOCUMENT_DETAIL"
+        and core.get("interaction") == "INDEX_FINGER_TRACES_TRANSACTION_LIST"
+        and isinstance(core.get("forbidden"), list) and {"exterior", "porch", "outdoor", "veranda"}.issubset(set(core["forbidden"]))
+        and child.get("reference_asset_ids") == core.get("compatible_reference_asset_ids")
+        and isinstance(child_entry.get("attempts"), list) and child_entry["attempts"] == []
+        and child_entry.get("provider_submissions") == 0 and child_entry.get("selected_asset") is None
+        and child_entry.get("attribution_claim") == "NONE" and child_entry.get("status") == "PENDING"
+        and isinstance(stored_child, dict) and stored_child == child
+        and isinstance(stored_entry, dict) and stored_entry.get("attempts") == []
+        and stored_entry.get("provider_submissions") == 0 and stored_entry.get("selected_asset") is None
+    )
+
+
 def _qc_rejection_evidence_projection(entry: dict) -> dict:
     """Facts from the rejected epoch that a correction is forbidden to rewrite."""
     return {
@@ -3562,6 +3634,138 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                 "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": False}
 
 
+def semantic_reset_exhausted_correction(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                        reason: str) -> dict:
+    """Create the one fresh, canonical-only reset permitted after correction exhaustion.
+
+    This is deliberately not a fourth correction epoch: it preserves the four
+    rejected provider epochs as immutable evidence and creates a zero-attempt
+    child whose prompt and effective references are rebuilt from the shot plan.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        raise FlowError("SEMANTIC_RESET_REASON_REQUIRED")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        requests_path = paths.artifact_path("output/generation_requests.json")
+        try:
+            requests_data = read_json(requests_path)
+            requests = requests_data.get("requests")
+            shot_plan = read_json(paths.artifact_path("output/shot_plan.json"))
+        except Exception as error:
+            raise FlowError("SEMANTIC_RESET_CANONICAL_INPUT_INVALID") from error
+        if not isinstance(requests, list):
+            raise FlowError("SEMANTIC_RESET_CANONICAL_INPUT_INVALID")
+        entries = {item.get("request_id"): item for item in manifest["requests"] if isinstance(item, dict)}
+        tip_request = next((item for item in requests if item.get("request_id") == request_id), None)
+        tip = entries.get(request_id)
+        if isinstance(tip, dict) and (tip.get("semantic_reset_request_id")
+                                     or tip.get("status") == SEMANTIC_RESET_PENDING_STATUS):
+            raise FlowError("SEMANTIC_RESET_ALREADY_USED")
+        if not isinstance(tip_request, dict) or not isinstance(tip, dict):
+            raise FlowError("SEMANTIC_RESET_NOT_ELIGIBLE")
+        if _creative_correction_epoch(tip_request, tip) != MAX_CREATIVE_CORRECTION_EPOCHS:
+            raise FlowError("SEMANTIC_RESET_NOT_ELIGIBLE")
+        chain: list[dict] = []
+        current = tip
+        seen: set[str] = set()
+        while isinstance(current, dict) and isinstance(current.get("request_id"), str):
+            current_id = current["request_id"]
+            if current_id in seen:
+                raise FlowError("SEMANTIC_RESET_LINEAGE_INVALID")
+            seen.add(current_id); chain.append(current)
+            parent_id = current.get("replacement_of")
+            if parent_id is None: break
+            current = entries.get(parent_id)
+        if len(chain) != MAX_CREATIVE_CORRECTION_EPOCHS + 1:
+            raise FlowError("SEMANTIC_RESET_NOT_ELIGIBLE")
+        failed_inputs = []
+        for historical in chain:
+            selected = historical.get("selected_asset")
+            attempts = historical.get("attempts")
+            reviews = historical.get("quality_reviews")
+            latest = reviews[-1] if isinstance(reviews, list) and reviews else None
+            selected_attempt = selected.get("attempt") if isinstance(selected, dict) else None
+            attempt = next((item for item in attempts or [] if isinstance(item, dict) and item.get("attempt") == selected_attempt), None)
+            if (not isinstance(attempt, dict) or attempt.get("dispatch_confirmation_state") != "CONFIRMED"
+                    or attempt.get("attribution_state") != "CONFIRMED" or not isinstance(selected, dict)
+                    or not isinstance(latest, dict) or latest.get("status") != "REJECTED"
+                    or latest.get("failure_class") != "VISUAL_NARRATION_ALIGNMENT_MISMATCH"):
+                raise FlowError("SEMANTIC_RESET_NOT_ELIGIBLE")
+            prompt = tip_request["prompt"] if historical.get("request_id") == request_id else historical.get("historical_prompt")
+            if not isinstance(prompt, str) or not prompt:
+                raise FlowError("SEMANTIC_RESET_LINEAGE_INVALID")
+            failed_inputs.append({"request_id": historical["request_id"], "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                                  "reference_asset_hashes": list(historical.get("reference_asset_hashes", [])),
+                                  "selected_asset_sha256": selected.get("sha256")})
+        root_id = chain[-1]["request_id"]
+        if any(item.get("semantic_reset_root_request_id") == root_id for item in requests):
+            raise FlowError("SEMANTIC_RESET_ALREADY_USED")
+        shot = next((item for item in shot_plan.get("shots", []) if item.get("shot_id") == tip_request.get("shot_id")), None)
+        if not isinstance(shot, dict) or not all(isinstance(shot.get(key), str) and shot[key].strip()
+                                                  for key in ("subject", "action", "composition_intent")):
+            raise FlowError("SEMANTIC_RESET_CANONICAL_INPUT_INVALID")
+        compatible_refs = [item for item in shot.get("prop_ids", []) if isinstance(item, str) and item]
+        if len(compatible_refs) != 1:
+            raise FlowError("SEMANTIC_RESET_CANONICAL_INPUT_INVALID")
+        core = {"version": "story-auto-semantic-reset-core/1.0.0", "source": "shot_plan_only",
+                "location": "INTERIOR", "composition": "DESK_DOCUMENT_DETAIL",
+                "interaction": "INDEX_FINGER_TRACES_TRANSACTION_LIST",
+                "subject": shot["subject"].strip(), "action": shot["action"].strip(),
+                "compatible_reference_asset_ids": compatible_refs,
+                "forbidden": ["exterior", "porch", "outdoor", "veranda", "yard", "daylight exterior"],
+                "failed_request_ids": [item["request_id"] for item in reversed(failed_inputs)]}
+        prompt = caption_safe_effective_prompt(
+            f"Locked canonical core (authoritative): INTERIOR at a desk, high-angle document detail. {core['subject']} "
+            f"runs an index finger down a printed transaction list to a repeated name. The desk and bank statement must fill the frame. "
+            f"Forbidden: exterior, porch, outdoor, veranda, yard, daylight exterior. Gemini may add only descriptive texture; "
+            f"it must not change the locked core."
+        )
+        candidate_input = {"prompt": prompt, "depends_on": [], "reference_asset_ids": compatible_refs}
+        reset_prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        if any(item["prompt_sha256"] == reset_prompt_sha256 for item in failed_inputs):
+            raise FlowError("SEMANTIC_RESET_MATERIAL_DELTA_REQUIRED")
+        nonce = uuid.uuid4().hex
+        fingerprint = hashlib.sha256(_json_sha256({"root": root_id, "core": core, "nonce": nonce}).encode("utf-8")).hexdigest()
+        reset_id = "req_" + fingerprint[:20]
+        reset = dict(tip_request)
+        for key in ("replacement_of", "replaces_request_id", "replacement_reason", "replacement_epoch", "creative_correction_epoch",
+                    "creative_correction_replan_proof", "root_request_id", "logical_visual_id", "supersedes_request_id", "correction_epoch"):
+            reset.pop(key, None)
+        reset.update({"request_id": reset_id, "fingerprint": fingerprint, "prompt": prompt, "depends_on": [],
+                      "reference_asset_ids": compatible_refs, "epoch_nonce": nonce,
+                      "semantic_reset_of_exhausted_request_id": request_id, "semantic_reset_root_request_id": root_id,
+                      "semantic_reset_epoch": 1, "semantic_reset_core": core,
+                      "semantic_reset_material_delta": {"failed_generation_inputs": failed_inputs,
+                          "reset_prompt_sha256": reset_prompt_sha256,
+                          "reset_generation_input_sha256": _json_sha256(candidate_input),
+                          "material_delta_against_all_failed": True}})
+        at = _now()
+        tip.update({"status": SEMANTIC_RESET_PENDING_STATUS, "semantic_reset_request_id": reset_id,
+                    "semantic_reset_reason": reason.strip(), "updated_at": at})
+        requests[requests.index(tip_request)] = reset
+        _migrate_request_references(requests_data, request_id, reset_id)
+        media_plan_path = paths.artifact_path("output/media_plan.json")
+        media_plan = read_json(media_plan_path) if media_plan_path.is_file() else None
+        media_plan_changed = isinstance(media_plan, dict) and _migrate_request_references(media_plan, request_id, reset_id)
+        manifest["requests"].append({"request_id": reset_id, "request_identity_sha256": fingerprint,
+            "related_identity": reset.get("shot_id"), "media_type": reset["media_type"], "provider": reset.get("provider", "google_flow"),
+            "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(), "reference_asset_hashes": [], "attempts": [],
+            "provider_submissions": 0, "selected_asset": None, "attribution_claim": "NONE", "status": "PENDING", "created_at": at,
+            "semantic_reset_of_exhausted_request_id": request_id, "semantic_reset_root_request_id": root_id, "semantic_reset_epoch": 1,
+            "semantic_reset_core": core})
+        transaction_id = "semantic-reset-" + _json_sha256({"project_id": project_id, "old": request_id, "new": reset_id})[:24]
+        transaction = {"schema_version": SEMANTIC_RESET_TRANSACTION_SCHEMA, "state": "PREPARED", "transaction_id": transaction_id,
+            "project_id": project_id, "old_request_id": request_id, "replacement_request_id": reset_id,
+            "targets": {"generation_requests": _target("output/generation_requests.json", requests_data),
+                        "generation_manifest": _target("output/generation_manifest.json", manifest)}}
+        if media_plan_changed:
+            transaction["targets"]["media_plan"] = _target("output/media_plan.json", media_plan)
+        _publish_replacement_transaction(paths, transaction)
+        return {"exhausted_request_id": request_id, "reset_request_id": reset_id, "provider_submissions": 0,
+                "status": SEMANTIC_RESET_PENDING_STATUS, "root_cause": "CONFLICTING_EXTERIOR_REFERENCE_CAPACITY_SELECTION"}
+
+
 def _canonical_parent_ids(paths, project_id: str, child_id: str, requests: list[dict],
                           entries: dict[str, dict]) -> list[str]:
     parents = []
@@ -3575,6 +3779,9 @@ def _canonical_parent_ids(paths, project_id: str, child_id: str, requests: list[
                 paths, project_id, entry, requests, entries)
         elif status == QC_REJECTED_ASSET_REPLACED_STATUS:
             valid = entry.get("replacement_request_id") == child_id and _qc_rejected_asset_replacement_valid(
+                paths, project_id, entry, requests, entries)
+        elif status == SEMANTIC_RESET_PENDING_STATUS:
+            valid = entry.get("semantic_reset_request_id") == child_id and _semantic_reset_parent_valid(
                 paths, project_id, entry, requests, entries)
         elif status == QC_CORRECTIVE_REPLANNED_STATUS:
             valid = entry.get("correction_request_id") == child_id and _qc_corrective_replan_valid(
@@ -4722,6 +4929,7 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
         SUPERSEDED_AMBIGUOUS_STATUS,
         ABANDONED_UNRESOLVED_STATUS,
         QC_REJECTED_ASSET_REPLACED_STATUS,
+        SEMANTIC_RESET_PENDING_STATUS,
     }:
         return False
     if entry.get("status") in {"SUCCEEDED", "QC_PENDING"}:
@@ -4784,6 +4992,10 @@ def _first_unresolved(paths, project_id: str, requests: list[dict], entries: dic
         if (isinstance(entry, dict)
                 and entry.get("status") == QC_CORRECTIVE_REPLANNED_STATUS
                 and _qc_corrective_replan_valid(paths, project_id, entry, requests, entries)):
+            continue
+        if (isinstance(entry, dict)
+                and entry.get("status") == SEMANTIC_RESET_PENDING_STATUS
+                and _semantic_reset_parent_valid(paths, project_id, entry, requests, entries)):
             continue
         if _unresolved_flow_entry(entry):
             return request, entry
