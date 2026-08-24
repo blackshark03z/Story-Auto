@@ -153,6 +153,15 @@ LOCAL_IMAGE_FAILURES = {
     "FLOW_IMAGE_POSTPROCESS_OUTPUT_CONFLICT",
     "FLOW_IMAGE_DERIVATIVE_INVALID",
 }
+LOCAL_VIDEO_FAILURES = {
+    "FLOW_VIDEO_POSTPROCESS_FAILED",
+    "FLOW_VIDEO_POSTPROCESS_SOURCE_INVALID",
+    "FLOW_VIDEO_POSTPROCESS_UNSUPPORTED_GEOMETRY",
+    "FLOW_VIDEO_POSTPROCESS_DIMENSIONS_CHANGED",
+    "FLOW_VIDEO_POSTPROCESS_DURATION_CHANGED",
+    "FLOW_VIDEO_POSTPROCESS_OUTPUT_CONFLICT",
+    "FLOW_VIDEO_DERIVATIVE_INVALID",
+}
 TEMPORAL_SALVAGE_EVENT = "LOCAL_TEMPORAL_TRIM_RETIME"
 TEMPORAL_SALVAGE_MAX_SLOWDOWN = 1.08
 VIDEO_MARK_REMOVAL_EVENT = "LOCAL_FLOW_VIDEO_MARK_REMOVAL"
@@ -1315,6 +1324,27 @@ def _clean_rel(entry: dict, attempt: dict) -> str:
     return f"assets/image/{entry['request_id']}/attempt_{attempt['attempt']:03d}_clean.png"
 
 
+def _successful_raw_video(paths, entry):
+    """Return the newest valid raw provider video explicitly awaiting cleanup."""
+    for attempt in reversed(entry.get("attempts", [])):
+        if (attempt.get("status") != "SUCCEEDED"
+                or attempt.get("production_video_postprocess_required") is not True
+                or attempt.get("attribution_status") == "INVALIDATED"
+                or not isinstance(attempt.get("asset_path"), str)):
+            continue
+        try:
+            metadata = validate_video(paths.artifact_path(attempt["asset_path"]))
+        except AssetValidationError:
+            continue
+        if metadata["sha256"] == attempt.get("asset_sha256"):
+            return attempt, metadata
+    return None, None
+
+
+def _clean_video_rel(entry: dict, attempt: dict) -> str:
+    return f"assets/video/{entry['request_id']}/attempt_{attempt['attempt']:03d}_clean.mp4"
+
+
 def _process_raw_image(paths, entry: dict, attempt: dict, *, output_rel: str | None = None) -> dict:
     """Append one local processing record and bind selected bytes on success."""
     if attempt.get("attribution_state") != "CONFIRMED" or attempt.get("attribution_status") == "INVALIDATED":
@@ -1383,6 +1413,58 @@ def _process_raw_image(paths, entry: dict, attempt: dict, *, output_rel: str | N
     return selected
 
 
+def _process_raw_video(paths, entry: dict, attempt: dict, *, output_rel: str | None = None) -> dict:
+    """Append one local video-cleanup record and bind the clean selected bytes."""
+    if attempt.get("attribution_state") != "CONFIRMED" or attempt.get("attribution_status") == "INVALIDATED":
+        raise FlowVideoPostprocessError("OUTPUT_ATTRIBUTION_UNCONFIRMED")
+    source_rel = attempt["asset_path"]
+    source_sha = attempt["asset_sha256"]
+    output_rel = output_rel or _clean_video_rel(entry, attempt)
+    processing_number = len(entry.setdefault("video_postprocess_attempts", [])) + 1
+    source_metadata = attempt.get("metadata", {})
+    profile = profile_evidence(int(source_metadata.get("width", 0)), int(source_metadata.get("height", 0)))
+    record = {
+        "processing_attempt": processing_number, "status": "PROCESSING",
+        "source_provider_attempt": attempt["attempt"], "source_path": source_rel,
+        "source_sha256": source_sha, "output_path": output_rel,
+        "processor_name": VIDEO_PROCESSOR_NAME, "processor_version": VIDEO_PROCESSOR_VERSION,
+        "flow_mark_profile_version": profile["profile_version"], "profile_sha256": profile["profile_sha256"],
+        "started_at": _now(),
+    }
+    entry["video_postprocess_attempts"].append(record)
+    try:
+        result = process_flow_video(paths.artifact_path(source_rel), paths.artifact_path(output_rel))
+    except FlowVideoPostprocessError as error:
+        record.update({"status": "FAILED", "failure_class": error.failure_class,
+                       "diagnostic": str(error), "completed_at": _now()})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class,
+                      "updated_at": _now()})
+        raise
+    if result["source_sha256"] != source_sha:
+        record.update({"status": "FAILED", "failure_class": "FLOW_VIDEO_POSTPROCESS_SOURCE_INVALID",
+                       "completed_at": _now()})
+        entry.update({"status": "FAILED_RETRYABLE", "failure_class": "FLOW_VIDEO_POSTPROCESS_SOURCE_INVALID",
+                      "updated_at": _now()})
+        raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_SOURCE_INVALID")
+    record.update({
+        "status": "SUCCEEDED", "output_sha256": result["output_sha256"],
+        "processor_name": result["processor_name"], "processor_version": result["processor_version"],
+        "flow_mark_profile_version": result["profile_version"], "profile_sha256": result["profile_sha256"],
+        "mask_sha256": result["mask_sha256"], "completed_at": _now(),
+    })
+    selected = {
+        "path": output_rel, "sha256": result["output_sha256"], "attempt": attempt["attempt"],
+        "metadata": result["output_metadata"], "production_qc": "PENDING", "temporal_qc": "PENDING",
+        "source_provider_attempt": attempt["attempt"], "source_path": source_rel,
+        "source_sha256": source_sha, "video_postprocess_attempt": processing_number,
+        "processor_name": result["processor_name"], "processor_version": result["processor_version"],
+        "flow_mark_profile_version": result["profile_version"], "mask_sha256": result["mask_sha256"],
+    }
+    entry.update({"selected_asset": selected, "status": "QC_PENDING", "failure_class": None,
+                  "updated_at": _now()})
+    return selected
+
+
 def _repair_local_image(paths, entry: dict, request: dict) -> bool:
     """Retry cleanup from preserved raw bytes; return whether provider dispatch must stop."""
     if request.get("media_type") != "IMAGE" or request.get("execution_tier") != "STANDARD_PRODUCTION":
@@ -1441,7 +1523,10 @@ def reconcile_local_assets(runtime_root: Path | str, project_id: str) -> set[str
                 continue
             selected = entry.get("selected_asset") if isinstance(entry.get("selected_asset"), dict) else {}
             raw_attempt, _ = _successful_raw_image(paths, entry)
-            failure_class = "FLOW_IMAGE_DERIVATIVE_INVALID" if raw_attempt is not None else "ASSET_INVALID"
+            raw_video_attempt, _ = _successful_raw_video(paths, entry)
+            failure_class = ("FLOW_IMAGE_DERIVATIVE_INVALID" if raw_attempt is not None
+                             else "FLOW_VIDEO_DERIVATIVE_INVALID" if raw_video_attempt is not None
+                             else "ASSET_INVALID")
             entry.setdefault("asset_invalidations", []).append({
                 "detected_at": _now(), "path": selected.get("path"),
                 "expected_sha256": selected.get("sha256"), "failure_class": failure_class,
@@ -1937,6 +2022,26 @@ def _legacy_qc_rejection_binding_proven(entry: dict, selected: dict, rejection: 
     for key in ("attribution_invalidations", "manual_recovery_events", "asset_rebindings", "selected_asset_events"):
         if entry.get(key) not in (None, []):
             return False
+    return True
+
+
+def _repair_local_video(paths, entry: dict, request: dict) -> bool:
+    """Retry cleanup from preserved raw video bytes, never Flow generation."""
+    if request.get("media_type") != "VIDEO" or request.get("execution_tier") != "STANDARD_PRODUCTION":
+        return False
+    attempt, _ = _successful_raw_video(paths, entry)
+    if attempt is None:
+        return False
+    selected = entry.get("selected_asset")
+    lineage_matches = isinstance(selected, dict) and selected.get("source_provider_attempt") == attempt.get("attempt")
+    local_failure = entry.get("failure_class") in LOCAL_VIDEO_FAILURES
+    derivative_invalid = lineage_matches and not _valid_selected(paths, entry)
+    if not local_failure and not derivative_invalid:
+        return False
+    try:
+        _process_raw_video(paths, entry, attempt, output_rel=(selected or {}).get("path"))
+    except FlowVideoPostprocessError:
+        pass
     return True
 
 
@@ -4292,7 +4397,9 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
             atomic_write_json(path, manifest)
         else:
             raw_attempt, _ = _successful_raw_image(paths, entry)
-            retry_local = raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES
+            raw_video_attempt, _ = _successful_raw_video(paths, entry)
+            retry_local = ((raw_attempt is not None and entry.get("failure_class") in LOCAL_IMAGE_FAILURES)
+                           or (raw_video_attempt is not None and entry.get("failure_class") in LOCAL_VIDEO_FAILURES))
             action = "RETRY_LOCAL_POSTPROCESS" if retry_local else "REGENERATE"
             entry.setdefault("operator_actions", []).append({"action":action,"reason":reason.strip(),"at":_now()})
             entry.update({"status":"FAILED_RETRYABLE",
@@ -4398,10 +4505,16 @@ def adopt_exact_flow_recovery(runtime_root: Path | str, project_id: str, request
             "attribution_confirmation_timestamp":at,"provider_settings":settings or {},"asset_path":rel,"asset_sha256":metadata["sha256"],
             "downloaded_raw_path":rel,"raw_sha256":metadata["sha256"],"metadata":metadata,"completed_at":at}
         if production and entry["media_type"] == "IMAGE": attempt["production_image_postprocess_required"] = True
+        if production and entry["media_type"] == "VIDEO": attempt["production_video_postprocess_required"] = True
         entry["attempts"].append(attempt)
         if production and entry["media_type"] == "IMAGE":
             try: selected = _process_raw_image(paths, entry, attempt)
             except FlowImagePostprocessError as error:
+                atomic_write_json(path, manifest); raise FlowError(error.failure_class, str(error)) from error
+            selected["provenance"] = "EXACT_FLOW_RECOVERY"
+        elif production and entry["media_type"] == "VIDEO":
+            try: selected = _process_raw_video(paths, entry, attempt)
+            except FlowVideoPostprocessError as error:
                 atomic_write_json(path, manifest); raise FlowError(error.failure_class, str(error)) from error
             selected["provenance"] = "EXACT_FLOW_RECOVERY"
         else:
@@ -4658,7 +4771,7 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
     production = request.get("execution_tier") == "STANDARD_PRODUCTION"
     metadata = validate_image(temporary) if request["media_type"] == "IMAGE" else validate_video(temporary)
     number = attempt["attempt"]
-    raw_label = f"attempt_{number:03d}_raw" if production and request["media_type"] == "IMAGE" else f"attempt_{number:03d}"
+    raw_label = f"attempt_{number:03d}_raw" if production and request["media_type"] in {"IMAGE", "VIDEO"} else f"attempt_{number:03d}"
     final_rel = f"assets/{request['media_type'].lower()}/{request['request_id']}/{raw_label}{temporary.suffix}"
     final_path = paths.artifact_path(final_rel)
     final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4675,6 +4788,12 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
         try:
             selected_asset = _process_raw_image(paths, entry, attempt)
         except FlowImagePostprocessError:
+            selected_asset = None
+    elif production and request["media_type"] == "VIDEO":
+        attempt["production_video_postprocess_required"] = True
+        try:
+            selected_asset = _process_raw_video(paths, entry, attempt)
+        except FlowVideoPostprocessError:
             selected_asset = None
     else:
         selected_asset = {
@@ -4891,13 +5010,14 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     "blocked": True, "blocked_request_id": malformed[0]["request_id"],
                     "attention": "FLOW_GENERATION_RECONCILIATION_REQUIRED", "reconciliations": 0,
                     "manifest": "output/generation_manifest.json"}
-        # A preserved raw production image is recoverable without a provider
+        # Preserved raw production media is recoverable without a provider
         # activation.  Do that local-only work before asking the reconciliation
         # adapter about an unresolved provider attempt; its failure status is
         # never authority to cross the Generate boundary again.
         initial_blocker = _first_unresolved(paths, project_id, requests, entries)
         if (initial_blocker is not None
-                and _repair_local_image(paths, initial_blocker[1], initial_blocker[0])):
+                and (_repair_local_image(paths, initial_blocker[1], initial_blocker[0])
+                     or _repair_local_video(paths, initial_blocker[1], initial_blocker[0]))):
             atomic_write_json(path, manifest)
             entries[initial_blocker[0]["request_id"]] = initial_blocker[1]
         released, blocked_request_id, reconciled = _reconcile_unresolved(
@@ -4921,11 +5041,13 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if paused: break
             blocker = _first_unresolved(paths, project_id, requests, entries)
             if blocker is not None:
-                # A preserved raw production image can be repaired locally
+                # Preserved raw production media can be repaired locally
                 # without invoking Generate.  Give that separate recovery path
                 # precedence over the provider-resubmission barrier only for
                 # the blocked request itself.
-                if blocker[0].get("request_id") == request.get("request_id") and _repair_local_image(paths, blocker[1], request):
+                if (blocker[0].get("request_id") == request.get("request_id")
+                        and (_repair_local_image(paths, blocker[1], request)
+                             or _repair_local_video(paths, blocker[1], request))):
                     atomic_write_json(path, manifest)
                     entries[request["request_id"]] = blocker[1]
                     continue
@@ -4937,7 +5059,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if entry is None: continue # identity changed: retain old provenance, a planner-generated id is required
             if entry.get("status") == "SUCCEEDED" and _valid_selected(paths, entry): continue
             if entry.get("status") == "QC_PENDING" and _valid_selected(paths, entry): continue
-            if _repair_local_image(paths, entry, request):
+            if _repair_local_image(paths, entry, request) or _repair_local_video(paths, entry, request):
                 atomic_write_json(path, manifest); entries[request["request_id"]] = entry
                 continue
             if entry.get("status") == "AMBIGUOUS":

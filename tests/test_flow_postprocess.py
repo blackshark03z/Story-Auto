@@ -95,6 +95,13 @@ class FlowImagePostprocessTests(unittest.TestCase):
             return path
         return FlowExecutor(FlowCapabilities(True, True, True, True, True, True), generate)
 
+    def _video_executor(self, calls, *, size=(1280, 720)):
+        def generate(request, refs, path):
+            calls.append((request["request_id"], list(refs)))
+            self._write_flow_video(path, size=size)
+            return path
+        return FlowExecutor(FlowCapabilities(True, True, True, True, True, True), generate)
+
     def test_supported_profiles_create_distinct_valid_derivatives(self):
         self.assertEqual(set(supported_profiles()), {"flow-sparkle-1280x720-v1", "flow-sparkle-1376x768-v1"})
         with tempfile.TemporaryDirectory() as root:
@@ -133,6 +140,23 @@ class FlowImagePostprocessTests(unittest.TestCase):
             self.assertNotEqual(attempt["asset_path"], selected["path"])
             self.assertNotEqual(attempt["asset_sha256"], selected["sha256"])
             self.assertEqual((selected["source_provider_attempt"], selected["source_sha256"]), (1, attempt["asset_sha256"]))
+            self.assertEqual(sha256_file(paths.artifact_path(attempt["asset_path"])), attempt["asset_sha256"])
+
+    def test_production_video_preserves_raw_and_selects_clean_lineaged_derivative(self):
+        with tempfile.TemporaryDirectory() as root:
+            request = self._request("video", purpose="SHOT", media_type="VIDEO")
+            request["motion_risk_analysis"] = {"anatomy_risk": "LOW"}
+            runtime, config, paths = self._project(root, [request])
+            calls = []
+            result = execute_generation(runtime.root, config.project_id, executor=self._video_executor(calls), execute=True)
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            attempt, selected, processing = entry["attempts"][0], entry["selected_asset"], entry["video_postprocess_attempts"][0]
+            self.assertEqual(result["new_submissions"], 1)
+            self.assertEqual((attempt["status"], processing["status"], entry["status"]), ("SUCCEEDED", "SUCCEEDED", "QC_PENDING"))
+            self.assertTrue(attempt["production_video_postprocess_required"])
+            self.assertNotEqual((attempt["asset_path"], attempt["asset_sha256"]), (selected["path"], selected["sha256"]))
+            self.assertEqual((selected["source_provider_attempt"], selected["source_sha256"], selected["temporal_qc"]),
+                             (1, attempt["asset_sha256"], "PENDING"))
             self.assertEqual(sha256_file(paths.artifact_path(attempt["asset_path"])), attempt["asset_sha256"])
 
     def test_missing_derivative_rebuilds_locally_without_provider_submission(self):

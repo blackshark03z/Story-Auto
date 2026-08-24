@@ -568,7 +568,13 @@ class FlowTests(unittest.TestCase):
                 calls.append(request["request_id"]); path.parent.mkdir(parents=True,exist_ok=True); path.write_bytes(b"same-provider-result"); return path
             executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),stale_video)
             metadata={"duration_seconds":8.0,"width":1280,"height":720,"codec":"h264","container":"mp4","audio_present":False,"sha256":"same-hash"}
-            with patch("story_auto.providers.flow.service.validate_video", return_value=metadata):
+            def clean_video(source, output):
+                output.parent.mkdir(parents=True, exist_ok=True); output.write_bytes(b"same-clean-derivative")
+                return {"processor_name":"fixture-cleaner","processor_version":"1", "profile_version":"fixture",
+                        "profile_sha256":"a"*64,"mask_sha256":"b"*64,"source_sha256":"same-hash",
+                        "output_sha256":"same-clean-hash","source_metadata":metadata,"output_metadata":metadata}
+            with patch("story_auto.providers.flow.service.validate_video", return_value=metadata), \
+                 patch("story_auto.providers.flow.service.process_flow_video", side_effect=clean_video):
                 result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
             self.assertEqual((result["new_submissions"],calls),(1,["video_1","video_2"]))
             entries={x["request_id"]:x for x in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
