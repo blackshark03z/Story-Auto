@@ -116,6 +116,8 @@ UNRESOLVED_REPLAY_GENESIS_SCHEMA = "story-auto-unresolved-replay-genesis/1.0.0"
 QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA = "story-auto-qc-rejected-asset-replacement-transaction/1.0.0"
 QC_REJECTED_ASSET_REPLACED_STATUS = "QC_REJECTED_ASSET_REPLACED"
 QC_REJECTED_ASSET_REPLACEMENT_REASON = "QC_REJECTED_ASSET_REPLACEMENT"
+MAX_CREATIVE_CORRECTION_EPOCHS = 3
+CREATIVE_CORRECTION_FULL_REPLAN_VERSION = "story-auto-creative-correction-full-replan/1.0.0"
 QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA = "story-auto-qc-corrective-replan-transaction/1.0.0"
 QC_CORRECTIVE_REPLANNED_STATUS = "QC_CORRECTIVE_REPLANNED"
 QC_CORRECTIVE_REPLAN_REASON = "QC_CORRECTIVE_REPLAN"
@@ -2236,7 +2238,7 @@ def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:
     """Recognize the narrow historical state that requires a fresh epoch."""
     if not isinstance(entry, dict) or not isinstance(entry.get("selected_asset"), dict):
         return False
-    if entry.get("status") != "FAILED_RETRYABLE" or entry.get("replacement_of"):
+    if entry.get("status") != "FAILED_RETRYABLE":
         return False
     failure = entry.get("failure_class")
     reviews = entry.get("quality_reviews")
@@ -2259,6 +2261,130 @@ def _owned_mandatory_qc_rejection(entry: dict | None) -> bool:
         and attempt.get("attribution_state") == "CONFIRMED"
         for attempt in attempts
     ))
+
+
+def _creative_correction_epoch(request: dict, entry: dict) -> int:
+    """Return the correction epoch only for one owned, attributed lineage tip."""
+    epoch = request.get("creative_correction_epoch", entry.get("creative_correction_epoch"))
+    if epoch is None:
+        # Older transactions use replacement_epoch for more than creative QC
+        # lineage.  Only an immediately prior canonical QC replacement counts
+        # as creative correction epoch one.
+        epoch = 1 if request.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON else 0
+    if not isinstance(epoch, int) or epoch < 0:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_INVALID")
+    if not _owned_mandatory_qc_rejection(entry):
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+    selected_attempt = entry["selected_asset"].get("attempt")
+    attempt = next((item for item in entry.get("attempts", [])
+                    if isinstance(item, dict) and item.get("attempt") == selected_attempt), None)
+    if not isinstance(attempt, dict) or attempt.get("attribution_state") != "CONFIRMED":
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+    dispatch_confirmed = (attempt.get("dispatch_confirmation_state") == "CONFIRMED"
+                          or attempt.get("dispatch_confirmed") is True)
+    if not dispatch_confirmed or attempt.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+    return epoch
+
+
+def _creative_correction_root_id(request: dict, entries: dict[str, dict]) -> str:
+    current = request.get("request_id")
+    root = request.get("root_request_id")
+    if isinstance(root, str) and root:
+        return root
+    seen: set[str] = set()
+    while isinstance(current, str) and current and current not in seen:
+        seen.add(current)
+        parent = entries.get(current, {}).get("replacement_of")
+        if not isinstance(parent, str) or not parent:
+            return current
+        current = parent
+    raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_LINEAGE_INVALID")
+
+
+def _deterministic_creative_full_replan(paths, request: dict, entry: dict, *, epoch: int,
+                                        root_request_id: str, operator_reason: str) -> tuple[str, dict]:
+    """Compile a material reference/shot correction without trusting a rejected prompt.
+
+    This is deliberately deterministic.  The persisted proof describes every
+    provider-facing semantic decision before Flow's activation boundary.
+    """
+    if epoch < 2:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_INVALID")
+    purpose = request.get("purpose")
+    entity_id = request.get("entity_id")
+    subject = action = location = composition = ""
+    exclusions: list[str] = [
+        "no overlay text or captions", "no placeholder imagery", "no conflicting ethnic or family identity",
+    ]
+    canonical_source: dict = {"purpose": purpose, "entity_id": entity_id, "shot_id": request.get("shot_id")}
+    try:
+        continuity = read_json(paths.artifact_path("output/continuity_bible.json"))
+    except Exception as error:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CANONICAL_INPUT_INVALID") from error
+    if purpose == "REFERENCE":
+        entities = [item for kind in ("characters", "locations", "props")
+                    for item in continuity.get(kind, []) if isinstance(item, dict)]
+        entity = next((item for item in entities if item.get("entity_id") == entity_id), None)
+        if not isinstance(entity, dict) or not isinstance(entity.get("name"), str) or not entity["name"].strip():
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CANONICAL_INPUT_INVALID")
+        name = entity["name"].strip()
+        constraints = [item.strip() for item in entity.get("constraints", []) if isinstance(item, str) and item.strip()]
+        subject = f"the canonical {name}, depicting the family identity required by the story"
+        action = "a static archival family portrait within the physical photograph"
+        location = "an aged framed photograph in the Nigerian family home"
+        composition = "tight, eye-level prop reference with the complete frame visible and no unrelated people"
+        exclusions.extend(("no conflicting family identity", "no modern living family portrait", "no duplicate people"))
+        canonical_source.update({"entity_name": name, "constraints": constraints})
+    elif purpose == "SHOT":
+        try:
+            shot_plan = read_json(paths.artifact_path("output/shot_plan.json"))
+        except Exception as error:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CANONICAL_INPUT_INVALID") from error
+        shot = next((item for item in shot_plan.get("shots", []) if item.get("shot_id") == request.get("shot_id")), None)
+        if not isinstance(shot, dict):
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CANONICAL_INPUT_INVALID")
+        subject = str(shot.get("subject", "")).strip()
+        action = str(shot.get("action", "")).strip()
+        location = str(shot.get("location_id", "")).strip()
+        composition = str(shot.get("composition_intent", "")).strip()
+        if not all((subject, action, location, composition)):
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CANONICAL_INPUT_INVALID")
+        canonical_source["shot"] = {key: shot.get(key) for key in ("shot_id", "subject", "action", "location_id", "composition_intent")}
+    else:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+    rejections = entry.get("creative_rejections") or entry.get("quality_reviews") or []
+    rejection = rejections[-1] if rejections else {"failure_class": entry.get("failure_class")}
+    rejection_reason = operator_reason.strip() or (rejection.get("reason") if isinstance(rejection, dict) else "explicit creative review rejection")
+    semantic_delta = [
+        "semantic composition rebuilt from canonical logical visual",
+        "subject, action, location, and framing recompiled independently of rejected prompt",
+        "conflicting family identity and prior rejected asset explicitly excluded",
+        "effective references reselected from canonical intent only",
+    ]
+    prompt = caption_safe_effective_prompt(
+        f"Canonical full replan for correction epoch {epoch}. Subject: {subject}. Action: {action}. "
+        f"Location: {location}. Composition: {composition}. Canonical constraints: "
+        f"{'; '.join(canonical_source.get('constraints', [])) or 'preserve the canonical logical visual'}. "
+        f"Review rejection to correct: {rejection_reason}. Exclusions: {'; '.join(exclusions)}."
+    )
+    prior = {"prompt": request.get("prompt"), "depends_on": request.get("depends_on", []),
+             "reference_asset_ids": request.get("reference_asset_ids", [])}
+    current = {"prompt": prompt, "depends_on": [], "reference_asset_ids": []}
+    if _json_sha256(prior) == _json_sha256(current):
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_MATERIAL_DELTA_REQUIRED")
+    proof = {
+        "version": CREATIVE_CORRECTION_FULL_REPLAN_VERSION, "mode": FULL_REPLAN,
+        "root_request_id": root_request_id, "supersedes_request_id": request["request_id"],
+        "correction_epoch": epoch, "canonical_source": canonical_source,
+        "subject": subject, "action": action, "location": location, "composition": composition,
+        "effective_reference_entity_ids": [], "exclusions": exclusions, "semantic_delta": semantic_delta,
+        "prior_generation_input_sha256": _json_sha256(prior),
+        "replanned_generation_input_sha256": _json_sha256(current),
+        "material_delta_fields": ["prompt", "semantic_composition", "subject", "action", "location", "exclusions", "effective_references"],
+        "rejection_evidence_sha256": _json_sha256(rejection),
+    }
+    return prompt, proof
 
 
 def _qc_replacement_genesis_projection(request: dict) -> dict | None:
@@ -2286,6 +2412,17 @@ def _qc_replacement_genesis_projection(request: dict) -> dict | None:
             or prompt_construction.get("effective_prompt_sha256") != expected_prompt_sha256
         ):
             return None
+    full_replan = request.get("creative_correction_replan_proof")
+    creative_epoch = request.get("creative_correction_epoch", 0)
+    if creative_epoch >= 2:
+        if (not isinstance(full_replan, dict)
+                or full_replan.get("version") != CREATIVE_CORRECTION_FULL_REPLAN_VERSION
+                or full_replan.get("mode") != FULL_REPLAN
+                or full_replan.get("supersedes_request_id") != request["replacement_of"]
+                or full_replan.get("correction_epoch") != creative_epoch
+                or full_replan.get("replanned_generation_input_sha256") == full_replan.get("prior_generation_input_sha256")
+                or not isinstance(full_replan.get("material_delta_fields"), list)):
+            return None
     return {
         "request_id": request["request_id"], "fingerprint": request["fingerprint"], "prompt": request["prompt"],
         "purpose": request["purpose"], "shot_id": request.get("shot_id"), "entity_id": request.get("entity_id"),
@@ -2295,6 +2432,10 @@ def _qc_replacement_genesis_projection(request: dict) -> dict | None:
         "replacement_reason": request["replacement_reason"], "replacement_epoch": request["replacement_epoch"],
         "epoch_nonce": request["epoch_nonce"],
         **({"prompt_construction": dict(prompt_construction)} if prompt_construction is not None else {}),
+        **({"root_request_id": request.get("root_request_id"), "supersedes_request_id": request.get("supersedes_request_id"),
+            "correction_epoch": request.get("correction_epoch"), "creative_correction_epoch": creative_epoch,
+            "creative_correction_replan_proof": full_replan}
+           if creative_epoch >= 2 else {}),
     }
 
 
@@ -2971,14 +3112,22 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                 return {"old_request_id": request_id, "replacement_request_id": completed["replacement_request_id"],
                         "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": True}
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_ALREADY_COMPLETED")
-        if not _owned_mandatory_qc_rejection(old_entry):
-            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+        current_epoch = _creative_correction_epoch(old_request, old_entry)
+        if current_epoch >= MAX_CREATIVE_CORRECTION_EPOCHS:
+            raise FlowError("CORRECTION_CHAIN_EXHAUSTED")
         attempts_sha256 = _json_sha256(old_entry["attempts"])
         selected_sha256 = old_entry["selected_asset"].get("sha256")
         historical_prompt = old_request["prompt"]
-        replacement_prompt, prompt_construction = _current_caption_safe_qc_replacement_prompt(old_request)
+        epoch = current_epoch + 1
+        root_request_id = _creative_correction_root_id(old_request, entries)
+        full_replan_proof = None
+        if epoch >= 2:
+            replacement_prompt, full_replan_proof = _deterministic_creative_full_replan(
+                paths, old_request, old_entry, epoch=epoch, root_request_id=root_request_id, operator_reason=reason)
+            prompt_construction = None
+        else:
+            replacement_prompt, prompt_construction = _current_caption_safe_qc_replacement_prompt(old_request)
         nonce = uuid.uuid4().hex
-        epoch = int(old_request.get("replacement_epoch", 0)) + 1
         replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
         if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_IDENTITY_COLLISION")
@@ -2994,6 +3143,13 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                             "replaces_request_id": request_id, "replacement_of": request_id,
                             "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
                             "replacement_epoch": epoch, "epoch_nonce": nonce})
+        if full_replan_proof is not None:
+            replacement.update({
+                "root_request_id": root_request_id, "logical_visual_id": root_request_id,
+                "supersedes_request_id": request_id, "correction_epoch": epoch,
+                "creative_correction_epoch": epoch,
+                "creative_correction_replan_proof": full_replan_proof,
+            })
         position = requests.index(old_request)
         requests[position] = replacement
         _migrate_request_references(requests_data, request_id, replacement_id)
@@ -3007,7 +3163,10 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                   "selected_asset_sha256": selected_sha256, "historical_provider_dispatch": "CONFIRMED",
                   "historical_attribution": "CONFIRMED",
                   "historical_prompt": historical_prompt,
-                  "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest()}
+                  "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest(),
+                  "correction_epoch": epoch,
+                  **({"creative_correction_replan_proof_sha256": _json_sha256(full_replan_proof)}
+                     if full_replan_proof is not None else {})}
         old_entry.setdefault("qc_replacement_events", []).append(event)
         old_entry.update({"status": QC_REJECTED_ASSET_REPLACED_STATUS, "replacement_request_id": replacement_id,
                           "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
@@ -3022,7 +3181,12 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                                      "selected_asset": None, "attribution_claim": "NONE", "status": "PENDING", "created_at": at,
                                      "replaces_request_id": request_id, "replacement_of": request_id,
                                      "replacement_reason": QC_REJECTED_ASSET_REPLACEMENT_REASON,
-                                     "replacement_epoch": epoch, "epoch_nonce": nonce})
+                                     "replacement_epoch": epoch, "epoch_nonce": nonce,
+                                     **({"root_request_id": root_request_id, "logical_visual_id": root_request_id,
+                                         "supersedes_request_id": request_id, "correction_epoch": epoch,
+                                         "creative_correction_epoch": epoch,
+                                         "creative_correction_replan_proof": full_replan_proof}
+                                        if full_replan_proof is not None else {})})
         if _json_sha256(old_entry.get("attempts")) != attempts_sha256 or old_entry["selected_asset"].get("sha256") != selected_sha256:
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_APPEND_ONLY_VIOLATION")
         transaction_id = "qc-rejected-asset-replacement-" + _json_sha256({"project_id": project_id, "old_request_id": request_id, "replacement_request_id": replacement_id})[:24]
@@ -3947,7 +4111,11 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
             and _confirmed_selected_attempt(entry)
         )
         if entry.get("replacement_of") and is_confirmed_creative_regeneration:
-            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
+            epoch = entry.get("creative_correction_epoch")
+            if epoch is None:
+                epoch = 1 if entry.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON else 0
+            if not isinstance(epoch, int) or epoch >= MAX_CREATIVE_CORRECTION_EPOCHS:
+                raise FlowError("CORRECTION_CHAIN_EXHAUSTED")
         if entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS or _owned_mandatory_qc_rejection(entry):
             # Release before the replacement operation takes its own project lock.
             pass

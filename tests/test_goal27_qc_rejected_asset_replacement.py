@@ -30,6 +30,13 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
         config = ProjectConfig("prj_goal27")
         paths = create_project(runtime, config)
         atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval": {"status": "APPROVED"}})
+        atomic_write_json(paths.artifact_path("output/continuity_bible.json"), {
+            "characters": [], "locations": [], "props": [],
+        })
+        atomic_write_json(paths.artifact_path("output/shot_plan.json"), {"shots": [{
+            "shot_id": "sh_001", "subject": "the witness", "action": "speaks calmly",
+            "location_id": "courtroom", "composition_intent": "medium close-up at the witness stand",
+        }]})
         old = {
             "request_id": self.OLD_REQUEST_ID, "fingerprint": "old-semantic-fingerprint", "purpose": "SHOT",
             "shot_id": "sh_001", "media_type": "IMAGE", "provider": "google_flow", "prompt": "quiet courtroom at dusk",
@@ -130,7 +137,7 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             self.assertFalse(_provider_generation_retry_authorized(parent))
             self.assertEqual((child["attempts"], child["provider_submissions"], child["status"]), ([], 0, "PENDING"))
 
-    def test_replacement_epoch_cannot_start_an_unbounded_qc_replacement_loop(self):
+    def test_legacy_qc_replacement_child_can_start_epoch_two(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths, _old, _selected, _attempt = self._project(root)
             result = replace_qc_rejected_asset(runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="mandatory QC")
@@ -138,30 +145,51 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
             replacement = manifest["requests"][1]
             replacement.update({"status": "FAILED_RETRYABLE", "failure_class": "NATURALNESS_QC_REJECTED", "selected_asset": {"attempt": 1},
-                                "attempts": [{"attempt": 1, "attribution_state": "CONFIRMED"}]})
+                                "attempts": [{"attempt": 1, "attribution_state": "CONFIRMED", "dispatch_confirmed": True}]})
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
-            with self.assertRaisesRegex(FlowError, "QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE"):
-                replace_qc_rejected_asset(runtime.root, config.project_id, replacement_id, reason="must not loop")
+            epoch2 = replace_qc_rejected_asset(runtime.root, config.project_id, replacement_id, reason="second bounded correction")
+            self.assertEqual(epoch2["status"], "QC_REJECTED_ASSET_REPLACED")
+            child = next(item for item in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]
+                         if item["request_id"] == epoch2["replacement_request_id"])
+            self.assertEqual((child["replacement_epoch"], child["attempts"], child["provider_submissions"]), (2, [], 0))
 
-    def test_ui_regenerate_of_replacement_child_fails_without_recording_rejection(self):
+    def test_bounded_creative_correction_epochs_replan_then_exhaust(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths, _old, selected, attempt = self._project(root)
-            replacement_id = replace_qc_rejected_asset(
+            epoch1 = replace_qc_rejected_asset(
                 runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="first bounded correction"
             )["replacement_request_id"]
             manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
-            replacement = next(item for item in manifest["requests"] if item["request_id"] == replacement_id)
+            replacement = next(item for item in manifest["requests"] if item["request_id"] == epoch1)
             replacement.update({
                 "status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
                 "attempts": [attempt], "provider_submissions": 1,
             })
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            epoch2 = queue_regeneration(runtime.root, config.project_id, epoch1, reason="second bounded correction")["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            epoch2_entry = next(item for item in manifest["requests"] if item["request_id"] == epoch2)
+            self.assertEqual((epoch2_entry["attempts"], epoch2_entry["provider_submissions"], epoch2_entry["status"]), ([], 0, "PENDING"))
+            self.assertEqual(epoch2_entry["replacement_epoch"], 2)
+            self.assertEqual(epoch2_entry["creative_correction_replan_proof"]["mode"], "FULL_REPLAN")
+            self.assertNotEqual(epoch2_entry["creative_correction_replan_proof"]["prior_generation_input_sha256"],
+                                epoch2_entry["creative_correction_replan_proof"]["replanned_generation_input_sha256"])
+
+            epoch2_entry.update({"status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
+                                 "attempts": [attempt], "provider_submissions": 1})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            epoch3 = queue_regeneration(runtime.root, config.project_id, epoch2, reason="third bounded correction")["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            epoch3_entry = next(item for item in manifest["requests"] if item["request_id"] == epoch3)
+            self.assertEqual((epoch3_entry["replacement_epoch"], epoch3_entry["attempts"], epoch3_entry["provider_submissions"]), (3, [], 0))
+
+            epoch3_entry.update({"status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
+                                 "attempts": [attempt], "provider_submissions": 1})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
             before_manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
             before_requests = read_json(paths.artifact_path("output/generation_requests.json"))
-
-            with self.assertRaisesRegex(FlowError, "QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE"):
-                queue_regeneration(runtime.root, config.project_id, replacement_id, reason="second UI regeneration")
-
+            with self.assertRaisesRegex(FlowError, "CORRECTION_CHAIN_EXHAUSTED"):
+                queue_regeneration(runtime.root, config.project_id, epoch3, reason="must not create epoch four")
             self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json")), before_manifest)
             self.assertEqual(read_json(paths.artifact_path("output/generation_requests.json")), before_requests)
 
