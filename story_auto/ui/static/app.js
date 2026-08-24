@@ -278,6 +278,8 @@ function friendlyError(error) {
     KOKORO_CONFIGURATION_INVALID: ['Kokoro settings are invalid','Review the local Kokoro runtime, model snapshot, and narrator settings, then try again.','settings','Open settings'],
     AMBIENT_VISUAL_BRIEF_OVER_BUDGET: ['Visual planning needs to be regenerated','Story Auto kept the narration and audio, but the visual brief must be made more concise before images can be created.','review_plan','Review visual plan'],
     AMBIENT_CHAPTER_HARD_MAX_EXCEEDED: ['Visual planning needs to be regenerated','The story contains more incompatible visual states than this Ambient style can safely support. Review the visual plan before continuing.','review_plan','Review visual plan'],
+    PROJECT_LOCKED: ['This project is still working','Story Auto is finishing another saved operation. Wait for it to finish, then refresh the project.','open_project','Refresh project'],
+    ArtifactWriteError: ['A saved update needs a brief retry','A temporary local file lock interrupted saving project state. Refresh the project after a moment; this does not send another Flow request.','open_project','Refresh project'],
     IMAGE_ASSET_INVALID: ['Recovered image could not be used','Check that the path points to a readable image downloaded from the matching Flow result.','retry','Try again'],
     VIDEO_ASSET_INVALID: ['Recovered video could not be used','Check that the path points to a readable video downloaded from the matching Flow result.','retry','Try again'],
   };
@@ -370,8 +372,16 @@ async function showReview() {
       <section class="surface"><div class="surface-head"><div><h2>Items needing review</h2><p>${review.issues.length ? `${review.issues.length} item${review.issues.length === 1 ? ' needs' : 's need'} a decision.` : 'No remaining quality issues were found.'}</p></div></div><div class="issue-list">${issues || '<div class="empty-library"><strong>Quality checks are clear.</strong><p>No item needs your attention.</p></div>'}</div></section>`;
     $('#backProject').addEventListener('click', () => openProject(state.project));
     $('#copyPublishing')?.addEventListener('click', async () => { await navigator.clipboard.writeText(`${publishing.selected_title || review.title}\n\n${publishing.description}`); toast('Title and description copied.'); });
-    document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport()})}); toast('Scene approved.'); await showReview(); }));
-    document.querySelectorAll('[data-regenerate]').forEach(button => button.addEventListener('click', async () => { await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'regenerate',request_id:button.dataset.regenerate})}); toast('Scene queued for regeneration.'); await openProject(state.project); }));
+    document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', async () => {
+      const projectId=state.project; button.disabled=true;
+      try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'approve_asset',request_id:button.dataset.approve,report:qcReport()})}); toast('Scene approved.'); await showReview(); }
+      catch (error) { const friendly=friendlyError(error); state.error=friendly; toast(friendly.title,true); await openProject(projectId); state.error=friendly; renderProject(); }
+    }));
+    document.querySelectorAll('[data-regenerate]').forEach(button => button.addEventListener('click', async () => {
+      const projectId=state.project; button.disabled=true;
+      try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'regenerate',request_id:button.dataset.regenerate})}); toast('Scene queued for regeneration.'); await openProject(projectId); }
+      catch (error) { const friendly=friendlyError(error); state.error=friendly; toast(friendly.title,true); await openProject(projectId); state.error=friendly; renderProject(); }
+    }));
     document.querySelectorAll('[data-review-flow]').forEach(button => button.addEventListener('click', async () => {
       const projectId=state.project; button.disabled=true;
       try { await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action:'open_flow_sign_in'})}); toast('Complete sign-in, then choose Create again.'); }

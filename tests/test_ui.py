@@ -34,6 +34,8 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"KOKORO_MODEL_NOT_FOUND",script); self.assertIn(b"Kokoro model files are missing",script)
                 self.assertIn(b"KOKORO_RUNTIME_LOAD_FAILED",script); self.assertIn(b"Kokoro readiness",script)
                 self.assertIn(b"AMBIENT_VISUAL_BRIEF_OVER_BUDGET",script); self.assertIn(b"Visual planning needs to be regenerated",script)
+                self.assertIn(b"PROJECT_LOCKED",script); self.assertIn(b"This project is still working",script)
+                self.assertIn(b"ArtifactWriteError",script); self.assertIn(b"does not send another Flow request",script)
                 self.assertIn(b"issue.technical_code || issue.request_id",script)
                 self.assertIn(b"const projectId = state.project",script)
                 self.assertIn(b"state.view === 'project' && state.project === projectId",script)

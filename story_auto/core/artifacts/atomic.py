@@ -6,12 +6,40 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 import hashlib
 
 
 class ArtifactWriteError(OSError):
     """Raised when an artifact cannot be atomically published."""
+
+
+_TRANSIENT_REPLACE_ERRNOS = {getattr(os, "EACCES", 13), getattr(os, "EBUSY", 16)}
+_TRANSIENT_REPLACE_WINERRORS = {5, 32, 33}
+_REPLACE_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    """Publish a completed sibling file, tolerating brief Windows share locks.
+
+    The temporary file has already been flushed.  Retrying only the replace
+    operation neither rewrites it nor crosses any provider boundary, and a
+    final failure still leaves the prior published artifact intact.
+    """
+
+    for delay in (*_REPLACE_DELAYS_SECONDS, None):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as error:
+            transient = (
+                error.errno in _TRANSIENT_REPLACE_ERRNOS
+                or getattr(error, "winerror", None) in _TRANSIENT_REPLACE_WINERRORS
+            )
+            if not transient or delay is None:
+                raise
+            time.sleep(delay)
 
 
 def atomic_write_text(path: Path | str, content: str) -> None:
@@ -37,7 +65,7 @@ def atomic_write_text(path: Path | str, content: str) -> None:
             temporary.write(content)
             temporary.flush()
             os.fsync(temporary.fileno())
-        os.replace(temp_path, target)
+        _replace_with_retry(temp_path, target)
         temp_path = None
     except OSError as error:
         raise ArtifactWriteError(f"could not atomically write {target}") from error
@@ -63,7 +91,7 @@ def atomic_write_bytes(path: Path | str, content: bytes) -> None:
     try:
         with tempfile.NamedTemporaryFile(mode="wb", delete=False, dir=target.parent, prefix=f".{target.name}.", suffix=".tmp") as temporary:
             temp_path = Path(temporary.name); temporary.write(content); temporary.flush(); os.fsync(temporary.fileno())
-        os.replace(temp_path, target); temp_path = None
+        _replace_with_retry(temp_path, target); temp_path = None
     except OSError as error:
         raise ArtifactWriteError(f"could not atomically write {target}") from error
     finally:

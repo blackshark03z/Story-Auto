@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -63,6 +64,27 @@ class AtomicArtifactTests(unittest.TestCase):
                     atomic_write_text(target, "replacement")
             self.assertEqual(target.read_text(encoding="utf-8"), "previous")
             self.assertEqual(list(Path(directory).glob(".artifact.txt.*.tmp")), [])
+
+    def test_transient_replace_lock_is_retried_without_rewriting_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "artifact.txt"
+            sharing_lock = PermissionError(13, "sharing violation")
+            original_replace = os.replace
+            calls = 0
+
+            def replace_after_one_lock(source, destination):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise sharing_lock
+                return original_replace(source, destination)
+
+            with patch("story_auto.core.artifacts.atomic.os.replace", side_effect=replace_after_one_lock) as replace, \
+                 patch("story_auto.core.artifacts.atomic.time.sleep") as sleep:
+                atomic_write_text(target, "published once")
+            self.assertEqual(target.read_text(encoding="utf-8"), "published once")
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.05)
 
     def test_json_roundtrip_and_file_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
