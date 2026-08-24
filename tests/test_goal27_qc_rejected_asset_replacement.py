@@ -143,6 +143,28 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             with self.assertRaisesRegex(FlowError, "QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE"):
                 replace_qc_rejected_asset(runtime.root, config.project_id, replacement_id, reason="must not loop")
 
+    def test_ui_regenerate_of_replacement_child_fails_without_recording_rejection(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths, _old, selected, attempt = self._project(root)
+            replacement_id = replace_qc_rejected_asset(
+                runtime.root, config.project_id, self.OLD_REQUEST_ID, reason="first bounded correction"
+            )["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            replacement = next(item for item in manifest["requests"] if item["request_id"] == replacement_id)
+            replacement.update({
+                "status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
+                "attempts": [attempt], "provider_submissions": 1,
+            })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+            before_manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            before_requests = read_json(paths.artifact_path("output/generation_requests.json"))
+
+            with self.assertRaisesRegex(FlowError, "QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE"):
+                queue_regeneration(runtime.root, config.project_id, replacement_id, reason="second UI regeneration")
+
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json")), before_manifest)
+            self.assertEqual(read_json(paths.artifact_path("output/generation_requests.json")), before_requests)
+
     def test_broken_immutable_lineage_history_or_duplicate_replacement_fails_closed(self):
         mutations = {
             "broken_lineage": lambda requests, manifest, replacement_id: requests[0].update({"replacement_of": "wrong"}),

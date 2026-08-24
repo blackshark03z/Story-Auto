@@ -3933,6 +3933,21 @@ def queue_regeneration(runtime_root: Path | str, project_id: str, request_id: st
         path, manifest = _manifest(paths, project_id)
         entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
         if not entry or entry.get("status") in {"GENERATING", "AMBIGUOUS"}: raise FlowError("REGENERATION_NOT_ALLOWED")
+        # A generated replacement already consumed this corrective lineage's
+        # single fresh epoch.  Reject a further UI regeneration *before*
+        # recording any creative-rejection state: otherwise the UI would
+        # mutate the parent and then fail when the canonical replacement
+        # transaction correctly refuses an unbounded chain.
+        is_confirmed_creative_regeneration = (
+            entry.get("status") == "QC_PENDING"
+            and _confirmed_selected_attempt(entry)
+        ) or (
+            entry.get("status") == "FAILED_RETRYABLE"
+            and entry.get("failure_class") in {"OPERATOR_REGENERATION", "CREATIVE_REJECTED"}
+            and _confirmed_selected_attempt(entry)
+        )
+        if entry.get("replacement_of") and is_confirmed_creative_regeneration:
+            raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_NOT_ELIGIBLE")
         if entry.get("status") == QC_REJECTED_ASSET_REPLACED_STATUS or _owned_mandatory_qc_rejection(entry):
             # Release before the replacement operation takes its own project lock.
             pass
