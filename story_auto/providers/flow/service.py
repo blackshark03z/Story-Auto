@@ -2943,12 +2943,21 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
             or not isinstance(parent_id, str) or not parent_id):
         return False
     reason = item.get("correction_reason")
+    creative_epoch = item.get("creative_correction_epoch")
+    is_full_creative_correction = (
+        item.get("replacement_reason") == QC_REJECTED_ASSET_REPLACEMENT_REASON
+        and isinstance(creative_epoch, int)
+        and creative_epoch >= 2
+    )
     if reason == QC_CORRECTIVE_REPLAN_REASON:
         resolved = _qc_corrective_replan_transaction(paths, project_id, parent_id, request_id)
         projection = _qc_corrective_replan_genesis_projection
     elif reason == QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON:
         resolved = _qc_corrective_pre_dispatch_transaction(paths, project_id, parent_id, request_id)
         projection = _qc_corrective_pre_dispatch_genesis_projection
+    elif is_full_creative_correction:
+        resolved = _qc_rejected_asset_replacement_transaction(paths, project_id, parent_id, request_id)
+        projection = _qc_replacement_genesis_projection
     else:
         return False
     if resolved is None:
@@ -2957,6 +2966,22 @@ def _qc_corrective_metadata_has_direct_origin(paths, project_id: str, item: dict
     stored_requests = transaction["targets"]["generation_requests"]["value"].get("requests", [])
     stored = next((request for request in stored_requests if request.get("request_id") == request_id), None)
     if "fingerprint" not in item or "prompt" not in item:
+        if is_full_creative_correction:
+            return (
+                projection(stored) is not None
+                and item.get("request_identity_sha256") == stored.get("fingerprint")
+                and item.get("prompt_sha256") == hashlib.sha256(stored.get("prompt", "").encode("utf-8")).hexdigest()
+                and item.get("related_identity") == (stored.get("shot_id") or stored.get("entity_id"))
+                and item.get("media_type") == stored.get("media_type")
+                and item.get("provider") == stored.get("provider")
+                and item.get("replacement_of") == stored.get("replacement_of")
+                and item.get("replacement_reason") == stored.get("replacement_reason")
+                and item.get("replacement_epoch") == stored.get("replacement_epoch")
+                and item.get("root_request_id") == stored.get("root_request_id")
+                and item.get("supersedes_request_id") == stored.get("supersedes_request_id")
+                and item.get("creative_correction_epoch") == stored.get("creative_correction_epoch")
+                and item.get("creative_correction_replan_proof") == stored.get("creative_correction_replan_proof")
+            )
         common = (
             projection(stored) is not None
             and item.get("request_identity_sha256") == stored.get("fingerprint")

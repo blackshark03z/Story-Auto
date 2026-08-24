@@ -11,6 +11,7 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.service import (
     FlowError,
     FlowExecutor,
+    _first_invalid_request_replacement,
     _provider_generation_retry_authorized,
     _runnable,
     execute_generation,
@@ -174,6 +175,9 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             self.assertEqual(epoch2_entry["creative_correction_replan_proof"]["mode"], "FULL_REPLAN")
             self.assertNotEqual(epoch2_entry["creative_correction_replan_proof"]["prior_generation_input_sha256"],
                                 epoch2_entry["creative_correction_replan_proof"]["replanned_generation_input_sha256"])
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+            entries = {item["request_id"]: item for item in manifest["requests"]}
+            self.assertIsNone(_first_invalid_request_replacement(paths, config.project_id, entries, requests))
 
             epoch2_entry.update({"status": "QC_PENDING", "failure_class": None, "selected_asset": selected,
                                  "attempts": [attempt], "provider_submissions": 1})
