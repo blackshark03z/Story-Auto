@@ -44,8 +44,12 @@ from story_auto.providers.llm.gemini import LLMMedia
 from .postprocess import (
     PROCESSOR_NAME,
     PROCESSOR_VERSION,
+    VIDEO_PROCESSOR_NAME,
+    VIDEO_PROCESSOR_VERSION,
     FlowImagePostprocessError,
+    FlowVideoPostprocessError,
     process_flow_image,
+    process_flow_video,
     profile_evidence,
 )
 from .validation import AssetValidationError, validate_image, validate_video
@@ -151,6 +155,7 @@ LOCAL_IMAGE_FAILURES = {
 }
 TEMPORAL_SALVAGE_EVENT = "LOCAL_TEMPORAL_TRIM_RETIME"
 TEMPORAL_SALVAGE_MAX_SLOWDOWN = 1.08
+VIDEO_MARK_REMOVAL_EVENT = "LOCAL_FLOW_VIDEO_MARK_REMOVAL"
 FALSE_POSITIVE_PRODUCTION_QC_FAILURES = {
     "NATURALNESS_QC_REJECTED",
     "VISIBLE_PROVIDER_WATERMARK",
@@ -1989,6 +1994,105 @@ def review_temporal_asset(runtime_root: Path | str, project_id: str, request_id:
         entry.update({"status": "SUCCEEDED" if semantic_ready else "QC_PENDING",
                       "failure_class": None if semantic_ready else "VISUAL_NARRATION_ALIGNMENT_QC_REQUIRED", "updated_at": _now()})
         atomic_write_json(path, manifest)
+
+
+def create_local_video_mark_removal(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                    expected_source_sha256: str) -> dict:
+    """Append one exact-byte Flow-mark cleanup derivative for a rejected video.
+
+    This never retries or changes a provider attempt.  It is limited to one
+    visible-watermark rejection that is bound to the current confirmed source
+    bytes; the original selected asset and rejection remain immutable history.
+    """
+    expected_sha = expected_source_sha256.lower() if isinstance(expected_source_sha256, str) else ""
+    if len(expected_sha) != 64 or any(char not in "0123456789abcdef" for char in expected_sha):
+        raise FlowError("VIDEO_MARK_REMOVAL_INVALID")
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        entry = next((item for item in manifest["requests"] if item.get("request_id") == request_id), None)
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if (not isinstance(entry, dict) or entry.get("media_type") != "VIDEO"
+                or entry.get("status") != "FAILED_RETRYABLE"
+                or entry.get("failure_class") != "VISIBLE_PROVIDER_WATERMARK"
+                or not isinstance(selected, dict) or selected.get("sha256") != expected_sha
+                or not _valid_selected(paths, entry)
+                or entry.get("video_mark_removals") not in (None, [])):
+            raise FlowError("VIDEO_MARK_REMOVAL_NOT_ELIGIBLE")
+        source_path = paths.artifact_path(selected["path"])
+        if sha256_file(source_path) != expected_sha:
+            raise FlowError("VIDEO_MARK_REMOVAL_NOT_ELIGIBLE")
+        source_attempt = selected.get("attempt")
+        attempt = next((item for item in entry.get("attempts", [])
+                        if isinstance(item, dict) and item.get("attempt") == source_attempt), None)
+        if (not isinstance(source_attempt, int) or not isinstance(attempt, dict)
+                or attempt.get("status") != "SUCCEEDED"
+                or attempt.get("attribution_state") != "CONFIRMED"
+                or attempt.get("asset_path") != selected.get("path")
+                or attempt.get("asset_sha256") != expected_sha):
+            raise FlowError("VIDEO_MARK_REMOVAL_NOT_ELIGIBLE")
+        reviews = entry.get("quality_reviews")
+        latest = reviews[-1] if isinstance(reviews, list) and reviews else None
+        if (not isinstance(latest, dict) or latest.get("status") != "REJECTED"
+                or latest.get("failure_class") != "VISIBLE_PROVIDER_WATERMARK"
+                or latest.get("selected_asset_path") != selected.get("path")
+                or latest.get("selected_asset_sha256") != expected_sha):
+            raise FlowError("VIDEO_MARK_REMOVAL_NOT_ELIGIBLE")
+        transform = {
+            "operation": VIDEO_MARK_REMOVAL_EVENT,
+            "parent_asset_path": selected["path"],
+            "parent_asset_sha256": expected_sha,
+            "parent_provider_attempt": source_attempt,
+            "semantic_content_insertion": False,
+            "provider_submission": False,
+        }
+        transform_sha = _json_sha256(transform)
+        rel = f"assets/video/{request_id}/derived/video_mark_removal_{transform_sha[:16]}.mp4"
+        output = paths.artifact_path(rel)
+        staged = output.with_name(output.stem + ".staged" + output.suffix)
+        if output.exists() or staged.exists():
+            raise FlowError("VIDEO_MARK_REMOVAL_OUTPUT_CONFLICT")
+        try:
+            result = process_flow_video(source_path, staged)
+            staged.replace(output)
+        except FlowVideoPostprocessError as error:
+            if staged.exists():
+                staged.unlink()
+            raise FlowError(error.failure_class, str(error)) from error
+        derived_sha = result.get("output_sha256")
+        if not isinstance(derived_sha, str) or sha256_file(output) != derived_sha:
+            raise FlowError("VIDEO_MARK_REMOVAL_DERIVATIVE_INVALID")
+        event = {
+            "event": "VIDEO_MARK_REMOVAL_CREATED",
+            "at": _now(),
+            "source_entry_state": {"status": entry.get("status"), "failure_class": entry.get("failure_class")},
+            "source_selected_asset": copy.deepcopy(selected),
+            "source_selected_asset_sha256": expected_sha,
+            "source_rejection": copy.deepcopy(latest),
+            "transform": transform,
+            "transform_sha256": transform_sha,
+            "derived_asset_path": rel,
+            "derived_asset_sha256": derived_sha,
+            "derived_metadata": result["output_metadata"],
+            "processor_name": result["processor_name"],
+            "processor_version": result["processor_version"],
+            "flow_mark_profile_version": result["profile_version"],
+            "mask_sha256": result["mask_sha256"],
+        }
+        derived = {
+            "path": rel, "sha256": derived_sha, "attempt": source_attempt,
+            "metadata": result["output_metadata"], "production_qc": "PENDING", "temporal_qc": "PENDING",
+            "provenance": VIDEO_MARK_REMOVAL_EVENT, "parent_asset_path": selected["path"],
+            "parent_asset_sha256": expected_sha, "parent_provider_attempt": source_attempt,
+            "transform": transform, "transform_sha256": transform_sha,
+            "processor_name": result["processor_name"], "processor_version": result["processor_version"],
+            "flow_mark_profile_version": result["profile_version"], "mask_sha256": result["mask_sha256"],
+        }
+        entry.setdefault("video_mark_removals", []).append(event)
+        entry.update({"selected_asset": derived, "status": "QC_PENDING", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(path, manifest)
+        return {"selected_asset": derived, "source_asset_sha256": expected_sha,
+                "provider_submissions": entry.get("provider_submissions", 0), "idempotent": False}
 
 
 def create_local_temporal_salvage(runtime_root: Path | str, project_id: str, request_id: str, *,

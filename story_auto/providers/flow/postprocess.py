@@ -1,4 +1,4 @@
-"""Deterministic local cleanup for supported Google Flow image outputs.
+"""Deterministic local cleanup for supported Google Flow media outputs.
 
 Provider originals are inputs only.  This module always writes a distinct
 derivative and fails closed when the Flow mark geometry is not known.
@@ -17,11 +17,13 @@ import tempfile
 from PIL import Image, ImageDraw, ImageFilter
 
 from story_auto.core.artifacts import sha256_file
-from .validation import AssetValidationError, validate_image
+from .validation import AssetValidationError, validate_image, validate_video
 
 
 PROCESSOR_NAME = "flow-image-removelogo"
 PROCESSOR_VERSION = "1.0.0"
+VIDEO_PROCESSOR_NAME = "flow-video-removelogo"
+VIDEO_PROCESSOR_VERSION = "1.0.0"
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,12 @@ PROFILES: dict[tuple[int, int], FlowMarkProfile] = {
 
 
 class FlowImagePostprocessError(RuntimeError):
+    def __init__(self, failure_class: str, detail: str = "") -> None:
+        self.failure_class = failure_class
+        super().__init__(failure_class + (f": {detail}" if detail else ""))
+
+
+class FlowVideoPostprocessError(RuntimeError):
     def __init__(self, failure_class: str, detail: str = "") -> None:
         self.failure_class = failure_class
         super().__init__(failure_class + (f": {detail}" if detail else ""))
@@ -131,6 +139,65 @@ def process_flow_image(source: Path, output: Path, *, runner=subprocess.run) -> 
     return {
         "processor_name": PROCESSOR_NAME,
         "processor_version": PROCESSOR_VERSION,
+        "profile_version": profile.version,
+        "profile_sha256": _profile_fingerprint(profile),
+        "mask_sha256": mask_sha256,
+        "source_sha256": source_metadata["sha256"],
+        "output_sha256": output_metadata["sha256"],
+        "source_metadata": source_metadata,
+        "output_metadata": output_metadata,
+    }
+
+
+def process_flow_video(source: Path, output: Path, *, runner=subprocess.run) -> dict[str, Any]:
+    """Create and validate one clean derivative from immutable Flow video bytes."""
+    source = Path(source)
+    output = Path(output)
+    try:
+        if source.resolve() == output.resolve():
+            raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_OUTPUT_CONFLICT")
+        source_metadata = validate_video(source)
+    except FlowVideoPostprocessError:
+        raise
+    except AssetValidationError as error:
+        raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_SOURCE_INVALID") from error
+
+    profile = PROFILES.get((source_metadata["width"], source_metadata["height"]))
+    if profile is None:
+        raise FlowVideoPostprocessError(
+            "FLOW_VIDEO_POSTPROCESS_UNSUPPORTED_GEOMETRY",
+            f"{source_metadata['width']}x{source_metadata['height']}",
+        )
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="flow-video-clean-", dir=output.parent) as temporary:
+        work = Path(temporary)
+        mask = work / "flow_mark_mask.png"
+        candidate = work / ("candidate" + (output.suffix.lower() or ".mp4"))
+        mask_sha256 = _write_mask(mask, profile)
+        command = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-i", str(source), "-vf", f"removelogo=f={mask.name}",
+            "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0",
+            "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+            "-c:a", "copy", "-movflags", "+faststart", str(candidate),
+        ]
+        try:
+            runner(command, cwd=str(work), capture_output=True, text=True, check=True)
+            output_metadata = validate_video(candidate)
+        except (subprocess.SubprocessError, OSError, AssetValidationError) as error:
+            detail = getattr(error, "stderr", "") or str(error)
+            raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_FAILED", detail.strip()) from error
+        if (output_metadata["width"], output_metadata["height"]) != (profile.width, profile.height):
+            raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_DIMENSIONS_CHANGED")
+        if abs(float(output_metadata["duration_seconds"]) - float(source_metadata["duration_seconds"])) > .05:
+            raise FlowVideoPostprocessError("FLOW_VIDEO_POSTPROCESS_DURATION_CHANGED")
+        os.replace(candidate, output)
+
+    output_metadata = validate_video(output)
+    return {
+        "processor_name": VIDEO_PROCESSOR_NAME,
+        "processor_version": VIDEO_PROCESSOR_VERSION,
         "profile_version": profile.version,
         "profile_sha256": _profile_fingerprint(profile),
         "mask_sha256": mask_sha256,

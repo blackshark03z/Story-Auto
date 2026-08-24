@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import subprocess
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -12,7 +13,9 @@ from story_auto.core.render.plan import resolve_render_plan
 from story_auto.core.visual.quality import MediaQualityError, validate_production_qc
 from story_auto.providers.flow.postprocess import (
     FlowImagePostprocessError,
+    FlowVideoPostprocessError,
     process_flow_image,
+    process_flow_video,
     supported_profiles,
 )
 from story_auto.providers.flow.service import (
@@ -23,6 +26,7 @@ from story_auto.providers.flow.service import (
     execute_generation,
     invalidate_asset_attribution,
     queue_regeneration,
+    create_local_video_mark_removal,
     reconcile_local_assets,
     reuse_exact_flow_asset,
     review_production_asset,
@@ -51,9 +55,9 @@ class FlowImagePostprocessTests(unittest.TestCase):
         return runtime, config, paths
 
     @staticmethod
-    def _request(request_id="ref", *, purpose="REFERENCE", depends_on=None):
+    def _request(request_id="ref", *, purpose="REFERENCE", depends_on=None, media_type="IMAGE"):
         return {"request_id": request_id, "fingerprint": request_id + "-identity", "purpose": purpose,
-                "shot_id": "sh_0001" if purpose == "SHOT" else None, "media_type": "IMAGE",
+                "shot_id": "sh_0001" if purpose == "SHOT" else None, "media_type": media_type,
                 "prompt": request_id, "depends_on": depends_on or [], "provider": "google_flow",
                 "output_count": 1, "execution_tier": "STANDARD_PRODUCTION"}
 
@@ -71,6 +75,18 @@ class FlowImagePostprocessTests(unittest.TestCase):
             draw.polygon([(1278, 644), (1307, 671), (1278, 698), (1249, 671)], fill="white")
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path, "PNG")
+
+    @classmethod
+    def _write_flow_video(cls, path: Path, *, size=(1280, 720)):
+        poster = path.with_suffix(".source.png")
+        cls._write_flow_image(poster, size=size)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(poster),
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-t", "2",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(path),
+        ], check=True)
+        poster.unlink()
 
     def _executor(self, calls, *, size=(1280, 720)):
         def generate(request, refs, path):
@@ -92,6 +108,18 @@ class FlowImagePostprocessTests(unittest.TestCase):
                 self.assertNotEqual(result["source_sha256"], result["output_sha256"])
                 self.assertEqual((result["output_metadata"]["width"], result["output_metadata"]["height"]), size)
                 self.assertEqual(len(result["mask_sha256"]), 64)
+
+    def test_supported_video_profile_creates_a_distinct_valid_derivative(self):
+        with tempfile.TemporaryDirectory() as root:
+            raw = Path(root) / "raw.mp4"; clean = Path(root) / "clean.mp4"
+            self._write_flow_video(raw)
+            raw_before = sha256_file(raw)
+            result = process_flow_video(raw, clean)
+            self.assertEqual(sha256_file(raw), raw_before)
+            self.assertNotEqual(result["source_sha256"], result["output_sha256"])
+            self.assertEqual((result["output_metadata"]["width"], result["output_metadata"]["height"]), (1280, 720))
+            self.assertLess(abs(result["output_metadata"]["duration_seconds"] - result["source_metadata"]["duration_seconds"]), .05)
+            self.assertEqual(result["processor_name"], "flow-video-removelogo")
 
     def test_production_image_preserves_raw_and_selects_lineaged_derivative(self):
         with tempfile.TemporaryDirectory() as root:
@@ -204,6 +232,42 @@ class FlowImagePostprocessTests(unittest.TestCase):
             with self.subTest(media_type=media_type), self.assertRaises(MediaQualityError) as error:
                 validate_production_qc(_report(visible=True), provider="google_flow", media_type=media_type)
             self.assertEqual(error.exception.failure_class, "VISIBLE_PROVIDER_WATERMARK")
+
+    def test_video_mark_removal_is_one_bounded_local_derivative(self):
+        with tempfile.TemporaryDirectory() as root:
+            request = self._request("video", purpose="SHOT", media_type="VIDEO")
+            runtime, config, paths = self._project(root, [request])
+            rel = "assets/video/video/attempt_001.mp4"; source = paths.artifact_path(rel)
+            self._write_flow_video(source); digest = sha256_file(source)
+            from story_auto.providers.flow.validation import validate_video
+            metadata = validate_video(source)
+            rejection = {"reviewed_at": "2026-08-24T00:00:00+00:00", "status": "REJECTED",
+                         "failure_class": "VISIBLE_PROVIDER_WATERMARK", "report": _report(visible=True),
+                         "selected_asset_path": rel, "selected_asset_sha256": digest}
+            selected = {"path": rel, "sha256": digest, "attempt": 1, "metadata": metadata,
+                        "production_qc": "REJECTED"}
+            entry = {"request_id": "video", "request_identity_sha256": request["fingerprint"],
+                     "media_type": "VIDEO", "provider": "google_flow", "status": "FAILED_RETRYABLE",
+                     "failure_class": "VISIBLE_PROVIDER_WATERMARK", "provider_submissions": 1,
+                     "attempts": [{"attempt": 1, "status": "SUCCEEDED", "attribution_state": "CONFIRMED",
+                                   "asset_path": rel, "asset_sha256": digest}], "selected_asset": selected,
+                     "quality_reviews": [rejection]}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),
+                              {"schema_version": "story-auto-generation-manifest/1.0.0",
+                               "project_id": config.project_id, "requests": [entry]})
+            result = create_local_video_mark_removal(runtime.root, config.project_id, "video",
+                                                     expected_source_sha256=digest)
+            saved = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            derived = saved["selected_asset"]
+            self.assertEqual((saved["provider_submissions"], len(saved["attempts"]), saved["status"]), (1, 1, "QC_PENDING"))
+            self.assertEqual((derived["parent_asset_sha256"], derived["production_qc"], derived["temporal_qc"]),
+                             (digest, "PENDING", "PENDING"))
+            self.assertEqual(saved["video_mark_removals"][0]["source_selected_asset"], selected)
+            self.assertEqual(result["provider_submissions"], 1)
+            self.assertTrue(paths.artifact_path(derived["path"]).is_file())
+            with self.assertRaisesRegex(FlowError, "VIDEO_MARK_REMOVAL_NOT_ELIGIBLE"):
+                create_local_video_mark_removal(runtime.root, config.project_id, "video",
+                                                expected_source_sha256=digest)
 
     def test_render_plan_resolves_exact_clean_selected_path_and_hash(self):
         with tempfile.TemporaryDirectory() as root:
