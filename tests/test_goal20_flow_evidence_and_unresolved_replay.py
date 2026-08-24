@@ -264,6 +264,22 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         )
         self.assertEqual((stable, observations), (3, [1, 2, 3]))
 
+    def test_visible_terminal_failure_tile_is_observed_but_not_pending_provider_work(self):
+        records = [{"card_id": "failed-card", "asset_id": None, "media_type": None,
+                    "state": "FAILED", "failure_class": "PROVIDER_VISIBLE_TERMINAL_FAILURE"}]
+
+        class Dom:
+            def provider_surface(self):
+                return {"records": records, "global_pending_count": 0}
+
+        _, stable = _stable_surface(Dom(), "IMAGE", timeout_seconds=1, required_stable_polls=2,
+                                    poll_seconds=0)
+        self.assertEqual(stable, 2)
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        observation = tracker.observe(records)
+        self.assertEqual((observation.state, observation.candidate_delta_count, observation.lineage_card_id),
+                         ("WAITING", 0, None))
+
     def test_trial_b_pre_dispatch_history_persists_asset_through_empty_video_baseline(self):
         old_video = {"card_id": "old-card", "asset_id": "asset-a", "media_type": "VIDEO", "state": "READY"}
         old_thumbnail = {**old_video, "media_type": "VIDEO_THUMBNAIL"}

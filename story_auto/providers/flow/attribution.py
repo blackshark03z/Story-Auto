@@ -101,13 +101,14 @@ class RequestAttributionTracker:
     def observe(self, current: list[dict[str, Any]], *, provider_busy: bool = False) -> AttributionObservation:
         typed = records_for_type(current, self.media_type)
         ready = [record for record in typed if record.get("state") == "READY" and provider_identity(record)]
-        pending = [record for record in typed if record.get("state") != "READY"]
+        pending = [record for record in typed if record.get("state") == "PENDING"]
         unseen = [record for record in ready if provider_identity(record) not in self.baseline_identities]
         all_new_cards = {
             str(record.get("card_id")) for record in typed
             if record.get("card_id")
             and str(record.get("card_id")) not in self.baseline_cards
-            and (record.get("state") != "READY" or provider_identity(record) not in self.baseline_identities)
+            and (record.get("state") == "PENDING"
+                 or (record.get("state") == "READY" and provider_identity(record) not in self.baseline_identities))
         }
 
         if self.lineage_card_id is None and self.lineage_identity is None:
@@ -117,7 +118,7 @@ class RequestAttributionTracker:
                 self.lineage_card_id = next(iter(all_new_cards))
                 self.lineage_from_pending = any(
                     str(record.get("card_id") or "") == self.lineage_card_id
-                    and record.get("state") != "READY"
+                    and record.get("state") == "PENDING"
                     for record in typed
                 )
             elif len(unseen) == self.expected_count == 1:
