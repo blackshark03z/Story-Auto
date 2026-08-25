@@ -67,6 +67,33 @@ class Response:
     def read(self): return self.data
 
 class FlowTests(unittest.TestCase):
+    def test_attempt_persistence_keeps_poll_evidence_once_without_mutating_live_projections(self):
+        snapshot = {
+            "schema_version": "flow-provider-poll-evidence/1.0.0",
+            "observations": [{"phase": "POST_DISPATCH", "identity": "asset:one"}],
+            "decision_bindings": [{"binding_sha256": "bound"}],
+        }
+        settings = {
+            "provider_poll_evidence": snapshot,
+            "provider_poll_timeline": snapshot["observations"],
+            "provider_poll_decision_bindings": snapshot["decision_bindings"],
+            "provider_poll_authoritative_binding": snapshot["decision_bindings"][0],
+            "poll_evidence_version": snapshot["schema_version"],
+        }
+        attempt = {}
+
+        flow_service._record_attempt_provider_state(attempt, SimpleNamespace(last_settings=settings))
+
+        persisted = attempt["provider_settings"]
+        self.assertEqual(persisted["provider_poll_evidence"], snapshot)
+        self.assertNotIn("provider_poll_timeline", persisted)
+        self.assertNotIn("provider_poll_decision_bindings", persisted)
+        self.assertNotIn("provider_poll_evidence", attempt)
+        self.assertNotIn("provider_poll_timeline", attempt)
+        self.assertNotIn("provider_poll_decision_bindings", attempt)
+        self.assertEqual(settings["provider_poll_timeline"], snapshot["observations"])
+        self.assertEqual(settings["provider_poll_decision_bindings"], snapshot["decision_bindings"])
+
     def test_acquisition_filters_candidates_by_requested_media_type(self):
         records=[{"key":"stale-video","kind":"VIDEO"},{"key":"avatar","kind":"IMG","width":96},{"key":"new-image","kind":"IMG","width":1376},{"key":"video-source","kind":"SOURCE"}]
         self.assertEqual([x["key"] for x in records_for_media(records,"IMAGE")],["new-image"])

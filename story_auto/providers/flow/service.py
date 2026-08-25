@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Callable
 import hashlib
 import json
+import copy
 import re
 import shutil
-import copy
 import uuid
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
@@ -185,9 +185,29 @@ class FlowError(RuntimeError):
 def _now(): return datetime.now(timezone.utc).isoformat()
 
 
+def _persisted_provider_settings(settings: Any) -> Any:
+    """Retain the canonical poll snapshot once when writing an attempt.
+
+    ``FlowLiveGenerator.last_settings`` deliberately exposes convenient
+    projections of a poll snapshot to the live execution path.  Persisting
+    those projections alongside the snapshot multiplied a single immutable
+    evidence record in every completed attempt.  The snapshot is the
+    canonical, hash-verified evidence; its timeline and decision bindings are
+    deterministically recoverable from it.  Keep the live projections in
+    memory, but omit only their redundant persisted aliases.
+    """
+    if not isinstance(settings, dict):
+        return settings
+    persisted = copy.deepcopy(settings)
+    if isinstance(persisted.get("provider_poll_evidence"), dict):
+        persisted.pop("provider_poll_decision_bindings", None)
+        persisted.pop("provider_poll_timeline", None)
+    return persisted
+
+
 def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
     settings = getattr(generator, "last_settings", None)
-    attempt["provider_settings"] = settings
+    attempt["provider_settings"] = _persisted_provider_settings(settings)
     if not isinstance(settings, dict): return
     activation = settings.get("activation", {}) if isinstance(settings.get("activation"), dict) else {}
     composer = settings.get("composer_ready_state") if isinstance(settings.get("composer_ready_state"), dict) else None
@@ -219,8 +239,6 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "attribution_confirmation_timestamp": settings.get("attribution_confirmation_timestamp"),
         "poll_evidence_version": settings.get("poll_evidence_version"),
         "provider_surface_extractor_version": settings.get("provider_surface_extractor_version"),
-        "provider_poll_evidence": settings.get("provider_poll_evidence"),
-        "provider_poll_decision_bindings": settings.get("provider_poll_decision_bindings"),
         "provider_poll_authoritative_binding": settings.get("provider_poll_authoritative_binding"),
         "provider_poll_max_observations": settings.get("provider_poll_max_observations"),
         "provider_poll_max_identities_per_observation": settings.get("provider_poll_max_identities_per_observation"),
@@ -232,7 +250,6 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "provider_poll_timeline_sha256": settings.get("provider_poll_timeline_sha256"),
         "provider_poll_timeline_complete": settings.get("provider_poll_timeline_complete"),
         "provider_poll_terminal_state": settings.get("provider_poll_terminal_state"),
-        "provider_poll_timeline": settings.get("provider_poll_timeline"),
     })
 def _manifest(paths, project_id):
     path = paths.artifact_path("output/generation_manifest.json")
