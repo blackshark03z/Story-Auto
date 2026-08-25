@@ -126,6 +126,7 @@ SEMANTIC_RESET_PENDING_STATUS = "SEMANTIC_RESET_PENDING"
 SEMANTIC_RESET_EXHAUSTED_STATUS = "SEMANTIC_RESET_EXHAUSTED"
 SEMANTIC_RESET_REASON = "CORRECTION_CHAIN_EXHAUSTED_SEMANTIC_RESET"
 MAX_SEMANTIC_RESETS_PER_LOGICAL_VISUAL = 1
+SCENE_GEOMETRY_CONTRACT_VERSION = "story-auto-scene-geometry/1.0.0"
 CREATIVE_CORRECTION_FULL_REPLAN_VERSION = "story-auto-creative-correction-full-replan/1.0.0"
 QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA = "story-auto-qc-corrective-replan-transaction/1.0.0"
 QC_CORRECTIVE_REPLANNED_STATUS = "QC_CORRECTIVE_REPLANNED"
@@ -3687,6 +3688,84 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
                 "provider_submissions": 0, "status": QC_REJECTED_ASSET_REPLACED_STATUS, "idempotent": False}
 
 
+def _scene_geometry_contract(*, compatible_reference_asset_ids: list[str], omitted_reference_asset_ids: list[str]) -> dict:
+    """The bounded spatial contract for the persistent Scene 3A failure family."""
+    return {
+        "version": SCENE_GEOMETRY_CONTRACT_VERSION,
+        "location_type": "INTERIOR",
+        "composition": {
+            "desk_document": "CENTER_LOWER/FOREGROUND/DOMINANT",
+            "character": "UPPER_CENTER/MIDGROUND/POSITIONED_AT_DESK",
+            "document_access": "VISIBLE_AND_UNOCCLUDED",
+            "finger_document_interaction": "CENTER_LOWER/FOREGROUND/VISIBLE",
+        },
+        "subject_anchors": {
+            "character_region": "UPPER_CENTER/MIDGROUND",
+            "hand_region": "CENTER_LOWER/FOREGROUND",
+            "document_region": "CENTER_LOWER/FOREGROUND",
+        },
+        "action_progression": ["APPROACH_DOCUMENT", "CONTACT_DOCUMENT", "TRACE_DOCUMENT"],
+        "required_visual_state": ["interior_room", "desk", "printed_document", "visible_finger_document_interaction"],
+        "forbidden_scene_family": ["exterior", "porch", "veranda", "outdoor_doorway", "unrelated_exterior_architecture"],
+        "reference_policy": {
+            "compatible_reference_asset_ids": list(compatible_reference_asset_ids),
+            "omitted_conflicting_reference_asset_ids": list(omitted_reference_asset_ids),
+        },
+    }
+
+
+def _compile_scene_geometry_prompt(contract: dict, subject: str, action: str) -> str:
+    """Compile the semantic contract into the only provider-visible geometry input."""
+    if not isinstance(contract, dict) or contract.get("version") != SCENE_GEOMETRY_CONTRACT_VERSION:
+        raise FlowError("SCENE_GEOMETRY_CONTRACT_INVALID")
+    return (
+        "Authoritative scene geometry contract. location_type=INTERIOR. "
+        "Composition: a desk and printed document dominate the CENTER_LOWER FOREGROUND; "
+        "the character is positioned at the desk in the UPPER_CENTER MIDGROUND; "
+        "the hand and document remain visibly accessible in the CENTER_LOWER FOREGROUND. "
+        "Subject anchors: character=UPPER_CENTER/MIDGROUND, hand=CENTER_LOWER/FOREGROUND, "
+        "document=CENTER_LOWER/FOREGROUND. "
+        "Action progression: APPROACH_DOCUMENT -> CONTACT_DOCUMENT -> TRACE_DOCUMENT. "
+        f"Required visual state: interior room, desk, printed document, visible finger-document interaction. {subject} {action} "
+        "Forbidden scene family: exterior, porch, veranda, outdoor doorway, unrelated exterior architecture. "
+        "No attached reference may override this geometry."
+    )
+
+
+def _validate_effective_scene_geometry_provider_input(request: dict, reference_paths: list[str]) -> dict | None:
+    """Fail closed before Flow when compiled input loses a persisted geometry contract."""
+    contract = request.get("scene_geometry_contract")
+    if contract is None:
+        return None
+    if not isinstance(contract, dict) or contract.get("version") != SCENE_GEOMETRY_CONTRACT_VERSION:
+        raise FlowError("SCENE_GEOMETRY_PROVIDER_INPUT_INVALID")
+    prompt = request.get("prompt")
+    policy = contract.get("reference_policy")
+    material = request.get("semantic_reset_material_delta")
+    required = ("location_type=INTERIOR", "desk and printed document dominate", "APPROACH_DOCUMENT -> CONTACT_DOCUMENT -> TRACE_DOCUMENT", "Forbidden scene family: exterior, porch, veranda, outdoor doorway, unrelated exterior architecture")
+    if (not isinstance(prompt, str) or any(token not in prompt for token in required)
+            or not isinstance(policy, dict) or not isinstance(material, dict)
+            or request.get("reference_asset_ids") != policy.get("compatible_reference_asset_ids")
+            or not isinstance(reference_paths, list)):
+        raise FlowError("SCENE_GEOMETRY_PROVIDER_INPUT_INVALID")
+    prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    failed = material.get("failed_generation_inputs")
+    if (material.get("scene_geometry_contract_sha256") != _json_sha256(contract)
+            or material.get("compiled_geometry_prompt_sha256") != prompt_sha256
+            or not isinstance(failed, list)
+            or any(item.get("prompt_sha256") == prompt_sha256 for item in failed if isinstance(item, dict))):
+        raise FlowError("SCENE_GEOMETRY_PROVIDER_INPUT_INVALID")
+    return {
+        "version": SCENE_GEOMETRY_CONTRACT_VERSION,
+        "validated_at": _now(),
+        "scene_geometry_contract_sha256": _json_sha256(contract),
+        "compiled_prompt_sha256": prompt_sha256,
+        "attached_reference_paths": list(reference_paths),
+        "conflicting_reference_assets_omitted": list(policy.get("omitted_conflicting_reference_asset_ids", [])),
+        "stale_prompt_or_reasoning_cache_reused": False,
+    }
+
+
 def semantic_reset_exhausted_correction(runtime_root: Path | str, project_id: str, request_id: str, *,
                                         reason: str) -> dict:
     """Create the one fresh, canonical-only reset permitted after correction exhaustion.
@@ -3761,19 +3840,19 @@ def semantic_reset_exhausted_correction(runtime_root: Path | str, project_id: st
         compatible_refs = [item for item in shot.get("prop_ids", []) if isinstance(item, str) and item]
         if len(compatible_refs) != 1:
             raise FlowError("SEMANTIC_RESET_CANONICAL_INPUT_INVALID")
+        omitted_refs = [item for item in tip_request.get("reference_asset_ids", []) if item not in compatible_refs]
+        geometry = _scene_geometry_contract(
+            compatible_reference_asset_ids=compatible_refs, omitted_reference_asset_ids=omitted_refs
+        )
         core = {"version": "story-auto-semantic-reset-core/1.0.0", "source": "shot_plan_only",
                 "location": "INTERIOR", "composition": "DESK_DOCUMENT_DETAIL",
                 "interaction": "INDEX_FINGER_TRACES_TRANSACTION_LIST",
                 "subject": shot["subject"].strip(), "action": shot["action"].strip(),
                 "compatible_reference_asset_ids": compatible_refs,
                 "forbidden": ["exterior", "porch", "outdoor", "veranda", "yard", "daylight exterior"],
-                "failed_request_ids": [item["request_id"] for item in reversed(failed_inputs)]}
-        prompt = caption_safe_effective_prompt(
-            f"Locked canonical core (authoritative): INTERIOR at a desk, high-angle document detail. {core['subject']} "
-            f"runs an index finger down a printed transaction list to a repeated name. The desk and bank statement must fill the frame. "
-            f"Forbidden: exterior, porch, outdoor, veranda, yard, daylight exterior. Gemini may add only descriptive texture; "
-            f"it must not change the locked core."
-        )
+                "failed_request_ids": [item["request_id"] for item in reversed(failed_inputs)],
+                "scene_geometry_contract": geometry}
+        prompt = caption_safe_effective_prompt(_compile_scene_geometry_prompt(geometry, core["subject"], core["action"]))
         candidate_input = {"prompt": prompt, "depends_on": [], "reference_asset_ids": compatible_refs}
         reset_prompt_sha256 = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
         if any(item["prompt_sha256"] == reset_prompt_sha256 for item in failed_inputs):
@@ -3788,10 +3867,12 @@ def semantic_reset_exhausted_correction(runtime_root: Path | str, project_id: st
         reset.update({"request_id": reset_id, "fingerprint": fingerprint, "prompt": prompt, "depends_on": [],
                       "reference_asset_ids": compatible_refs, "epoch_nonce": nonce,
                       "semantic_reset_of_exhausted_request_id": request_id, "semantic_reset_root_request_id": root_id,
-                      "semantic_reset_epoch": 1, "semantic_reset_core": core,
+                      "semantic_reset_epoch": 1, "semantic_reset_core": core, "scene_geometry_contract": geometry,
                       "semantic_reset_material_delta": {"failed_generation_inputs": failed_inputs,
                           "reset_prompt_sha256": reset_prompt_sha256,
                           "reset_generation_input_sha256": _json_sha256(candidate_input),
+                          "scene_geometry_contract_sha256": _json_sha256(geometry),
+                          "compiled_geometry_prompt_sha256": reset_prompt_sha256,
                           "material_delta_against_all_failed": True}})
         at = _now()
         tip.update({"status": SEMANTIC_RESET_PENDING_STATUS, "semantic_reset_request_id": reset_id,
@@ -5463,6 +5544,15 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 break
             if not _runnable(request, entries): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
+            # This check is deliberately after dependency resolution and
+            # immediately before attempt creation: it validates the exact
+            # prompt/reference projection that can reach the provider, not
+            # merely the canonical planning contract.
+            refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
+            geometry_validation = _validate_effective_scene_geometry_provider_input(request, refs)
+            if geometry_validation is not None:
+                entry.setdefault("pre_dispatch_geometry_validations", []).append(geometry_validation)
+                atomic_write_json(path, manifest)
             attempt_number = len(entry["attempts"]) + 1
             # Ambiguous/retryable attempts are append-only.  A finite higher
             # ceiling prevents loops while accepted-goal policy permits recovery.
@@ -5478,7 +5568,6 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             # Provider adapters receive concrete local files, never manifest-
             # relative paths.  In particular CDP's file-input API silently
             # cannot attach a path relative to the process working directory.
-            refs = [str(paths.artifact_path(entries[d]["selected_asset"]["path"])) for d in request.get("depends_on", [])]
             try:
                 temp.parent.mkdir(parents=True, exist_ok=True)
                 request_context = dict(request)

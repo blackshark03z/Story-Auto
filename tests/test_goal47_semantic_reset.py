@@ -5,7 +5,11 @@ import unittest
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
-from story_auto.providers.flow.service import FlowError, semantic_reset_exhausted_correction
+from story_auto.providers.flow.service import (
+    FlowError,
+    _validate_effective_scene_geometry_provider_input,
+    semantic_reset_exhausted_correction,
+)
 
 
 class Goal47SemanticResetTests(unittest.TestCase):
@@ -66,11 +70,28 @@ class Goal47SemanticResetTests(unittest.TestCase):
             self.assertNotIn("char_udo", reset["reference_asset_ids"])
             self.assertNotIn("loc_family_home", reset["reference_asset_ids"])
             self.assertIn("INTERIOR", reset["prompt"])
-            self.assertIn("Forbidden: exterior, porch, outdoor, veranda", reset["prompt"])
+            self.assertIn("location_type=INTERIOR", reset["prompt"])
+            self.assertIn("APPROACH_DOCUMENT -> CONTACT_DOCUMENT -> TRACE_DOCUMENT", reset["prompt"])
+            geometry = reset["scene_geometry_contract"]
+            self.assertEqual(geometry["location_type"], "INTERIOR")
+            self.assertEqual(geometry["composition"]["desk_document"], "CENTER_LOWER/FOREGROUND/DOMINANT")
+            self.assertEqual(geometry["action_progression"], ["APPROACH_DOCUMENT", "CONTACT_DOCUMENT", "TRACE_DOCUMENT"])
+            self.assertEqual(geometry["reference_policy"]["omitted_conflicting_reference_asset_ids"], ["char_udo", "loc_family_home"])
+            validation = _validate_effective_scene_geometry_provider_input(reset, [])
+            self.assertFalse(validation["stale_prompt_or_reasoning_cache_reused"])
             self.assertEqual(len(reset["semantic_reset_material_delta"]["failed_generation_inputs"]), 4)
             self.assertNotIn("full replan epoch 3", reset["prompt"])
             with self.assertRaisesRegex(FlowError, "SEMANTIC_RESET_ALREADY_USED"):
                 semantic_reset_exhausted_correction(runtime.root, config.project_id, self.TIP, reason="second reset")
+
+    def test_geometry_validation_rejects_a_compiled_prompt_that_loses_interior_contract(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            result = semantic_reset_exhausted_correction(runtime.root, config.project_id, self.TIP, reason="wrong exterior family")
+            reset = read_json(paths.artifact_path("output/generation_requests.json"))["requests"][0]
+            reset["prompt"] = "exterior porch and outdoor doorway"
+            with self.assertRaisesRegex(FlowError, "SCENE_GEOMETRY_PROVIDER_INPUT_INVALID"):
+                _validate_effective_scene_geometry_provider_input(reset, [])
 
     def test_ambiguous_historical_epoch_is_ineligible_and_does_not_mutate(self):
         with tempfile.TemporaryDirectory() as root:
