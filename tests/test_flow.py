@@ -67,6 +67,91 @@ class Response:
     def read(self): return self.data
 
 class FlowTests(unittest.TestCase):
+    def test_terminal_media_tombstone_prunes_only_unselected_terminal_bytes(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            def write(rel, color):
+                path = paths.artifact_path(rel)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (1280, 720), color).save(path, "PNG")
+                return path, sha256_file(path)
+
+            terminal_path, terminal_sha = write("assets/image/terminal/attempt_001_clean.png", "red")
+            terminal_bytes = terminal_path.stat().st_size
+            selected_path, selected_sha = write("assets/image/selected/attempt_001_clean.png", "green")
+            manifest = {"schema_version": flow_service.MANIFEST_VERSION, "project_id": config.project_id,
+                        "requests": [
+                            {"request_id": "terminal", "media_type": "IMAGE",
+                             "status": flow_service.QC_REJECTED_ASSET_REPLACED_STATUS,
+                             "failure_class": "QC_REJECTED", "selected_asset": None,
+                             "quality_reviews": [{"result": "FAIL"}],
+                             "attempts": [{"attempt": 1, "status": "SUCCEEDED",
+                                           "asset_path": "assets/image/terminal/attempt_001_clean.png",
+                                           "asset_sha256": terminal_sha}]},
+                            {"request_id": "selected", "media_type": "IMAGE", "status": "SUCCEEDED",
+                             "selected_asset": {"path": "assets/image/selected/attempt_001_clean.png",
+                                                "sha256": selected_sha, "attempt": 1},
+                             "attempts": [{"attempt": 1, "status": "SUCCEEDED",
+                                           "asset_path": "assets/image/selected/attempt_001_clean.png",
+                                           "asset_sha256": selected_sha}]},
+                        ]}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            result = flow_service.compact_terminal_media(paths, config.project_id)
+
+            self.assertEqual((result["terminal_media_pruned"], result["reclaimed_bytes"]), (1, terminal_bytes))
+            self.assertFalse(terminal_path.exists())
+            self.assertTrue(selected_path.is_file())
+            tombstones = flow_service._terminal_media_tombstones(paths, config.project_id)
+            self.assertEqual(tombstones[terminal_sha]["original_path"], "assets/image/terminal/attempt_001_clean.png")
+            with self.assertRaisesRegex(FlowError, "TERMINAL_MEDIA_PRUNED"):
+                flow_service._assert_media_not_tombstoned(paths, config.project_id, terminal_sha)
+            self.assertEqual(flow_service.compact_terminal_media(paths, config.project_id),
+                             {"terminal_media_pruned": 0, "reclaimed_bytes": 0})
+
+    def test_committed_transaction_archive_is_lossless_and_pending_transaction_stays_online(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root)
+            requests = read_json(paths.artifact_path("output/generation_requests.json"))
+            manifest = {"schema_version": flow_service.MANIFEST_VERSION,
+                        "project_id": config.project_id, "requests": []}
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            def transaction(transaction_id):
+                targets = {
+                    "generation_requests": {"path": "output/generation_requests.json", "value": requests},
+                    "generation_manifest": {"path": "output/generation_manifest.json", "value": manifest},
+                }
+                for target in targets.values():
+                    target["sha256"] = flow_service._json_sha256(target["value"])
+                return {"schema_version": flow_service.UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+                        "state": "PREPARED", "transaction_id": transaction_id,
+                        "project_id": config.project_id, "old_request_id": "old",
+                        "replacement_request_id": "replacement", "targets": targets}
+
+            committed = transaction("unresolved-replay-archive")
+            flow_service._publish_replacement_transaction(paths, committed)
+            directory = paths.artifact_path("output/unresolved_replay_transactions")
+            pending = transaction("unresolved-replay-pending")
+            atomic_write_json(directory / "unresolved-replay-pending.prepared.json", pending)
+
+            result = flow_service.compact_committed_replacement_transactions(paths, config.project_id)
+            self.assertEqual(result["archived_transactions"], 1)
+            raw = directory / "unresolved-replay-archive.prepared.json"
+            self.assertFalse(raw.exists())
+            self.assertTrue((directory / "unresolved-replay-archive.prepared.json.gz").is_file())
+            self.assertTrue((directory / "unresolved-replay-archive.prepared.json.archive.json").is_file())
+            self.assertTrue((directory / "unresolved-replay-pending.prepared.json").is_file())
+            values = flow_service._prepared_transactions(
+                paths, config.project_id,
+                schema_version=flow_service.UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+            )
+            self.assertEqual({value["transaction_id"] for _path, value in values},
+                             {"unresolved-replay-archive", "unresolved-replay-pending"})
+            self.assertEqual(flow_service.compact_committed_replacement_transactions(paths, config.project_id),
+                             {"archived_transactions": 0, "reclaimed_bytes": 0})
+
     def test_attempt_persistence_keeps_poll_evidence_once_without_mutating_live_projections(self):
         snapshot = {
             "schema_version": "flow-provider-poll-evidence/1.0.0",

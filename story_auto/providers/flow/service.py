@@ -8,13 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 import hashlib
+import gzip
+import io
 import json
 import copy
 import re
 import shutil
 import uuid
 
-from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
+from story_auto.core.artifacts import atomic_write_bytes, atomic_write_json, read_json, sha256_file
 from story_auto.core.planning.qc_corrective import (
     FULL_REPLAN,
     QCCorrectiveReplanError,
@@ -134,6 +136,7 @@ QC_CORRECTIVE_REPLAN_REASON = "QC_CORRECTIVE_REPLAN"
 QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA = "story-auto-qc-corrective-pre-dispatch-supersession-transaction/1.0.0"
 QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS = "QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED"
 QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_REASON = "QC_CORRECTIVE_PRE_DISPATCH_REFERENCE_POLICY_SUPERSESSION"
+TRANSACTION_ARCHIVE_SCHEMA = "story-auto-transaction-archive/1.0.0"
 # Flow currently accepts a single reference upload.  Corrective planning must
 # preserve that provider contract rather than letting dependency ordering choose
 # the effective visual semantics.
@@ -146,6 +149,16 @@ CANONICAL_REPLACEMENT_PARENT_STATUSES = {
     QC_CORRECTIVE_REPLANNED_STATUS,
     QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
 }
+PRUNABLE_TERMINAL_MEDIA_STATUSES = {
+    QC_REJECTED_ASSET_REPLACED_STATUS,
+    QC_CORRECTIVE_PRE_DISPATCH_SUPERSEDED_STATUS,
+    QC_CORRECTIVE_REPLANNED_STATUS,
+    SUPERSEDED_AMBIGUOUS_STATUS,
+    ABANDONED_UNRESOLVED_STATUS,
+    "FAILED_PERMANENT",
+    "FAILED_RETRYABLE",
+}
+TERMINAL_MEDIA_TOMBSTONE_SCHEMA = "story-auto-terminal-media-tombstone/1.0.0"
 SUPERSESSION_TARGET_PATHS = {
     "media_plan": "output/media_plan.json",
     "generation_requests": "output/generation_requests.json",
@@ -628,6 +641,48 @@ def _transaction_paths(paths, transaction_id: str, *,
     return directory / f"{transaction_id}.prepared.json", directory / f"{transaction_id}.committed.json"
 
 
+def _prepared_archive_paths(prepared_path: Path) -> tuple[Path, Path]:
+    return (prepared_path.with_name(prepared_path.name + ".gz"),
+            prepared_path.with_name(prepared_path.name + ".archive.json"))
+
+
+def _read_archived_prepared_transaction(archive_path: Path, error_code: str) -> dict:
+    """Read a lossless, receipt-bound archive of a committed transaction."""
+    if not archive_path.name.endswith(".prepared.json.gz"):
+        raise FlowError(error_code)
+    prepared_path = archive_path.with_suffix("")
+    _archive, receipt_path = _prepared_archive_paths(prepared_path)
+    try:
+        receipt = read_json(receipt_path)
+        if (not isinstance(receipt, dict)
+                or receipt.get("schema_version") != TRANSACTION_ARCHIVE_SCHEMA
+                or receipt.get("state") != "ARCHIVED"
+                or receipt.get("original_path") != prepared_path.name
+                or receipt.get("archive_path") != archive_path.name
+                or receipt.get("archive_sha256") != sha256_file(archive_path)
+                or not isinstance(receipt.get("prepared_sha256"), str)):
+            raise ValueError()
+        with gzip.open(archive_path, "rt", encoding="utf-8") as handle:
+            value = json.load(handle)
+        if not isinstance(value, dict) or _prepared_transaction_sha256(value) != receipt["prepared_sha256"]:
+            raise ValueError()
+        return value
+    except Exception as error:
+        raise FlowError(error_code) from error
+
+
+def _read_prepared_transaction(path: Path, error_code: str) -> dict:
+    if path.name.endswith(".prepared.json.gz"):
+        return _read_archived_prepared_transaction(path, error_code)
+    try:
+        value = read_json(path)
+    except Exception as error:
+        raise FlowError(error_code) from error
+    if not isinstance(value, dict):
+        raise FlowError(error_code)
+    return value
+
+
 def _prepared_transactions(paths, project_id: str, *,
                            schema_version: str = SUPERSESSION_TRANSACTION_SCHEMA) -> list[tuple[Path, dict]]:
     directory, error_code = _transaction_spec(paths, schema_version)
@@ -636,10 +691,14 @@ def _prepared_transactions(paths, project_id: str, *,
     if cache is not None and cache_key in cache:
         return cache[cache_key]
     if not directory.is_dir(): return []
+    raw_paths = sorted(directory.glob("*.prepared.json"))
+    archived_paths = sorted(directory.glob("*.prepared.json.gz"))
+    raw_bases = {path.name for path in raw_paths}
+    if any(path.with_suffix("").name in raw_bases for path in archived_paths):
+        raise FlowError(error_code)
     values = []
-    for path in sorted(directory.glob("*.prepared.json")):
-        try: value = read_json(path)
-        except Exception as error: raise FlowError(error_code) from error
+    for path in [*raw_paths, *archived_paths]:
+        value = _read_prepared_transaction(path, error_code)
         if (not isinstance(value, dict)
                 or value.get("schema_version") != schema_version
                 or value.get("state") != "PREPARED"):
@@ -650,7 +709,7 @@ def _prepared_transactions(paths, project_id: str, *,
         old_request_id = value.get("old_request_id")
         replacement_request_id = value.get("replacement_request_id")
         if (not isinstance(transaction_id, str) or not transaction_id
-                or path.name != f"{transaction_id}.prepared.json"
+                or path.name != f"{transaction_id}.prepared.json" + (".gz" if path.name.endswith(".gz") else "")
                 or not isinstance(old_request_id, str) or not old_request_id
                 or not isinstance(replacement_request_id, str) or not replacement_request_id
                 or old_request_id == replacement_request_id):
@@ -914,8 +973,13 @@ def _publish_replacement_transaction(paths, transaction: dict,
     _validate_transaction_targets(transaction, schema_version=schema_version)
     prepared_path, committed_path = _transaction_paths(paths, transaction_id, schema_version=schema_version)
     if not prepared_path.is_file():
-        if fault_injector: fault_injector("prepared")
-        atomic_write_json(prepared_path, transaction)
+        archive_path, _receipt_path = _prepared_archive_paths(prepared_path)
+        if archive_path.is_file():
+            if _read_archived_prepared_transaction(archive_path, error_code) != transaction:
+                raise FlowError(error_code)
+        else:
+            if fault_injector: fault_injector("prepared")
+            atomic_write_json(prepared_path, transaction)
     elif read_json(prepared_path) != transaction:
         raise FlowError(error_code)
     for name in ("media_plan", "generation_requests", "generation_manifest"):
@@ -930,6 +994,235 @@ def _publish_replacement_transaction(paths, transaction: dict,
         atomic_write_json(committed_path, receipt)
     elif read_json(committed_path) != receipt:
         raise FlowError(error_code)
+
+
+def _archive_committed_prepared_transaction(prepared_path: Path, committed_path: Path,
+                                            *, schema_version: str, project_id: str) -> int:
+    """Replace one committed transaction file with a lossless verified archive.
+
+    The transaction payload and its committed receipt are validated before any
+    bytes are removed.  The archive receipt carries both the semantic prepared
+    hash and the exact original byte hash, so a missing or altered archive
+    fails closed during any future recovery/read operation.
+    """
+    error_code = _transaction_error(schema_version)
+    transaction = _read_prepared_transaction(prepared_path, error_code)
+    if (transaction.get("schema_version") != schema_version
+            or transaction.get("state") != "PREPARED"
+            or transaction.get("project_id") != project_id):
+        raise FlowError(error_code)
+    transaction_id = transaction.get("transaction_id")
+    if not isinstance(transaction_id, str) or prepared_path.name != f"{transaction_id}.prepared.json":
+        raise FlowError(error_code)
+    _validate_transaction_targets(transaction, schema_version=schema_version)
+    try:
+        committed = read_json(committed_path)
+    except Exception as error:
+        raise FlowError(error_code) from error
+    expected_receipt = {"schema_version": schema_version, "state": "COMMITTED",
+                        "transaction_id": transaction_id,
+                        "prepared_sha256": _prepared_transaction_sha256(transaction)}
+    if committed != expected_receipt:
+        raise FlowError(error_code)
+    archive_path, archive_receipt_path = _prepared_archive_paths(prepared_path)
+    original_bytes = prepared_path.stat().st_size
+    original_sha256 = sha256_file(prepared_path)
+    if not archive_path.is_file():
+        compressed = io.BytesIO()
+        with prepared_path.open("rb") as source, gzip.GzipFile(
+                fileobj=compressed, mode="wb", compresslevel=6, mtime=0) as destination:
+            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                destination.write(chunk)
+        atomic_write_bytes(archive_path, compressed.getvalue())
+    receipt_core = {
+        "schema_version": TRANSACTION_ARCHIVE_SCHEMA,
+        "state": "ARCHIVED",
+        "transaction_id": transaction_id,
+        "original_path": prepared_path.name,
+        "original_sha256": original_sha256,
+        "original_bytes": original_bytes,
+        "archive_path": archive_path.name,
+        "archive_sha256": sha256_file(archive_path),
+        "archive_bytes": archive_path.stat().st_size,
+        "prepared_sha256": expected_receipt["prepared_sha256"],
+    }
+    if archive_receipt_path.is_file():
+        existing = read_json(archive_receipt_path)
+        if (not isinstance(existing, dict) or not isinstance(existing.get("archived_at"), str)
+                or {key: value for key, value in existing.items() if key != "archived_at"} != receipt_core):
+            raise FlowError(error_code)
+    else:
+        receipt = {**receipt_core, "archived_at": _now()}
+        atomic_write_json(archive_receipt_path, receipt)
+    _read_archived_prepared_transaction(archive_path, error_code)
+    prepared_path.unlink()
+    return original_bytes - archive_path.stat().st_size - archive_receipt_path.stat().st_size
+
+
+def compact_committed_replacement_transactions(paths, project_id: str) -> dict:
+    """Losslessly compact only committed append-only transaction snapshots.
+
+    A prepared transaction without its committed receipt is deliberately left
+    online: it remains a live recovery operation.  This function never touches
+    request assets, selected media, attempts, manifests, or provider state.
+    """
+    schemas = (
+        SUPERSESSION_TRANSACTION_SCHEMA,
+        UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+        QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA,
+        SEMANTIC_RESET_TRANSACTION_SCHEMA,
+        QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA,
+        QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA,
+    )
+    archived = 0
+    reclaimed = 0
+    with _transaction_read_scope():
+        for schema_version in schemas:
+            directory, _error_code = _transaction_spec(paths, schema_version)
+            if not directory.is_dir():
+                continue
+            for prepared_path in sorted(directory.glob("*.prepared.json")):
+                transaction_id = prepared_path.name.removesuffix(".prepared.json")
+                committed_path = directory / f"{transaction_id}.committed.json"
+                if not committed_path.is_file():
+                    continue
+                reclaimed += _archive_committed_prepared_transaction(
+                    prepared_path, committed_path,
+                    schema_version=schema_version, project_id=project_id,
+                )
+                archived += 1
+    return {"archived_transactions": archived, "reclaimed_bytes": reclaimed}
+
+
+def _media_paths_in(value: Any) -> set[str]:
+    keys = {"asset_path", "downloaded_raw_path", "source_path", "output_path", "selected_path", "raw_path", "path"}
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys and isinstance(item, str) and item.startswith("assets/"):
+                found.add(item.replace("\\", "/"))
+            found.update(_media_paths_in(item))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(_media_paths_in(item))
+    return found
+
+
+def _terminal_media_tombstone_directory(paths) -> Path:
+    return paths.artifact_path("output/terminal_media_tombstones")
+
+
+def _terminal_media_tombstones(paths, project_id: str) -> dict[str, dict]:
+    directory = _terminal_media_tombstone_directory(paths)
+    values: dict[str, dict] = {}
+    if not directory.is_dir():
+        return values
+    for path in sorted(directory.glob("*.json")):
+        try:
+            value = read_json(path)
+        except Exception as error:
+            raise FlowError("TERMINAL_MEDIA_TOMBSTONE_INVALID") from error
+        if (not isinstance(value, dict)
+                or value.get("schema_version") != TERMINAL_MEDIA_TOMBSTONE_SCHEMA
+                or value.get("project_id") != project_id
+                or value.get("state") != "PRUNED"
+                or not isinstance(value.get("sha256"), str)
+                or len(value["sha256"]) != 64
+                or not isinstance(value.get("original_path"), str)):
+            raise FlowError("TERMINAL_MEDIA_TOMBSTONE_INVALID")
+        if value["sha256"] in values:
+            raise FlowError("TERMINAL_MEDIA_TOMBSTONE_INVALID")
+        values[value["sha256"]] = value
+    return values
+
+
+def _assert_media_not_tombstoned(paths, project_id: str, sha256: str) -> None:
+    if sha256 in _terminal_media_tombstones(paths, project_id):
+        raise FlowError("TERMINAL_MEDIA_PRUNED")
+
+
+def compact_terminal_media(paths, project_id: str) -> dict:
+    """Tombstone only terminal media with no live byte consumer.
+
+    The manifest remains untouched.  A tombstone is atomically persisted and
+    re-read before its binary is removed, so subsequent recovery/adoption sees
+    the historic provenance but cannot treat absent bytes as an asset.
+    """
+    _manifest_path, manifest = _manifest(paths, project_id)
+    requests = read_json(paths.artifact_path("output/generation_requests.json"))
+    if not isinstance(requests, dict):
+        raise FlowError("TERMINAL_MEDIA_COMPACTION_INVALID")
+    protected_paths = _media_paths_in(requests)
+    for name in ("output/media_plan.json", "output/render_manifest.json"):
+        artifact = paths.artifact_path(name)
+        if artifact.is_file():
+            protected_paths.update(_media_paths_in(read_json(artifact)))
+    for schema_version in (
+        SUPERSESSION_TRANSACTION_SCHEMA, UNRESOLVED_REPLAY_TRANSACTION_SCHEMA,
+        QC_REJECTED_ASSET_REPLACEMENT_TRANSACTION_SCHEMA, SEMANTIC_RESET_TRANSACTION_SCHEMA,
+        QC_CORRECTIVE_REPLAN_TRANSACTION_SCHEMA, QC_CORRECTIVE_PRE_DISPATCH_SUPERSESSION_TRANSACTION_SCHEMA,
+    ):
+        directory, error_code = _transaction_spec(paths, schema_version)
+        if not directory.is_dir():
+            continue
+        for prepared_path in directory.glob("*.prepared.json"):
+            transaction_id = prepared_path.name.removesuffix(".prepared.json")
+            if not (directory / f"{transaction_id}.committed.json").is_file():
+                protected_paths.update(_media_paths_in(_read_prepared_transaction(prepared_path, error_code)))
+    candidates: list[tuple[dict, dict, str, Path]] = []
+    for entry in manifest["requests"]:
+        entry_paths = _media_paths_in(entry)
+        if entry.get("status") in PRUNABLE_TERMINAL_MEDIA_STATUSES:
+            selected_paths = _media_paths_in(entry.get("selected_asset"))
+            for rel in entry_paths - selected_paths:
+                asset = paths.artifact_path(rel)
+                if asset.is_file() and rel not in protected_paths:
+                    candidates.append((entry, next((attempt for attempt in entry.get("attempts", [])
+                                                    if rel in _media_paths_in(attempt)), {}), rel, asset))
+        else:
+            protected_paths.update(entry_paths)
+    tombstones = _terminal_media_tombstones(paths, project_id)
+    pruned = 0
+    reclaimed = 0
+    for entry, attempt, rel, asset in candidates:
+        if not asset.is_file() or rel in protected_paths:
+            continue
+        sha256 = sha256_file(asset)
+        if sha256 in tombstones:
+            raise FlowError("TERMINAL_MEDIA_TOMBSTONE_INVALID")
+        if asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+            metadata = validate_image(asset)
+        elif asset.suffix.lower() in {".mp4", ".mov"}:
+            metadata = validate_video(asset)
+        else:
+            metadata = {"bytes": asset.stat().st_size}
+        receipt = {
+            "schema_version": TERMINAL_MEDIA_TOMBSTONE_SCHEMA,
+            "state": "PRUNED",
+            "project_id": project_id,
+            "original_path": rel,
+            "sha256": sha256,
+            "metadata": metadata,
+            "request_id": entry.get("request_id"),
+            "attempt": attempt.get("attempt") if isinstance(attempt, dict) else None,
+            "disposition": entry.get("status"),
+            "terminal_reason": entry.get("failure_class") or entry.get("status"),
+            "quality_reviews_sha256": _json_sha256(entry.get("quality_reviews")),
+            "lineage": {key: entry.get(key) for key in (
+                "replacement_request_id", "replaces_request_id", "replacement_of", "replays_unresolved_request_id")
+                if entry.get(key) is not None},
+            "prune_reason": "TERMINAL_MEDIA_NO_LIVE_BYTE_CONSUMER",
+            "pruned_at": _now(),
+        }
+        tombstone_path = _terminal_media_tombstone_directory(paths) / f"{sha256}.json"
+        atomic_write_json(tombstone_path, receipt)
+        if _terminal_media_tombstones(paths, project_id).get(sha256) != receipt:
+            raise FlowError("TERMINAL_MEDIA_TOMBSTONE_INVALID")
+        bytes_before = asset.stat().st_size
+        asset.unlink()
+        reclaimed += bytes_before
+        pruned += 1
+    return {"terminal_media_pruned": pruned, "reclaimed_bytes": reclaimed}
 
 
 def _publish_supersession_transaction(paths, transaction: dict,
@@ -4947,6 +5240,7 @@ def adopt_manual_recovery(runtime_root: Path | str, project_id: str, request_id:
         if not entry or entry.get("status") not in {"AMBIGUOUS", "NOT_DISPATCHED", "FAILED_RETRYABLE"} or not attribution: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT")
         if entry.get("status") == "AMBIGUOUS": raise FlowError("MANUAL_LOCAL_OVERRIDE_AMBIGUOUS_BLOCKED")
         metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
+        _assert_media_not_tombstoned(paths, project_id, metadata["sha256"])
         number=len(entry["attempts"])+1
         try: request=next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"] if item.get("request_id")==request_id)
         except Exception: request={}
@@ -4979,6 +5273,7 @@ def adopt_exact_flow_recovery(runtime_root: Path | str, project_id: str, request
         except Exception as error: raise FlowError("MANUAL_RECOVERY_ATTRIBUTION_INSUFFICIENT") from error
         production=request.get("execution_tier") == "STANDARD_PRODUCTION"
         metadata=validate_image(source) if entry["media_type"]=="IMAGE" else validate_video(source)
+        _assert_media_not_tombstoned(paths, project_id, metadata["sha256"])
         number=len(entry["attempts"])+1; suffix=source.suffix.lower() or (".png" if entry["media_type"] == "IMAGE" else ".mp4")
         rel=f"assets/{entry['media_type'].lower()}/{request_id}/exact_flow_recovery_{number:03d}{suffix}"
         target=paths.artifact_path(rel); target.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(source,target)
@@ -5061,6 +5356,7 @@ def reuse_exact_flow_asset(runtime_root: Path | str, project_id: str, source_req
         metadata = validate_video(source) if target_request["media_type"] == "VIDEO" else validate_image(source)
         if metadata["sha256"] != source_selected.get("sha256"):
             raise FlowError("EXACT_FLOW_ASSET_REUSE_INVALID")
+        _assert_media_not_tombstoned(paths, project_id, metadata["sha256"])
         number = len(entry["attempts"]) + 1
         rel = f"assets/{target_request['media_type'].lower()}/{target_request_id}/exact_reuse_{number:03d}{source.suffix}"
         target = paths.artifact_path(rel); target.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(source, target)
