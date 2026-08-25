@@ -2780,7 +2780,28 @@ def _qc_replacement_genesis_projection(request: dict) -> dict | None:
     }
 
 
-def _current_caption_safe_qc_replacement_prompt(request: dict) -> tuple[str, dict]:
+_QC_CORRECTIVE_PROMPT_CONSTRAINT_PREFIX = "Corrective prompt constraint:"
+
+
+def _qc_corrective_prompt_constraint(reason: str) -> str | None:
+    """Extract one explicit, bounded prompt delta from an operator QC reason.
+
+    A creative rejection normally preserves the caption-safe prompt.  An
+    operator can opt into a materially different replacement only by putting a
+    concise constraint after the stable prefix.  This makes the change visible
+    in both the durable QC event and the replacement prompt, instead of
+    silently retrying the same generation input.
+    """
+    normalized = " ".join(reason.split())
+    if not normalized.startswith(_QC_CORRECTIVE_PROMPT_CONSTRAINT_PREFIX):
+        return None
+    constraint = normalized[len(_QC_CORRECTIVE_PROMPT_CONSTRAINT_PREFIX):].strip()
+    if not 12 <= len(constraint) <= 480:
+        raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_CONSTRAINT_INVALID")
+    return constraint
+
+
+def _current_caption_safe_qc_replacement_prompt(request: dict, *, corrective_constraint: str | None = None) -> tuple[str, dict]:
     """Build a new QC epoch from current safe semantics, never by rewriting history."""
     historical_prompt = request.get("prompt")
     if not isinstance(historical_prompt, str) or not historical_prompt.strip():
@@ -2805,12 +2826,20 @@ def _current_caption_safe_qc_replacement_prompt(request: dict) -> tuple[str, dic
             prompt = caption_safe_effective_prompt(historical_prompt)
         except ValueError as error:
             raise FlowError("QC_REJECTED_ASSET_REPLACEMENT_PROMPT_RECONSTRUCTION_INVALID") from error
-    return prompt, {
+    if corrective_constraint is not None:
+        prompt = f"{prompt}\n\nAuthoritative QC corrective constraint: {corrective_constraint}"
+    construction = {
         "version": CAPTION_SAFE_PROMPT_VERSION,
         "source": source,
         "historical_prompt_sha256": hashlib.sha256(historical_prompt.encode("utf-8")).hexdigest(),
         "effective_prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
     }
+    if corrective_constraint is not None:
+        construction.update({
+            "corrective_constraint": corrective_constraint,
+            "corrective_constraint_sha256": hashlib.sha256(corrective_constraint.encode("utf-8")).hexdigest(),
+        })
+    return prompt, construction
 
 
 def _qc_rejected_asset_replacement_transaction(paths, project_id: str, old_request_id: str,
@@ -3575,12 +3604,15 @@ def replace_qc_rejected_asset(runtime_root: Path | str, project_id: str, request
         epoch = current_epoch + 1
         root_request_id = _creative_correction_root_id(old_request, entries)
         full_replan_proof = None
+        corrective_constraint = _qc_corrective_prompt_constraint(reason)
         if epoch >= 2:
             replacement_prompt, full_replan_proof = _deterministic_creative_full_replan(
                 paths, old_request, old_entry, epoch=epoch, root_request_id=root_request_id, operator_reason=reason)
             prompt_construction = None
         else:
-            replacement_prompt, prompt_construction = _current_caption_safe_qc_replacement_prompt(old_request)
+            replacement_prompt, prompt_construction = _current_caption_safe_qc_replacement_prompt(
+                old_request, corrective_constraint=corrective_constraint
+            )
         nonce = uuid.uuid4().hex
         replacement_id, replacement_fingerprint = _replacement_identity(old_request, nonce=nonce, epoch=epoch)
         if replacement_id in entries or any(item.get("request_id") == replacement_id for item in requests):

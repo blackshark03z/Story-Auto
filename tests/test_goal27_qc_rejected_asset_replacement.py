@@ -114,6 +114,26 @@ class Goal27QcRejectedAssetReplacementTests(unittest.TestCase):
             entries = {entry["request_id"]: entry for entry in read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]}
             self.assertTrue(_runnable(read_json(paths.artifact_path("output/generation_requests.json"))["requests"][1], entries))
 
+    def test_explicit_qc_prompt_constraint_creates_auditable_material_delta(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths, old_request, selected, attempt = self._project(root)
+            reason = ("Corrective prompt constraint: Depict the established witness in a simple dark suit; "
+                      "no crown, royal robe, ceremonial costume, or fantasy styling.")
+            result = replace_qc_rejected_asset(runtime.root, config.project_id, self.OLD_REQUEST_ID, reason=reason)
+            replacement_id = result["replacement_request_id"]
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            replacement_entry = next(item for item in manifest["requests"] if item["request_id"] == replacement_id)
+            replacement = next(item for item in read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
+                               if item["request_id"] == replacement_id)
+            self.assertEqual(replacement_entry["attempts"], [])
+            self.assertEqual(replacement_entry["provider_submissions"], 0)
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["attempts"], [attempt])
+            self.assertEqual(read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]["selected_asset"], selected)
+            self.assertIn("Authoritative QC corrective constraint: Depict the established witness", replacement["prompt"])
+            self.assertIn("no crown, royal robe", replacement["prompt"])
+            self.assertEqual(replacement["prompt_construction"]["corrective_constraint"], reason.split(": ", 1)[1])
+            self.assertNotEqual(replacement["prompt"], old_request["prompt"])
+
     def test_operator_regenerate_of_confirmed_qc_pending_asset_creates_one_fresh_epoch(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, config, paths, _old, selected, attempt = self._project(root)
