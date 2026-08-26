@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.visual import validate_ambient_presentation
+from story_auto.core.project.model import full_image_motion_spec
 
 from .media import MediaError, MediaTarget, format_duration, probe_media, run_command, validate_video
 
@@ -79,7 +80,9 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
     elif motion in {"AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"}:
         denominator = max(1, frames - 1)
         progress = f"(0.5-0.5*cos(PI*on/{denominator}))"
-        zoom = f"1+0.06000*{progress}" if motion.endswith("IN") else f"1.06000-0.06000*{progress}"
+        spec = full_image_motion_spec("ZOOM_IN" if motion.endswith("IN") else "ZOOM_OUT")
+        start_scale, end_scale = float(spec["start_scale"]), float(spec["end_scale"])
+        zoom = f"{start_scale:.5f}+({end_scale - start_scale:.5f})*{progress}"
         visual = (f"scale={target.width * 2}:{target.height * 2}:force_original_aspect_ratio=increase,"
                   f"crop={target.width * 2}:{target.height * 2},"
                   f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"

@@ -19,7 +19,14 @@ def derive_amplitude_envelope(samples: Sequence[float], *, window_size: int) -> 
     return result
 
 
-def visualizer_spec(*, enabled: bool) -> dict[str, object]:
+def visualizer_spec(*, enabled: bool, target_width: int = 1920, target_height: int = 1080) -> dict[str, object]:
+    """Describe the centered, renderer-owned FULL_IMAGE waveform geometry."""
+    if target_width <= 0 or target_height <= 0:
+        raise ValueError("target dimensions must be positive")
+    width = round(target_width * .70)
+    height = round(target_height * .25)
     return {"enabled": bool(enabled), "source": "canonical_narration_audio",
-            "renderer": "ffmpeg_showwaves", "size": [420, 72], "position": "TOP_LEFT_SAFE_MARGIN",
+            "renderer": "ffmpeg_showwaves", "size": [width, height], "position": "CENTER_FRAME",
+            "position_pixels": [(target_width - width) // 2, (target_height - height) // 2],
+            "amplitude_gain": 4.0, "amplitude_scale": "sqrt", "color": "white@0.92",
             "deterministic": True}

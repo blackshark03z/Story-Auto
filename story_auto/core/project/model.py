@@ -17,6 +17,20 @@ RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai", "ambient_story", "full
 TTS_PROVIDERS = frozenset({"elevenlabs", "typecast", "kokoro_local"})
 FULL_IMAGE_CADENCES = frozenset({"SEMANTIC_ADAPTIVE", "FIXED"})
 FULL_IMAGE_MOTION = "AUTO_CONTINUOUS_ZOOM"
+FULL_IMAGE_ZOOM_MIN_SCALE = 1.0
+FULL_IMAGE_ZOOM_MAX_SCALE = 1.16
+
+
+def full_image_motion_spec(direction: str) -> dict[str, object]:
+    """Return the single canonical still-camera contract for FULL_IMAGE."""
+    if direction == "ZOOM_IN":
+        start_scale, end_scale = FULL_IMAGE_ZOOM_MIN_SCALE, FULL_IMAGE_ZOOM_MAX_SCALE
+    elif direction == "ZOOM_OUT":
+        start_scale, end_scale = FULL_IMAGE_ZOOM_MAX_SCALE, FULL_IMAGE_ZOOM_MIN_SCALE
+    else:
+        raise ProjectValidationError("FULL_IMAGE_MOTION_DIRECTION_INVALID")
+    return {"mode": FULL_IMAGE_MOTION, "direction": direction,
+            "start_scale": start_scale, "end_scale": end_scale, "easing": "SMOOTH"}
 
 
 def resolve_full_image_settings(settings: dict[str, Any]) -> dict[str, Any]:

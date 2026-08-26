@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from .media import MediaError, MediaTarget, format_duration, run_command, validate_video
+from .waveform import visualizer_spec
 
 
-COMPOSER_VERSION = "story-auto-compositor/1.0.0"
+COMPOSER_VERSION = "story-auto-compositor/1.2.0"
 
 
 def _filter_path(path: Path) -> str:
@@ -46,7 +47,7 @@ def compose(
     *, clips: list[Path], segments: list[dict[str, Any]], narration: Path, output: Path,
     master_duration: float, subtitles_ass: Path | None = None, bgm: Path | None = None,
     bgm_volume: float = 0.12, target: MediaTarget = MediaTarget(), video_crf: int = 18,
-    audio_visualizer: bool = False,
+    audio_visualizer: bool | dict[str, object] = False,
 ) -> dict[str, Any]:
     if not clips or len(clips) != len(segments):
         raise MediaError("COMPOSITOR_INPUT_INVALID")
@@ -72,13 +73,31 @@ def compose(
     if subtitles_ass:
         filters.append(f"{visual_label}subtitles=filename='{_filter_path(subtitles_ass)}'[vsub]")
         visual_label = "[vsub]"
-    if audio_visualizer:
+    visualizer = (dict(audio_visualizer) if isinstance(audio_visualizer, dict)
+                  else visualizer_spec(enabled=bool(audio_visualizer), target_width=target.width, target_height=target.height))
+    if visualizer.get("enabled"):
         # showwaves consumes the canonical narration stream directly. It is
         # deterministic, stays frame-synchronous with speech, and never adds
         # another audio source or provider dependency.
+        size = visualizer.get("size")
+        position = visualizer.get("position_pixels")
+        if (not isinstance(size, list) or len(size) != 2 or not isinstance(position, list) or len(position) != 2
+                or any(not isinstance(value, int) for value in [*size, *position])):
+            raise MediaError("WAVEFORM_GEOMETRY_INVALID")
+        wave_width, wave_height = size
+        wave_x, wave_y = position
+        if wave_width <= 0 or wave_height <= 0 or wave_x < 0 or wave_y < 0 or wave_x + wave_width > target.width or wave_y + wave_height > target.height:
+            raise MediaError("WAVEFORM_GEOMETRY_INVALID")
+        gain = visualizer.get("amplitude_gain")
+        scale = visualizer.get("amplitude_scale")
+        color = visualizer.get("color")
+        if (not isinstance(gain, (int, float)) or isinstance(gain, bool) or not 0 < gain <= 8
+                or scale not in {"lin", "sqrt", "cbrt", "4thrt", "5thrt", "log"}
+                or not isinstance(color, str) or not color):
+            raise MediaError("WAVEFORM_STYLE_INVALID")
         filters.append(f"[{narration_index}:a]asplit=2[voice_source][wave_source]")
-        filters.append("[wave_source]showwaves=s=420x72:mode=cline:colors=white@0.68,format=rgba[wave]")
-        filters.append(f"{visual_label}[wave]overlay=x=48:y=48:format=auto[vwave]")
+        filters.append(f"[wave_source]volume={float(gain):.3f},showwaves=s={wave_width}x{wave_height}:mode=cline:scale={scale}:colors={color},format=rgba[wave]")
+        filters.append(f"{visual_label}[wave]overlay=x={wave_x}:y={wave_y}:format=auto[vwave]")
         visual_label = "[vwave]"
         narration_audio = "[voice_source]"
     else:

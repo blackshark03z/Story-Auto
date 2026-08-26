@@ -18,6 +18,7 @@ from story_auto.core.render.compiler import compile_image
 from story_auto.core.render.compositor import compose
 from story_auto.core.render.media import MediaTarget, probe_media
 from story_auto.core.render.waveform import derive_amplitude_envelope, visualizer_spec
+from story_auto.core.project.model import full_image_motion_spec
 from story_auto.providers.llm import LLMResponse
 
 
@@ -67,6 +68,9 @@ class FullImagePlanningTests(unittest.TestCase):
         self.assertLess(first["shots"][-1]["end"] - first["shots"][-1]["start"], self.settings["full_image"]["image_duration_seconds"])
         media = compile_media_plan("prj_full", first, "full_image", self.settings)
         self.assertEqual([item["image_motion_policy"] for item in media["shots"]], ["AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"])
+        self.assertEqual([item["motion_spec"] for item in media["shots"]], [
+            full_image_motion_spec("ZOOM_IN"), full_image_motion_spec("ZOOM_OUT")])
+        self.assertEqual(media["shots"][0]["motion_spec"]["end_scale"], 1.16)
         requests = compile_generation_requests("prj_full", first, media, self.continuity, self.settings)
         validate_generation_requests(requests, media, self.continuity)
         self.assertTrue(all(item["media_type"] == "IMAGE" for item in requests["requests"]))
@@ -85,7 +89,10 @@ class FullImagePlanningTests(unittest.TestCase):
         quiet_loud = derive_amplitude_envelope([.05] * 4 + [.8] * 4, window_size=4)
         self.assertEqual(quiet_loud, derive_amplitude_envelope([.05] * 4 + [.8] * 4, window_size=4))
         self.assertLess(quiet_loud[0], quiet_loud[1])
-        self.assertTrue(visualizer_spec(enabled=True)["deterministic"])
+        spec = visualizer_spec(enabled=True)
+        self.assertTrue(spec["deterministic"])
+        self.assertEqual((spec["size"], spec["position"], spec["position_pixels"]), ([1344, 270], "CENTER_FRAME", [288, 405]))
+        self.assertEqual((spec["amplitude_gain"], spec["amplitude_scale"], spec["color"]), (4.0, "sqrt", "white@0.92"))
         self.assertFalse(visualizer_spec(enabled=False)["enabled"])
 
     def test_full_image_visual_stage_uses_no_video_or_motion_provider(self):
@@ -111,11 +118,13 @@ class FullImagePlanningTests(unittest.TestCase):
         except ImportError:
             self.skipTest("Pillow unavailable")
         with tempfile.TemporaryDirectory() as directory:
-            source = __import__("pathlib").Path(directory) / "still.png"; output = __import__("pathlib").Path(directory) / "zoom.mp4"
+            source = __import__("pathlib").Path(directory) / "still.png"
             Image.new("RGB", (800, 600), "navy").save(source)
-            compile_image(source, output, duration=.4, motion="AUTO_CONTINUOUS_ZOOM_IN", target=MediaTarget(320, 180, 10))
-            meta = probe_media(output)
-            self.assertEqual((meta["video"]["width"], meta["video"]["height"]), (320, 180))
+            for motion in ("AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"):
+                output = __import__("pathlib").Path(directory) / f"{motion}.mp4"
+                compile_image(source, output, duration=.4, motion=motion, target=MediaTarget(320, 180, 10))
+                meta = probe_media(output)
+                self.assertEqual((meta["video"]["width"], meta["video"]["height"]), (320, 180))
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
     def test_waveform_on_and_off_render_valid_audio_video(self):

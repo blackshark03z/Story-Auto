@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import sha256_file
+from story_auto.core.project.model import full_image_motion_spec
 from story_auto.core.visual import validate_ambient_presentation
 from story_auto.providers.flow.validation import validate_image, validate_video
 
@@ -70,7 +71,7 @@ def validate_render_plan(value: Any, *, project_root: Path | None = None) -> Non
                 raise RenderPlanError("FULL_IMAGE_RENDER_POLICY_INVALID")
             spec = segment.get("motion_spec", {})
             expected = "ZOOM_IN" if segment["image_motion_policy"].endswith("IN") else "ZOOM_OUT"
-            if spec.get("mode") != "AUTO_CONTINUOUS_ZOOM" or spec.get("direction") != expected:
+            if spec != full_image_motion_spec(expected):
                 raise RenderPlanError("FULL_IMAGE_MOTION_SPEC_INVALID")
         if project_root is not None and segment["source_media_type"] != "HOLD":
             path = project_root / segment["source_asset"]

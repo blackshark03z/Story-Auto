@@ -14,6 +14,7 @@ from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, GeminiQCError,
                                        compile_flow_motion_prompt, plan_motion,
                                        validate_motion_plan)
 from story_auto.core.project import RuntimeLayout, load_project, resolve_full_image_settings
+from story_auto.core.project.model import full_image_motion_spec
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import (
     AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,
@@ -50,7 +51,7 @@ AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/2.0.0"
 AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/2.0.0"
 AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.1.0"
 FULL_IMAGE_WINDOW_POLICY_VERSION = "story-auto-full-image-windows/1.2.0"
-FULL_IMAGE_MEDIA_POLICY_VERSION = "story-auto-full-image-media-policy/1.1.0"
+FULL_IMAGE_MEDIA_POLICY_VERSION = "story-auto-full-image-media-policy/1.2.0"
 FULL_IMAGE_GENERATION_PROMPT_VERSION = "story-auto-full-image-prompt/1.1.0"
 
 class PlanningError(ValueError):
@@ -444,10 +445,11 @@ def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: 
             if override and (override.get("media_type", "IMAGE"), override.get("requirement", "REQUIRED")) != ("IMAGE", "REQUIRED"):
                 raise PlanningError("MEDIA_OVERRIDE_REJECTED")
             motion = "AUTO_CONTINUOUS_ZOOM_IN" if index % 2 else "AUTO_CONTINUOUS_ZOOM_OUT"
+            direction = "ZOOM_IN" if index % 2 else "ZOOM_OUT"
             planned.append({"shot_id":shot["shot_id"], "media_type":"IMAGE", "requirement":"REQUIRED",
                 "target_duration":float(shot["end"])-float(shot["start"]), "fallback_policy":"BLOCK",
                 "reference_strategy":"CONTINUITY_REFERENCES", "image_motion_policy":motion,
-                "motion_spec":{"mode":"AUTO_CONTINUOUS_ZOOM", "direction":"ZOOM_IN" if index % 2 else "ZOOM_OUT", "start_scale":1.0 if index % 2 else 1.06, "end_scale":1.06 if index % 2 else 1.0, "easing":"SMOOTH"},
+                "motion_spec":full_image_motion_spec(direction),
                 "generation_priority":1, "motion_spike":False})
         return {"schema_version":MEDIA_SCHEMA_VERSION,"project_id":project_id,"render_mode":render_mode,
                 "full_image":dict(full_image),"shot_plan_sha256":_hash_text(str(shot_plan)),"hook_target_seconds":0.0,

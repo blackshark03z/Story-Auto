@@ -24,7 +24,7 @@ from .plan import RENDER_PLAN_VERSION, resolve_render_plan, validate_render_plan
 from .waveform import visualizer_spec
 
 
-RENDER_STAGE_VERSION = "story-auto-render-stage/1.0.0"
+RENDER_STAGE_VERSION = "story-auto-render-stage/1.2.0"
 FINAL_MANIFEST_VERSION = "story-auto-final-manifest/1.0.0"
 AUDIO_PLAN_VERSION = "story-auto-audio-plan/1.0.0"
 
@@ -64,7 +64,8 @@ def resolve_render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
         from story_auto.core.project import resolve_full_image_settings
         full_image = resolve_full_image_settings(config.settings)
         settings["full_image"] = full_image
-        settings["audio_visualizer"] = visualizer_spec(enabled=full_image["audio_visualizer"])
+        settings["audio_visualizer"] = visualizer_spec(enabled=full_image["audio_visualizer"],
+                                                        target_width=target.width, target_height=target.height)
     return settings, target
 
 
@@ -262,7 +263,9 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                                    subtitles_ass=ass_path, bgm=bgm_path,
                                    bgm_volume=audio_plan["bgm"]["volume"], target=target,
                                    video_crf=final_video_crf,
-                                   audio_visualizer=bool(settings.get("audio_visualizer", {}).get("enabled", False)))
+                                   audio_visualizer=settings.get("audio_visualizer", visualizer_spec(enabled=False,
+                                                                                                        target_width=target.width,
+                                                                                                        target_height=target.height)))
             metadata=_atomic_media_publish(final_path,produce_final)
             metadata = validate_video(final_path, target=target, silent=False,
                                       expected_duration=float(render_plan["master_duration"]), tolerance=.12)
