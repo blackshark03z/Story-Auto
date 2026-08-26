@@ -49,9 +49,9 @@ REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
 AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/2.0.0"
 AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/2.0.0"
 AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.1.0"
-FULL_IMAGE_WINDOW_POLICY_VERSION = "story-auto-full-image-windows/1.0.0"
-FULL_IMAGE_MEDIA_POLICY_VERSION = "story-auto-full-image-media-policy/1.0.0"
-FULL_IMAGE_GENERATION_PROMPT_VERSION = "story-auto-full-image-prompt/1.0.0"
+FULL_IMAGE_WINDOW_POLICY_VERSION = "story-auto-full-image-windows/1.2.0"
+FULL_IMAGE_MEDIA_POLICY_VERSION = "story-auto-full-image-media-policy/1.1.0"
+FULL_IMAGE_GENERATION_PROMPT_VERSION = "story-auto-full-image-prompt/1.1.0"
 
 class PlanningError(ValueError):
     def __init__(self, failure_class: str, detail: str = "") -> None:
@@ -262,40 +262,54 @@ def compile_ambient_shot_plan(project_id: str, timeline: dict[str, Any], continu
     return value
 
 
-def compile_full_image_shot_plan(project_id: str, timeline: dict[str, Any], continuity: dict[str, Any], full_image: dict[str, Any],
+def compile_full_image_shot_plan(project_id: str, timeline: dict[str, Any], alignment: dict[str, Any], continuity: dict[str, Any], full_image: dict[str, Any],
                                  *, timeline_sha256: str, continuity_sha256: str) -> dict[str, Any]:
-    """Tile narration with semantic scene windows, never arbitrary still-per-scene assumptions."""
+    """Tile aligned narration at sentence boundaries, not broad story-scene edges."""
     target, cadence = float(full_image["image_duration_seconds"]), full_image["cadence"]
     scenes = timeline["scenes"]
+    aligned = alignment.get("segments", [])
+    segment_by_id = {item.get("segment_id"): item for item in aligned if isinstance(item, dict)}
+    ordered_ids = [item for scene in scenes for item in scene["narration_segment_ids"]]
+    if len(ordered_ids) != len(set(ordered_ids)) or not ordered_ids or any(item not in segment_by_id for item in ordered_ids):
+        raise PlanningError("FULL_IMAGE_ALIGNMENT_BOUNDARIES_INVALID")
+    scene_by_segment = {segment_id: scene for scene in scenes for segment_id in scene["narration_segment_ids"]}
+    beats = [segment_by_id[segment_id] for segment_id in ordered_ids]
     windows: list[list[dict[str, Any]]] = []
     cursor = 0
-    while cursor < len(scenes):
-        start = float(scenes[cursor]["start"])
-        candidates = list(range(cursor + 1, len(scenes) + 1))
-        # Semantic Adaptive only considers boundaries within the declared useful
-        # neighborhood when available. Fixed uses the closest valid boundary.
-        nearby = [end for end in candidates if .8 * target <= float(scenes[end - 1]["end"]) - start <= 1.2 * target]
+    while cursor < len(beats):
+        start = 0.0 if cursor == 0 else float(beats[cursor]["start"])
+        candidates = list(range(cursor + 1, len(beats) + 1))
+        # An alignment segment is sentence-authoritative in Story Auto. It is
+        # therefore the finest safe boundary; no window is cut inside it.
+        nearby = [end for end in candidates if .8 * target <= float(beats[end - 1]["end"]) - start <= 1.2 * target]
         options = nearby if cadence == "SEMANTIC_ADAPTIVE" and nearby else candidates
-        end = min(options, key=lambda item: (abs((float(scenes[item - 1]["end"]) - start) - target), item))
-        windows.append(scenes[cursor:end])
+        end = min(options, key=lambda item: (abs((float(beats[item - 1]["end"]) - start) - target), item))
+        windows.append(beats[cursor:end])
         cursor = end
     kinds, _ = _entity_maps(continuity)
     shots: list[dict[str, Any]] = []
     for index, grouped in enumerate(windows, 1):
         first, last = grouped[0], grouped[-1]
-        entity_ids = list(dict.fromkeys(item for scene in grouped for item in scene.get("entity_ids", [])))
+        window_scenes = list(dict.fromkeys(scene_by_segment[item["segment_id"]]["scene_id"] for item in grouped))
+        source_scenes = [scene for scene in scenes if scene["scene_id"] in window_scenes]
+        entity_ids = list(dict.fromkeys(item for scene in source_scenes for item in scene.get("entity_ids", [])))
         characters = [item for item in entity_ids if kinds.get(item) == "character"]
         props = [item for item in entity_ids if kinds.get(item) == "prop"]
         locations = [item for item in entity_ids if kinds.get(item) == "location"]
-        summaries = [str(scene.get("summary", "")).strip() for scene in grouped if str(scene.get("summary", "")).strip()]
-        narration_ids = [item for scene in grouped for item in scene["narration_segment_ids"]]
-        semantic_summary = " ".join(summaries) or "Narrated story progression"
+        summaries = [str(scene.get("summary", "")).strip() for scene in source_scenes if str(scene.get("summary", "")).strip()]
+        narration_ids = [item["segment_id"] for item in grouped]
+        narration_text = "".join(str(item.get("text", "")) for item in grouped).strip()
+        # The local window owns the exact narration IDs/text, while the
+        # bounded timeline summary remains the image-prompt intent. Never
+        # inject thirty seconds of narration verbatim into a provider prompt.
+        semantic_summary = " ".join(summaries) or (narration_text[:300] if narration_text else "Narrated story progression")
         shots.append({
-            "shot_id": f"sh_{index:04d}", "scene_id": first["scene_id"],
-            "source_scene_ids": [scene["scene_id"] for scene in grouped],
-            "start": float(first["start"]), "end": float(last["end"]),
+            "shot_id": f"sh_{index:04d}", "scene_id": window_scenes[0],
+            "source_scene_ids": window_scenes,
+            "start": 0.0 if index == 1 else float(shots[-1]["end"]),
+            "end": float(alignment["duration_seconds"]) if index == len(windows) else float(last["end"]),
             "narration_segment_ids": narration_ids,
-            "semantic_span": {"scene_ids": [scene["scene_id"] for scene in grouped],
+            "semantic_span": {"scene_ids": window_scenes,
                               "narration_segment_ids": narration_ids, "summary": semantic_summary},
             "subject": "Narrated story moment", "action": semantic_summary,
             "character_ids": characters, "location_id": locations[0] if locations else None, "prop_ids": props,
@@ -323,20 +337,22 @@ def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[st
         except Exception as error:
             raise PlanningError("FULL_IMAGE_WINDOW_POLICY_INVALID") from error
         covered: list[str] = []
+        expected = [item for scene in timeline["scenes"] for item in scene["narration_segment_ids"]]
         for index, shot in enumerate(value["shots"], 1):
             source_ids = shot.get("source_scene_ids")
-            if shot.get("shot_id") != f"sh_{index:04d}" or not isinstance(source_ids, list) or not source_ids or any(item not in scene_map for item in source_ids):
+            narration_ids = shot.get("narration_segment_ids")
+            if shot.get("shot_id") != f"sh_{index:04d}" or not isinstance(source_ids, list) or not source_ids or any(item not in scene_map for item in source_ids) or not isinstance(narration_ids, list) or not narration_ids:
                 raise PlanningError("FULL_IMAGE_WINDOW_INVALID")
             positions = [next(i for i, scene in enumerate(timeline["scenes"]) if scene["scene_id"] == item) for item in source_ids]
-            if positions != list(range(min(positions), max(positions) + 1)) or positions[0] != len(covered):
+            if positions != list(range(min(positions), max(positions) + 1)) or narration_ids != expected[len(covered):len(covered) + len(narration_ids)]:
                 raise PlanningError("FULL_IMAGE_WINDOW_COVERAGE_INVALID")
             start, end = float(shot["start"]), float(shot["end"])
-            if abs(start - float(scene_map[source_ids[0]]["start"])) > .001 or abs(end - float(scene_map[source_ids[-1]]["end"])) > .001 or end <= start or (index > 1 and abs(start - previous) > .001):
+            if abs(end - previous) <= 0 or end <= start or (index > 1 and abs(start - previous) > .001) or (index == 1 and abs(start) > .001):
                 raise PlanningError("FULL_IMAGE_WINDOW_TIMELINE_INVALID")
-            if shot.get("semantic_span", {}).get("scene_ids") != source_ids or not shot.get("semantic_span", {}).get("narration_segment_ids"):
+            if shot.get("semantic_span", {}).get("scene_ids") != source_ids or shot.get("semantic_span", {}).get("narration_segment_ids") != narration_ids:
                 raise PlanningError("FULL_IMAGE_SEMANTIC_SPAN_INVALID")
-            covered.extend(source_ids); previous = end
-        if covered != [scene["scene_id"] for scene in timeline["scenes"]] or abs(previous - float(timeline["scenes"][-1]["end"])) > .001:
+            covered.extend(narration_ids); previous = end
+        if covered != expected or abs(previous - float(timeline["scenes"][-1]["end"])) > .001:
             raise PlanningError("FULL_IMAGE_WINDOW_COVERAGE_INVALID")
         if config["motion"] != "AUTO_CONTINUOUS_ZOOM":
             raise PlanningError("FULL_IMAGE_MOTION_POLICY_INVALID")
@@ -839,7 +855,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
             shot_action = "RUN"
         elif decision.action == "RUN" and full_image:
             try:
-                shot_plan = compile_full_image_shot_plan(project_id, timeline, continuity, media_settings["full_image"],
+                shot_plan = compile_full_image_shot_plan(project_id, timeline, alignment, continuity, media_settings["full_image"],
                     timeline_sha256=timeline_sha, continuity_sha256=continuity_sha)
             except PlanningError as error:
                 for name in ("shot_plan.json", "media_plan.json", "generation_requests.json"):

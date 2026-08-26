@@ -41,6 +41,12 @@ class FullImagePlanningTests(unittest.TestCase):
             {"scene_id":"scn_0004","start":36.0,"end":43.0,"narration_segment_ids":["seg_4"],"summary":"A final reaction.","entity_ids":["char_a"]},
         ]}
         self.continuity = {"characters":[{"entity_id":"char_a","name":"A","visual_design":{}}], "locations":[], "props":[{"entity_id":"prop_key","name":"key","visual_design":{}}]}
+        self.alignment = {"duration_seconds":43.0,"segments":[
+            {"segment_id":"seg_1","start":0.0,"end":12.0,"text":"A cautious arrival. "},
+            {"segment_id":"seg_2","start":12.0,"end":24.0,"text":"A clue appears. "},
+            {"segment_id":"seg_3","start":24.0,"end":36.0,"text":"The evidence changes everything. "},
+            {"segment_id":"seg_4","start":36.0,"end":43.0,"text":"A final reaction."},
+        ]}
         self.settings = {"hook_seconds":55.0,"motion_spike_threshold":8,"overrides":{},"max_attempts":2,"aspect_ratio":"16:9","large_batch_request_threshold":20,"provider_video_clip_seconds":8.0,
                          "full_image":{"image_duration_seconds":30.0,"cadence":"SEMANTIC_ADAPTIVE","motion":"AUTO_CONTINUOUS_ZOOM","audio_visualizer":True}}
 
@@ -52,12 +58,13 @@ class FullImagePlanningTests(unittest.TestCase):
                 ProjectConfig("prj_bad", render_mode="full_image", settings={"full_image":{"image_duration_seconds":duration}})
 
     def test_semantic_windows_cover_once_are_deterministic_and_image_only(self):
-        first = compile_full_image_shot_plan("prj_full", self.timeline, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
-        second = compile_full_image_shot_plan("prj_full", self.timeline, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
+        first = compile_full_image_shot_plan("prj_full", self.timeline, self.alignment, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
+        second = compile_full_image_shot_plan("prj_full", self.timeline, self.alignment, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
         self.assertEqual(first, second)
         validate_shot_plan(first, self.timeline, self.continuity)
         self.assertEqual((first["shots"][0]["start"], first["shots"][-1]["end"]), (0.0, 43.0))
-        self.assertEqual([shot["source_scene_ids"] for shot in first["shots"]], [["scn_0001", "scn_0002"], ["scn_0003", "scn_0004"]])
+        self.assertEqual([shot["narration_segment_ids"] for shot in first["shots"]], [["seg_1", "seg_2"], ["seg_3", "seg_4"]])
+        self.assertLess(first["shots"][-1]["end"] - first["shots"][-1]["start"], self.settings["full_image"]["image_duration_seconds"])
         media = compile_media_plan("prj_full", first, "full_image", self.settings)
         self.assertEqual([item["image_motion_policy"] for item in media["shots"]], ["AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"])
         requests = compile_generation_requests("prj_full", first, media, self.continuity, self.settings)
@@ -66,7 +73,7 @@ class FullImagePlanningTests(unittest.TestCase):
         self.assertEqual(requests["guardrail_estimate"]["required_video_requests"], 0)
 
     def test_effect_settings_do_not_change_image_request_identity(self):
-        shots = compile_full_image_shot_plan("prj_full", self.timeline, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
+        shots = compile_full_image_shot_plan("prj_full", self.timeline, self.alignment, self.continuity, self.settings["full_image"], timeline_sha256="t", continuity_sha256="c")
         media = compile_media_plan("prj_full", shots, "full_image", self.settings)
         requests = compile_generation_requests("prj_full", shots, media, self.continuity, self.settings)
         changed = {**self.settings, "full_image": {**self.settings["full_image"], "audio_visualizer":False}}
