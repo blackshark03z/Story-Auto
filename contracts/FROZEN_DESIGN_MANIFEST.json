@@ -1,12 +1,12 @@
 {
   "schema": "story-auto.frozen-design-manifest/1.0.0",
   "files": {
-    "DESIGN_FREEZE.md": "5397b90a3e021e2bdfcfde795b7986729195af520093015f7cdc93c30d8516c7",
-    "docs/specs/FROZEN_PRODUCT_DESIGN_V1.md": "aeb72b21bc1e56da261e7bcfeb495a62d1db681876b2f5993ee5aedd41db59ca",
+    "DESIGN_FREEZE.md": "fdda37b3ef382b7795e6b7b1f404ada2832d9f24d2a950091fe97ea8adea74b6",
+    "docs/specs/FROZEN_PRODUCT_DESIGN_V1.md": "910106f7ed046bb74c96919900113c242ca05f31b90a548edf0f69beea0c6b66",
     "docs/specs/DOMAIN_MODEL_V1.md": "0848fcf0bc973c7a5f1dae275c66700e59c84e0c03b037d121779a11ac089c61",
-    "docs/specs/ARTIFACT_CONTRACTS_V1.md": "d72b39ee294cc8503451f663a60a889e3f25da7844a420b813ce948fa75e64a3",
-    "docs/specs/FAILURE_RECOVERY_V1.md": "56ff63172285cb37525de08accd91a1470bcd03fead11a135d312457a69bfedb",
-    "docs/specs/QUALITY_ACCEPTANCE_V1.md": "b4c6e4498f3c1c6e511d4f8c3b03b79e5f6601026bcbb75d6dd31210f7606b59",
-    "contracts/frozen_design_v1.json": "4911773d937d2b59cfb9f7103a3ed88a471e92e8919c366a97d92ec0ff2295a5"
+    "docs/specs/ARTIFACT_CONTRACTS_V1.md": "0a003b2dc6df3399021c7016ed0050cc728d4a0e1804c3e9f5cc09b433928b47",
+    "docs/specs/FAILURE_RECOVERY_V1.md": "99922878f577e2be21ddce1db232941a48f8e2730130c8317e29792e56e9c979",
+    "docs/specs/QUALITY_ACCEPTANCE_V1.md": "a6f82dce7f2a0c2946abf484e8900ee0c6856ca6b6cf286f6a531be98327a60b",
+    "contracts/frozen_design_v1.json": "67f9d23f2b40aeb872f2a0dbff465657c472c2980da5937b72404f7e429d2ec2"
   }
 }

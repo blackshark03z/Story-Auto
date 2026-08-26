@@ -113,6 +113,16 @@ Before 18–24 minutes:
 
 Only then attempt one representative long-form run.
 
+## Full-image gate
+
+Before a long-form production run:
+
+1. semantic windows tile the aligned narration from zero through its exact end;
+2. every provider request is `IMAGE` and VIDEO submissions are zero;
+3. every render segment is an image with alternating full-window continuous zoom;
+4. visualizer ON/OFF uses the canonical narration signal without changing image requests;
+5. resume has zero new provider submissions after completion.
+
 ## Publishing gate
 
 - title/description editable;

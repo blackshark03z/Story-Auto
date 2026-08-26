@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 from typing import Any
 
@@ -12,8 +13,32 @@ from .paths import ProjectPaths, RuntimeLayout
 
 
 PROJECT_SCHEMA_VERSION = "story-auto-project/1.0.0"
-RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai", "ambient_story"})
+RENDER_MODES = frozenset({"hybrid_hook", "full_video_ai", "ambient_story", "full_image"})
 TTS_PROVIDERS = frozenset({"elevenlabs", "typecast", "kokoro_local"})
+FULL_IMAGE_CADENCES = frozenset({"SEMANTIC_ADAPTIVE", "FIXED"})
+FULL_IMAGE_MOTION = "AUTO_CONTINUOUS_ZOOM"
+
+
+def resolve_full_image_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical, seconds-based FULL_IMAGE configuration."""
+    raw = settings.get("full_image", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict) or not set(raw).issubset({"image_duration_seconds", "cadence", "motion", "audio_visualizer"}):
+        raise ProjectValidationError("settings.full_image has unsupported fields")
+    duration = raw.get("image_duration_seconds", 30.0)
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not math.isfinite(float(duration)) or not 5.0 <= float(duration) <= 120.0:
+        raise ProjectValidationError("settings.full_image.image_duration_seconds must be between 5 and 120 seconds")
+    cadence = raw.get("cadence", "SEMANTIC_ADAPTIVE")
+    if cadence not in FULL_IMAGE_CADENCES:
+        raise ProjectValidationError("settings.full_image.cadence must be SEMANTIC_ADAPTIVE or FIXED")
+    if raw.get("motion", FULL_IMAGE_MOTION) != FULL_IMAGE_MOTION:
+        raise ProjectValidationError("settings.full_image.motion must be AUTO_CONTINUOUS_ZOOM")
+    visualizer = raw.get("audio_visualizer", True)
+    if not isinstance(visualizer, bool):
+        raise ProjectValidationError("settings.full_image.audio_visualizer must be boolean")
+    return {"image_duration_seconds": float(duration), "cadence": cadence,
+            "motion": FULL_IMAGE_MOTION, "audio_visualizer": visualizer}
 
 
 class ProjectValidationError(ValueError):
@@ -42,6 +67,8 @@ class ProjectConfig:
             raise ProjectValidationError("ambient_story requires settings.ambient_style to be quiet_verdict or hidden_mastery")
         if ambient_style is not None and ambient_style not in AMBIENT_STYLES:
             raise ProjectValidationError("settings.ambient_style must be quiet_verdict or hidden_mastery")
+        if self.render_mode == "full_image":
+            object.__setattr__(self, "settings", {**self.settings, "full_image": resolve_full_image_settings(self.settings)})
         tts = self.settings.get("tts")
         if tts is not None:
             if not isinstance(tts, dict) or tts.get("provider") not in TTS_PROVIDERS:

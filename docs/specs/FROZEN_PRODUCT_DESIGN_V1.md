@@ -27,7 +27,15 @@ Story Auto turns a valid `content.md` into a cinematic, long-form YouTube storyt
 - stills may be reference/keyframe/ingredient assets only;
 - unresolved required video blocks production render.
 
-Both modes share one timeline, planning system, generation manager, render resolver, and final composer.
+### `full_image`
+
+- alignment-derived semantic windows target a configurable duration in seconds;
+- every visual generation request and final visual segment is `IMAGE / REQUIRED`;
+- a local `AUTO_CONTINUOUS_ZOOM` alternates subtle in/out motion across each window;
+- the optional visualizer reacts to canonical narration audio in the common compositor;
+- no provider VIDEO request is permitted.
+
+All modes share one timeline, planning system, generation manager, render resolver, and final composer.
 
 ## 4. TTS
 

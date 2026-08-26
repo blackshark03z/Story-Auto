@@ -5,6 +5,12 @@ Frozen: **2026-08-12**
 Owner-authorized amendment: **2026-08-14** — add explicit `kokoro_local` TTS
 without silent fallback or default migration; all other frozen invariants remain.
 
+Owner-authorized amendment: **2026-08-26** — add `full_image`: a deterministic,
+image-only long-form visual mode with alignment-bound semantic windows, local
+continuous zoom, and an optional narration-driven audio visualizer. It reuses
+the canonical Flow IMAGE path and common compositor; it may never dispatch a
+VIDEO request.
+
 ## Gate status
 
 - **DESIGN-01 — User workflow + business requirements:** CLOSED.

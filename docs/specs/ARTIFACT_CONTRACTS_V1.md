@@ -27,6 +27,7 @@ Key domains:
 - Flow provider selection/config references;
 - render dimensions/fps;
 - hybrid hook target;
+- FULL_IMAGE duration in canonical seconds, cadence, fixed zoom mode, and visualizer toggle;
 - audio/BGM configuration;
 - cost/retry guardrails.
 
@@ -76,7 +77,7 @@ Desired production policy per shot:
 - fallback policy;
 - still-motion intent when image-based.
 
-Semantic validator enforces mode invariants (`full_video_ai` means every final shot desires VIDEO/REQUIRED).
+Semantic validator enforces mode invariants (`full_video_ai` means every final shot desires VIDEO/REQUIRED; `full_image` means every final shot desires IMAGE/REQUIRED and carries an alternating deterministic zoom specification).
 
 ## review_state.json
 
@@ -125,6 +126,7 @@ Exact final source selection and editorial treatment:
 - source kind;
 - trim/fit/crop;
 - image motion;
+- optional renderer-owned narration waveform specification;
 - transition;
 - exact target timeline interval.
 

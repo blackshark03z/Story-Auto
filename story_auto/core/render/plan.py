@@ -41,7 +41,7 @@ def validate_render_plan(value: Any, *, project_root: Path | None = None) -> Non
     if not isinstance(value, dict) or value.get("schema_version") != RENDER_PLAN_VERSION:
         raise RenderPlanError("RENDER_PLAN_INVALID")
     segments = value.get("segments")
-    if value.get("render_mode") not in {"hybrid_hook", "full_video_ai", "ambient_story"} or not isinstance(segments, list) or not segments:
+    if value.get("render_mode") not in {"hybrid_hook", "full_video_ai", "ambient_story", "full_image"} or not isinstance(segments, list) or not segments:
         raise RenderPlanError("RENDER_PLAN_INVALID")
     previous = 0.0
     segment_ids: set[str] = set()
@@ -65,6 +65,13 @@ def validate_render_plan(value: Any, *, project_root: Path | None = None) -> Non
             if segment["source_media_type"] != "IMAGE": raise RenderPlanError("AMBIENT_IMAGE_ONLY_POLICY_INVALID")
             try: validate_ambient_presentation(segment.get("ambient_presentation"))
             except ValueError as error: raise RenderPlanError("AMBIENT_PRESENTATION_INVALID") from error
+        if value["render_mode"] == "full_image":
+            if segment["source_media_type"] != "IMAGE" or segment.get("image_motion_policy") not in {"AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"}:
+                raise RenderPlanError("FULL_IMAGE_RENDER_POLICY_INVALID")
+            spec = segment.get("motion_spec", {})
+            expected = "ZOOM_IN" if segment["image_motion_policy"].endswith("IN") else "ZOOM_OUT"
+            if spec.get("mode") != "AUTO_CONTINUOUS_ZOOM" or spec.get("direction") != expected:
+                raise RenderPlanError("FULL_IMAGE_MOTION_SPEC_INVALID")
         if project_root is not None and segment["source_media_type"] != "HOLD":
             path = project_root / segment["source_asset"]
             if not path.is_file() or sha256_file(path) != segment.get("source_hash"):
@@ -192,6 +199,7 @@ def resolve_render_plan(
                 "short_video_policy": "BLOCK" if render_mode == "full_video_ai" else settings.get("short_video_policy", "BLOCK"),
                 "fit_policy": settings.get("fit_policy", "COVER_CENTER_CROP"),
                 "image_motion_policy": presentation["motion"] if presentation else (media.get("image_motion_policy", "STATIC") if source_kind == "IMAGE" else "NONE"),
+                **({"motion_spec": dict(media["motion_spec"])} if render_mode == "full_image" else {}),
                 **({"ambient_presentation": presentation} if presentation else {}),
                 "transition": transition, "source_audio_policy": "MUTE", "fallback_resolution": fallback,
                 "provenance": provenance,

@@ -38,7 +38,7 @@ if frozen.get("schema") != "story-auto.frozen-design/1.0.0" or frozen.get("statu
 expected = {
     "baseline_model": "gemini-3.5-flash",
     "visual_provider": "google_flow",
-    "modes": {"hybrid_hook", "full_video_ai"},
+    "modes": {"hybrid_hook", "full_video_ai", "ambient_story", "full_image"},
     "tts": {"elevenlabs", "typecast", "kokoro_local"},
 }
 if frozen.get("providers", {}).get("llm", {}).get("baseline_model") != expected["baseline_model"]:
@@ -51,6 +51,8 @@ if set(frozen.get("providers", {}).get("tts", [])) != expected["tts"]:
     fail("TTS provider drift")
 if frozen.get("render_modes", {}).get("full_video_ai", {}).get("silent_still_fallback") is not False:
     fail("full-video fallback invariant drift")
+if frozen.get("render_modes", {}).get("full_image", {}).get("video_provider_requests") is not False:
+    fail("full-image video-provider invariant drift")
 if frozen.get("providers", {}).get("source_video_audio") != "MUTE":
     fail("source video audio policy drift")
 

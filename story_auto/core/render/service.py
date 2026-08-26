@@ -21,6 +21,7 @@ from .compiler import compile_hold, compile_image, compile_video
 from .compositor import COMPOSER_VERSION, compose
 from .media import MediaTarget, probe_media, transition_output_durations, validate_video
 from .plan import RENDER_PLAN_VERSION, resolve_render_plan, validate_render_plan
+from .waveform import visualizer_spec
 
 
 RENDER_STAGE_VERSION = "story-auto-render-stage/1.0.0"
@@ -59,6 +60,11 @@ def resolve_render_settings(config) -> tuple[dict[str, Any], MediaTarget]:
             raise ValueError("settings.render.ambient_presentation supports only boolean motion_enabled and overlay_enabled")
         settings["ambient_presentation"] = {"style_id":config.settings["ambient_style"],
             "motion_enabled":local.get("motion_enabled", True),"overlay_enabled":local.get("overlay_enabled", True)}
+    if config.render_mode == "full_image":
+        from story_auto.core.project import resolve_full_image_settings
+        full_image = resolve_full_image_settings(config.settings)
+        settings["full_image"] = full_image
+        settings["audio_visualizer"] = visualizer_spec(enabled=full_image["audio_visualizer"])
     return settings, target
 
 
@@ -255,7 +261,8 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                                    output=candidate, master_duration=float(render_plan["master_duration"]),
                                    subtitles_ass=ass_path, bgm=bgm_path,
                                    bgm_volume=audio_plan["bgm"]["volume"], target=target,
-                                   video_crf=final_video_crf)
+                                   video_crf=final_video_crf,
+                                   audio_visualizer=bool(settings.get("audio_visualizer", {}).get("enabled", False)))
             metadata=_atomic_media_publish(final_path,produce_final)
             metadata = validate_video(final_path, target=target, silent=False,
                                       expected_duration=float(render_plan["master_duration"]), tolerance=.12)
@@ -270,6 +277,7 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
                 "selected_asset_hashes": [segment["source_hash"] for segment in render_plan["segments"]],
                 "narration_sha256": narration_hash, "bgm_sha256": bgm_hash,
                 "composer": {"version": COMPOSER_VERSION, "settings": settings},
+                "audio_visualizer": settings.get("audio_visualizer", visualizer_spec(enabled=False)),
                 "streams": {"video": metadata["video"], "audio": metadata["audio"]},
                 "publishing_package_sha256": (sha256_file(paths.artifact_path("output/publishing_package.json"))
                                                  if paths.artifact_path("output/publishing_package.json").is_file() else None),

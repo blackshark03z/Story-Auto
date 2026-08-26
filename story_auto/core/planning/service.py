@@ -13,7 +13,7 @@ from story_auto.core.content import narration_hash, parse_content_markdown
 from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, GeminiQCError,
                                        compile_flow_motion_prompt, plan_motion,
                                        validate_motion_plan)
-from story_auto.core.project import RuntimeLayout, load_project
+from story_auto.core.project import RuntimeLayout, load_project, resolve_full_image_settings
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import (
     AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,
@@ -49,6 +49,9 @@ REQUEST_SCHEMA_VERSION = "story-auto-generation-requests/1.0.0"
 AMBIENT_SHOT_POLICY_VERSION = "story-auto-ambient-visual-chapters/2.0.0"
 AMBIENT_MEDIA_POLICY_VERSION = "story-auto-ambient-media-policy/2.0.0"
 AMBIENT_GENERATION_PROMPT_VERSION = "story-auto-ambient-image-prompt/2.1.0"
+FULL_IMAGE_WINDOW_POLICY_VERSION = "story-auto-full-image-windows/1.0.0"
+FULL_IMAGE_MEDIA_POLICY_VERSION = "story-auto-full-image-media-policy/1.0.0"
+FULL_IMAGE_GENERATION_PROMPT_VERSION = "story-auto-full-image-prompt/1.0.0"
 
 class PlanningError(ValueError):
     def __init__(self, failure_class: str, detail: str = "") -> None:
@@ -258,9 +261,86 @@ def compile_ambient_shot_plan(project_id: str, timeline: dict[str, Any], continu
     validate_shot_plan(value, timeline, continuity)
     return value
 
+
+def compile_full_image_shot_plan(project_id: str, timeline: dict[str, Any], continuity: dict[str, Any], full_image: dict[str, Any],
+                                 *, timeline_sha256: str, continuity_sha256: str) -> dict[str, Any]:
+    """Tile narration with semantic scene windows, never arbitrary still-per-scene assumptions."""
+    target, cadence = float(full_image["image_duration_seconds"]), full_image["cadence"]
+    scenes = timeline["scenes"]
+    windows: list[list[dict[str, Any]]] = []
+    cursor = 0
+    while cursor < len(scenes):
+        start = float(scenes[cursor]["start"])
+        candidates = list(range(cursor + 1, len(scenes) + 1))
+        # Semantic Adaptive only considers boundaries within the declared useful
+        # neighborhood when available. Fixed uses the closest valid boundary.
+        nearby = [end for end in candidates if .8 * target <= float(scenes[end - 1]["end"]) - start <= 1.2 * target]
+        options = nearby if cadence == "SEMANTIC_ADAPTIVE" and nearby else candidates
+        end = min(options, key=lambda item: (abs((float(scenes[item - 1]["end"]) - start) - target), item))
+        windows.append(scenes[cursor:end])
+        cursor = end
+    kinds, _ = _entity_maps(continuity)
+    shots: list[dict[str, Any]] = []
+    for index, grouped in enumerate(windows, 1):
+        first, last = grouped[0], grouped[-1]
+        entity_ids = list(dict.fromkeys(item for scene in grouped for item in scene.get("entity_ids", [])))
+        characters = [item for item in entity_ids if kinds.get(item) == "character"]
+        props = [item for item in entity_ids if kinds.get(item) == "prop"]
+        locations = [item for item in entity_ids if kinds.get(item) == "location"]
+        summaries = [str(scene.get("summary", "")).strip() for scene in grouped if str(scene.get("summary", "")).strip()]
+        narration_ids = [item for scene in grouped for item in scene["narration_segment_ids"]]
+        semantic_summary = " ".join(summaries) or "Narrated story progression"
+        shots.append({
+            "shot_id": f"sh_{index:04d}", "scene_id": first["scene_id"],
+            "source_scene_ids": [scene["scene_id"] for scene in grouped],
+            "start": float(first["start"]), "end": float(last["end"]),
+            "narration_segment_ids": narration_ids,
+            "semantic_span": {"scene_ids": [scene["scene_id"] for scene in grouped],
+                              "narration_segment_ids": narration_ids, "summary": semantic_summary},
+            "subject": "Narrated story moment", "action": semantic_summary,
+            "character_ids": characters, "location_id": locations[0] if locations else None, "prop_ids": props,
+            "wardrobe_state_refs": [], "time_of_day": None, "camera_intent": "restrained still composition",
+            "composition_intent": "safe 16:9 cinematic frame", "visual_emotional_purpose": semantic_summary,
+            "motion_value": 0, "resolved_continuity": {"characters": characters, "location": locations[0] if locations else None, "props": props},
+            "previous_shot_context": shots[-1]["semantic_span"]["summary"] if shots else "",
+            "next_shot_handoff": "next semantic narration boundary",
+        })
+    value = {"schema_version": SHOT_SCHEMA_VERSION, "project_id": project_id,
+             "timeline_sha256": timeline_sha256, "continuity_sha256": continuity_sha256,
+             "planning_policy": "FULL_IMAGE_SEMANTIC_WINDOWS", "full_image": dict(full_image),
+             "shots": shots, "provenance": {"provider": "deterministic_local_policy", "planning_stage": "shot_plan",
+             "prompt_version": FULL_IMAGE_WINDOW_POLICY_VERSION, "direct_input_hashes": {"timeline_sha256": timeline_sha256, "continuity_sha256": continuity_sha256}},
+             "review_status": "VALIDATED"}
+    validate_shot_plan(value, timeline, continuity)
+    return value
+
 def validate_shot_plan(value: Any, timeline: dict[str, Any], continuity: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != SHOT_SCHEMA_VERSION or not isinstance(value.get("shots"), list) or not value["shots"]: raise PlanningError("SHOT_PLAN_INVALID")
     scene_map = {s["scene_id"]: s for s in timeline["scenes"]}; kinds, ids = _entity_maps(continuity); previous = -1.0; seen = set()
+    if value.get("planning_policy") == "FULL_IMAGE_SEMANTIC_WINDOWS":
+        try:
+            config = resolve_full_image_settings({"full_image": value.get("full_image")})
+        except Exception as error:
+            raise PlanningError("FULL_IMAGE_WINDOW_POLICY_INVALID") from error
+        covered: list[str] = []
+        for index, shot in enumerate(value["shots"], 1):
+            source_ids = shot.get("source_scene_ids")
+            if shot.get("shot_id") != f"sh_{index:04d}" or not isinstance(source_ids, list) or not source_ids or any(item not in scene_map for item in source_ids):
+                raise PlanningError("FULL_IMAGE_WINDOW_INVALID")
+            positions = [next(i for i, scene in enumerate(timeline["scenes"]) if scene["scene_id"] == item) for item in source_ids]
+            if positions != list(range(min(positions), max(positions) + 1)) or positions[0] != len(covered):
+                raise PlanningError("FULL_IMAGE_WINDOW_COVERAGE_INVALID")
+            start, end = float(shot["start"]), float(shot["end"])
+            if abs(start - float(scene_map[source_ids[0]]["start"])) > .001 or abs(end - float(scene_map[source_ids[-1]]["end"])) > .001 or end <= start or (index > 1 and abs(start - previous) > .001):
+                raise PlanningError("FULL_IMAGE_WINDOW_TIMELINE_INVALID")
+            if shot.get("semantic_span", {}).get("scene_ids") != source_ids or not shot.get("semantic_span", {}).get("narration_segment_ids"):
+                raise PlanningError("FULL_IMAGE_SEMANTIC_SPAN_INVALID")
+            covered.extend(source_ids); previous = end
+        if covered != [scene["scene_id"] for scene in timeline["scenes"]] or abs(previous - float(timeline["scenes"][-1]["end"])) > .001:
+            raise PlanningError("FULL_IMAGE_WINDOW_COVERAGE_INVALID")
+        if config["motion"] != "AUTO_CONTINUOUS_ZOOM":
+            raise PlanningError("FULL_IMAGE_MOTION_POLICY_INVALID")
+        return
     if value.get("planning_policy") == "AMBIENT_VISUAL_CHAPTERS":
         try:
             profile = ambient_style_profile(value.get("ambient_style"))
@@ -316,10 +396,10 @@ def _media_settings(config) -> dict[str, Any]:
     clip_seconds = float(settings.get("provider_video_clip_seconds", 8.0))
     if not math.isfinite(clip_seconds) or clip_seconds < .5 or clip_seconds > 30:
         raise PlanningError("MEDIA_POLICY_INVALID", "provider_video_clip_seconds must be between .5 and 30")
-    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20)),"provider_video_clip_seconds":clip_seconds,"ambient_style":config.settings.get("ambient_style")}
+    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20)),"provider_video_clip_seconds":clip_seconds,"ambient_style":config.settings.get("ambient_style"),"full_image":resolve_full_image_settings(config.settings) if config.render_mode == "full_image" else None}
 
 def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: str, settings: dict[str, Any]) -> dict[str, Any]:
-    if render_mode not in {"hybrid_hook", "full_video_ai", "ambient_story"}: raise PlanningError("MEDIA_POLICY_INVALID")
+    if render_mode not in {"hybrid_hook", "full_video_ai", "ambient_story", "full_image"}: raise PlanningError("MEDIA_POLICY_INVALID")
     if render_mode == "ambient_story":
         style_id = settings.get("ambient_style")
         profile = ambient_style_profile(style_id)
@@ -336,6 +416,26 @@ def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: 
         return {"schema_version":MEDIA_SCHEMA_VERSION,"project_id":project_id,"render_mode":render_mode,
             "ambient_style":style_id,"shot_plan_sha256":_hash_text(str(shot_plan)),"hook_target_seconds":0.0,
             "resolved_hook_end":None,"asset_budget":shot_plan.get("asset_budget"),"shots":planned,"review_status":"VALIDATED"}
+    if render_mode == "full_image":
+        full_image = settings.get("full_image")
+        planned_identity = shot_plan.get("full_image", {})
+        if (shot_plan.get("planning_policy") != "FULL_IMAGE_SEMANTIC_WINDOWS" or
+                any(planned_identity.get(key) != full_image.get(key) for key in ("image_duration_seconds", "cadence"))):
+            raise PlanningError("FULL_IMAGE_WINDOW_POLICY_INVALID")
+        planned = []
+        for index, shot in enumerate(shot_plan["shots"], 1):
+            override = settings.get("overrides", {}).get(shot["shot_id"], {})
+            if override and (override.get("media_type", "IMAGE"), override.get("requirement", "REQUIRED")) != ("IMAGE", "REQUIRED"):
+                raise PlanningError("MEDIA_OVERRIDE_REJECTED")
+            motion = "AUTO_CONTINUOUS_ZOOM_IN" if index % 2 else "AUTO_CONTINUOUS_ZOOM_OUT"
+            planned.append({"shot_id":shot["shot_id"], "media_type":"IMAGE", "requirement":"REQUIRED",
+                "target_duration":float(shot["end"])-float(shot["start"]), "fallback_policy":"BLOCK",
+                "reference_strategy":"CONTINUITY_REFERENCES", "image_motion_policy":motion,
+                "motion_spec":{"mode":"AUTO_CONTINUOUS_ZOOM", "direction":"ZOOM_IN" if index % 2 else "ZOOM_OUT", "start_scale":1.0 if index % 2 else 1.06, "end_scale":1.06 if index % 2 else 1.0, "easing":"SMOOTH"},
+                "generation_priority":1, "motion_spike":False})
+        return {"schema_version":MEDIA_SCHEMA_VERSION,"project_id":project_id,"render_mode":render_mode,
+                "full_image":dict(full_image),"shot_plan_sha256":_hash_text(str(shot_plan)),"hook_target_seconds":0.0,
+                "resolved_hook_end":None,"shots":planned,"review_status":"VALIDATED"}
     hook_target, covered, hook_end = float(settings["hook_seconds"]), 0.0, None; planned = []
     for shot in shot_plan["shots"]:
         duration = float(shot["end"])-float(shot["start"])
@@ -364,18 +464,29 @@ def validate_media_plan(value: Any, shot_plan: dict[str, Any]) -> None:
             if (media["media_type"], media["requirement"], media.get("fallback_policy")) != ("IMAGE", "REQUIRED", "BLOCK"): raise PlanningError("AMBIENT_IMAGE_ONLY_POLICY_INVALID")
             try: validate_ambient_presentation(media.get("ambient_presentation"))
             except ValueError as error: raise PlanningError("AMBIENT_PRESENTATION_INVALID") from error
+        if value["render_mode"] == "full_image":
+            if (media["media_type"], media["requirement"], media.get("fallback_policy")) != ("IMAGE", "REQUIRED", "BLOCK"):
+                raise PlanningError("FULL_IMAGE_ONLY_POLICY_INVALID")
+            spec = media.get("motion_spec", {})
+            expected = "ZOOM_IN" if int(media["shot_id"].rsplit("_", 1)[-1]) % 2 else "ZOOM_OUT"
+            if media.get("image_motion_policy") != f"AUTO_CONTINUOUS_{expected}" or spec.get("mode") != "AUTO_CONTINUOUS_ZOOM" or spec.get("direction") != expected:
+                raise PlanningError("FULL_IMAGE_MOTION_POLICY_INVALID")
     if value["render_mode"] == "hybrid_hook":
         hook = [m for m in value["shots"] if m["generation_priority"] == 0]
         if not hook or any(m["media_type"] != "VIDEO" or m["requirement"] != "REQUIRED" for m in hook): raise PlanningError("HYBRID_HOOK_POLICY_INVALID")
 
 def _request_id(payload: dict[str, Any]) -> str: return "req_" + _hash_text(repr(sorted(payload.items())))[:20]
 def _canonical_request_id(payload: dict[str, Any]) -> str: return "req_" + _hash_text(canonical_json(payload))[:20]
-def _generation_media_identity(media: dict[str, Any], *, ambient: bool) -> dict[str, Any]:
+def _generation_media_identity(media: dict[str, Any], *, ambient: bool, full_image: bool = False) -> dict[str, Any]:
+    if full_image:
+        return {key: media.get(key) for key in ("shot_id", "media_type", "requirement", "target_duration", "fallback_policy", "reference_strategy", "generation_priority")}
     if not ambient: return media
     return {key: media.get(key) for key in ("shot_id", "media_type", "requirement", "target_duration", "fallback_policy", "reference_strategy", "generation_priority")}
 
 
 def _generation_media_plan_identity(media_plan: dict[str, Any]) -> dict[str, Any]:
+    if media_plan.get("render_mode") == "full_image":
+        return {"render_mode":"full_image", "shots":[_generation_media_identity(item, ambient=False, full_image=True) for item in media_plan.get("shots", [])]}
     if media_plan.get("render_mode") != "ambient_story": return media_plan
     return {"render_mode":"ambient_story","ambient_style":media_plan.get("ambient_style"),
             "shots":[_generation_media_identity(item,ambient=True) for item in media_plan.get("shots",[])]}
@@ -394,6 +505,7 @@ def _compile_ambient_prompt(brief: dict[str, Any], visual_policy: dict[str, Any]
 def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], media_plan: dict[str, Any], continuity: dict[str, Any], settings: dict[str, Any], *, ambient_style: str | None = None) -> dict[str, Any]:
     requests, reference_ids = [], {}
     ambient = media_plan.get("render_mode") == "ambient_story"
+    full_image = media_plan.get("render_mode") == "full_image"
     if ambient:
         ambient_style = ambient_style or media_plan.get("ambient_style")
         style_directive = ambient_prompt_directive(ambient_style)
@@ -447,7 +559,7 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
             part_duration = min(settings["provider_video_clip_seconds"], remaining) if media["media_type"] == "VIDEO" else remaining
             part_end = float(shot["end"]) if part_index == part_count else part_start + part_duration
             shot_identity = brief if ambient else shot
-            seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot_identity,"media":_generation_media_identity(media,ambient=ambient),"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION}
+            seed = {"shot_id":shot["shot_id"],"media_type":media["media_type"],"shot":shot_identity,"media":_generation_media_identity(media,ambient=ambient,full_image=full_image),"refs":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else (FULL_IMAGE_GENERATION_PROMPT_VERSION if full_image else GENERATION_PROMPT_VERSION)}
             if ambient: seed["ambient_style"] = ambient_style
             request_id = _canonical_request_id(seed) if media["media_type"] == "VIDEO" else _request_id(seed)
             if media["media_type"] == "IMAGE":
@@ -461,7 +573,8 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
-    return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION,"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED",**({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE","image_prompt_budget":{"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})}
+    policy = ({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE","image_prompt_budget":{"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else ({"full_image":media_plan.get("full_image"),"temporal_video_qc":"NOT_APPLICABLE","video_provider_submissions_allowed":False} if full_image else {}))
+    return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else (FULL_IMAGE_GENERATION_PROMPT_VERSION if full_image else GENERATION_PROMPT_VERSION),"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED",**policy}
 
 def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str, Any],
                        motion_plan: dict[str, Any]) -> dict[str, Any]:
@@ -592,15 +705,20 @@ def _apply_planned_motion(generation_requests: dict[str, Any], shot_plan: dict[s
 def validate_generation_requests(value: Any, media_plan: dict[str, Any], continuity: dict[str, Any]) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != REQUEST_SCHEMA_VERSION or not isinstance(value.get("requests"), list): raise PlanningError("GENERATION_REQUESTS_INVALID")
     ambient = media_plan.get("render_mode") == "ambient_story"
+    full_image = media_plan.get("render_mode") == "full_image"
     if ambient:
         budget = value.get("image_prompt_budget")
         if value.get("prompt_version") != AMBIENT_GENERATION_PROMPT_VERSION or value.get("temporal_video_qc") != "NOT_APPLICABLE": raise PlanningError("AMBIENT_GENERATION_POLICY_INVALID")
         if not isinstance(budget, dict) or budget.get("internal_target") != AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET or budget.get("provider_hard_limit") != FLOW_IMAGE_PROMPT_HARD_LIMIT: raise PlanningError("AMBIENT_PROMPT_BUDGET_INVALID")
+    if full_image:
+        if value.get("prompt_version") != FULL_IMAGE_GENERATION_PROMPT_VERSION or value.get("temporal_video_qc") != "NOT_APPLICABLE" or value.get("video_provider_submissions_allowed") is not False:
+            raise PlanningError("FULL_IMAGE_GENERATION_POLICY_INVALID")
     requests, ids = value["requests"], set(); graph = {}
     for request in requests:
         if not isinstance(request, dict) or not isinstance(request.get("request_id"), str) or request["request_id"] in ids or not isinstance(request.get("prompt"), str) or not request["prompt"].strip(): raise PlanningError("GENERATION_REQUESTS_INVALID")
         ids.add(request["request_id"]); graph[request["request_id"]] = request.get("depends_on", [])
         if request.get("media_type") not in {"IMAGE","VIDEO"}: raise PlanningError("GENERATION_REQUESTS_INVALID")
+        if full_image and request.get("media_type") != "IMAGE": raise PlanningError("FULL_IMAGE_ONLY_POLICY_INVALID")
         try: validate_visual_policy(request.get("visual_policy"))
         except ValueError as error: raise PlanningError("VISUAL_POLICY_INVALID") from error
         if request.get("media_type") == "IMAGE" and request.get("output_count") != 1: raise PlanningError("IMAGE_OUTPUT_COUNT_INVALID")
@@ -693,15 +811,16 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
     timeline_path, continuity_path = paths.artifact_path("output/story_timeline.json"), paths.artifact_path("output/continuity_bible.json"); timeline, continuity = read_json(timeline_path), read_json(continuity_path); alignment = read_json(paths.artifact_path("output/alignment.json")); validate_timeline(timeline, alignment); validate_continuity(continuity, timeline)
     timeline_sha, continuity_sha = sha256_file(timeline_path), sha256_file(continuity_path)
     ambient = config.render_mode == "ambient_story"
+    full_image = config.render_mode == "full_image"
     ambient_style = config.settings.get("ambient_style") if ambient else None
-    shot_producer = AMBIENT_SHOT_POLICY_VERSION if ambient else SHOT_PROMPT_VERSION
-    media_producer = AMBIENT_MEDIA_POLICY_VERSION if ambient else MEDIA_POLICY_VERSION
-    request_producer = AMBIENT_GENERATION_PROMPT_VERSION if ambient else GENERATION_PROMPT_VERSION
-    active = None if ambient else (provider or _default_provider(paths))
+    shot_producer = AMBIENT_SHOT_POLICY_VERSION if ambient else (FULL_IMAGE_WINDOW_POLICY_VERSION if full_image else SHOT_PROMPT_VERSION)
+    media_producer = AMBIENT_MEDIA_POLICY_VERSION if ambient else (FULL_IMAGE_MEDIA_POLICY_VERSION if full_image else MEDIA_POLICY_VERSION)
+    request_producer = AMBIENT_GENERATION_PROMPT_VERSION if ambient else (FULL_IMAGE_GENERATION_PROMPT_VERSION if full_image else GENERATION_PROMPT_VERSION)
+    active = None if (ambient or full_image) else (provider or _default_provider(paths))
     with ProjectLock(paths.runtime, project_id):
         shot_inputs = {"timeline_sha256":timeline_sha,"continuity_sha256":continuity_sha}
-        shot_settings = {"ambient_style":ambient_style} if ambient else {k:v for k,v in llm_settings.items() if k != "api_key"}
-        if not ambient: shot_inputs["model"] = model
+        shot_settings = {"ambient_style":ambient_style} if ambient else ({"full_image":{key:media_settings["full_image"][key] for key in ("image_duration_seconds", "cadence")}} if full_image else {k:v for k,v in llm_settings.items() if k != "api_key"})
+        if not ambient and not full_image: shot_inputs["model"] = model
         checkpoints = CheckpointStore(paths); shot_path = paths.artifact_path("output/shot_plan.json"); shot_fp = fingerprint(stage_name="shot_plan", producer_version=shot_producer, artifact_schema_version=SHOT_SCHEMA_VERSION, direct_inputs=shot_inputs, settings=shot_settings); decision = checkpoints.decide("shot_plan", shot_fp)
         if decision.action == "SKIP":
             try: shot_plan = read_json(shot_path); validate_shot_plan(shot_plan, timeline, continuity); shot_action="SKIP"
@@ -709,6 +828,18 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
         if decision.action == "RUN" and ambient:
             try:
                 shot_plan = compile_ambient_shot_plan(project_id, timeline, continuity, ambient_style,
+                    timeline_sha256=timeline_sha, continuity_sha256=continuity_sha)
+            except PlanningError as error:
+                for name in ("shot_plan.json", "media_plan.json", "generation_requests.json"):
+                    paths.artifact_path(f"output/{name}").unlink(missing_ok=True)
+                _record_visual_planning_failure(paths, error)
+                raise
+            atomic_write_json(shot_path, shot_plan)
+            checkpoints.record("shot_plan",fingerprint=shot_fp,status="SUCCESS",outputs=["output/shot_plan.json"],producer_version=shot_producer)
+            shot_action = "RUN"
+        elif decision.action == "RUN" and full_image:
+            try:
+                shot_plan = compile_full_image_shot_plan(project_id, timeline, continuity, media_settings["full_image"],
                     timeline_sha256=timeline_sha, continuity_sha256=continuity_sha)
             except PlanningError as error:
                 for name in ("shot_plan.json", "media_plan.json", "generation_requests.json"):
@@ -758,9 +889,10 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
         if decision.action == "RUN":
             media_plan=compile_media_plan(project_id,shot_plan,config.render_mode,media_settings); media_plan["shot_plan_sha256"]=shot_sha; validate_media_plan(media_plan,shot_plan); atomic_write_json(media_path,media_plan); checkpoints.record("media_plan",fingerprint=media_fp,status="SUCCESS",outputs=["output/media_plan.json"],producer_version=media_producer); media_action="RUN"
         media_sha=sha256_file(media_path); generation_media_sha=_hash_text(repr(_generation_media_plan_identity(media_plan)))
-        request_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_semantic_sha256":generation_media_sha,"prompt_version":request_producer} if ambient else {"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION,"motion_plan_version":MOTION_PLAN_VERSION}
+        request_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_semantic_sha256":generation_media_sha,"prompt_version":request_producer} if (ambient or full_image) else {"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION,"motion_plan_version":MOTION_PLAN_VERSION}
         request_settings={"aspect_ratio":media_settings["aspect_ratio"],"max_attempts":media_settings["max_attempts"],"provider_video_clip_seconds":media_settings["provider_video_clip_seconds"]}
         if ambient: request_settings["ambient_style"] = ambient_style
+        if full_image: request_settings["full_image_generation_policy"] = "IMAGE_ONLY"
         request_path=paths.artifact_path("output/generation_requests.json"); request_fp=fingerprint(stage_name="generation_requests",producer_version=request_producer,artifact_schema_version=REQUEST_SCHEMA_VERSION,direct_inputs=request_inputs,settings=request_settings); decision=checkpoints.decide("generation_requests",request_fp)
         if decision.action == "SKIP":
             try: requests=read_json(request_path); validate_generation_requests(requests,media_plan,continuity); request_action="SKIP"
@@ -768,7 +900,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
         if decision.action == "RUN":
             try:
                 requests=compile_generation_requests(project_id,shot_plan,media_plan,continuity,media_settings,ambient_style=ambient_style)
-                if not ambient:
+                if not ambient and not full_image:
                     router = active.router if isinstance(active, RoutedGeminiProvider) else active
                     if not callable(getattr(router, "reason", None)):
                         raise PlanningError("MOTION_PLANNER_UNAVAILABLE")

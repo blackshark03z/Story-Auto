@@ -24,6 +24,18 @@
       "all_final_visual_segments": "VIDEO",
       "required": true,
       "silent_still_fallback": false
+    },
+    "ambient_story": {
+      "all_final_visual_segments": "IMAGE",
+      "required": true,
+      "local_presentation": true
+    },
+    "full_image": {
+      "all_final_visual_segments": "IMAGE",
+      "required": true,
+      "video_provider_requests": false,
+      "motion": "AUTO_CONTINUOUS_ZOOM",
+      "audio_visualizer": "OPTIONAL_NARRATION_DRIVEN"
     }
   },
   "providers": {
@@ -88,6 +100,7 @@
     "provider_specific_ui_state_never_enters_core_contracts",
     "attempts_are_not_overwritten",
     "full_video_ai_never_silently_falls_back_to_image",
+    "full_image_never_creates_provider_video_requests",
     "all_selected_visual_sources_normalize_to_silent_mp4_before_final_composition",
     "ui_must_call_same_application_services_as_cli",
     "no_runtime_import_from_youtube_auto",

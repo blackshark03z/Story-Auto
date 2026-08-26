@@ -107,6 +107,12 @@ Provider success is not enough; invalid local media is not selectable.
 
 `full_video_ai` cannot resolve a failed required video shot to a still. Render stays blocked until an approved video source exists.
 
+## Full-image hard rule
+
+`full_image` cannot create or execute a VIDEO request. A cadence change replans
+semantic windows; zoom/visualizer changes invalidate only renderer descendants,
+never accepted image acquisition.
+
 ## Hybrid fallback rule
 
 Fallback occurs only when `media_plan` explicitly allows it. Every fallback is recorded in `render_plan` and final provenance.

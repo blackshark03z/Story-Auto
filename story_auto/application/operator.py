@@ -342,7 +342,7 @@ class OperatorService:
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
         ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
         return {"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
-                "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story"}[config.render_mode],
+                "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story","full_image":"Full Image"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
                 "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
@@ -586,6 +586,7 @@ class OperatorService:
         paths,config=self._project(project_id); media_type=media_type.upper(); requirement=requirement.upper()
         if config.render_mode=="full_video_ai" and (media_type,requirement)!=("VIDEO","REQUIRED"): raise OperatorServiceError("full_video_ai requires VIDEO / REQUIRED")
         if config.render_mode=="ambient_story" and (media_type,requirement)!=("IMAGE","REQUIRED"): raise OperatorServiceError("ambient_story requires IMAGE / REQUIRED")
+        if config.render_mode=="full_image" and (media_type,requirement)!=("IMAGE","REQUIRED"): raise OperatorServiceError("full_image requires IMAGE / REQUIRED")
         project=read_json(paths.project_file); media=project["settings"].setdefault("media",{}); media.setdefault("overrides",{})[shot_id]={"media_type":media_type,"requirement":requirement}; atomic_write_json(paths.project_file,project)
         run_visual_planning_stages(self.runtime.root,project_id,provider=provider); return self.planning_review(project_id)
 

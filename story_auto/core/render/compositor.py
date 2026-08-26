@@ -46,6 +46,7 @@ def compose(
     *, clips: list[Path], segments: list[dict[str, Any]], narration: Path, output: Path,
     master_duration: float, subtitles_ass: Path | None = None, bgm: Path | None = None,
     bgm_volume: float = 0.12, target: MediaTarget = MediaTarget(), video_crf: int = 18,
+    audio_visualizer: bool = False,
 ) -> dict[str, Any]:
     if not clips or len(clips) != len(segments):
         raise MediaError("COMPOSITOR_INPUT_INVALID")
@@ -71,17 +72,28 @@ def compose(
     if subtitles_ass:
         filters.append(f"{visual_label}subtitles=filename='{_filter_path(subtitles_ass)}'[vsub]")
         visual_label = "[vsub]"
+    if audio_visualizer:
+        # showwaves consumes the canonical narration stream directly. It is
+        # deterministic, stays frame-synchronous with speech, and never adds
+        # another audio source or provider dependency.
+        filters.append(f"[{narration_index}:a]asplit=2[voice_source][wave_source]")
+        filters.append("[wave_source]showwaves=s=420x72:mode=cline:colors=white@0.68,format=rgba[wave]")
+        filters.append(f"{visual_label}[wave]overlay=x=48:y=48:format=auto[vwave]")
+        visual_label = "[vwave]"
+        narration_audio = "[voice_source]"
+    else:
+        narration_audio = f"[{narration_index}:a]"
     if bgm:
         fade_out = max(0.0, master_duration - min(1.5, master_duration / 3))
         filters.extend([
-            f"[{narration_index}:a]aresample=48000,volume=1.0[voice]",
+            f"{narration_audio}aresample=48000,volume=1.0[voice]",
             f"[{bgm_index}:a]aresample=48000,volume={bgm_volume},afade=t=in:st=0:d=1,"
             f"afade=t=out:st={format_duration(max(.001, fade_out))}:d={format_duration(min(1.5, master_duration / 3))}[music]",
             "[voice][music]amix=inputs=2:duration=first:dropout_transition=0,alimiter=limit=0.95[aout]",
         ])
         audio_label = "[aout]"
     else:
-        filters.append(f"[{narration_index}:a]aresample=48000,alimiter=limit=0.95[aout]")
+        filters.append(f"{narration_audio}aresample=48000,alimiter=limit=0.95[aout]")
         audio_label = "[aout]"
     output.parent.mkdir(parents=True, exist_ok=True)
     command = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filters),

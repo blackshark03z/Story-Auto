@@ -65,7 +65,8 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
                   target: MediaTarget = MediaTarget(), finishing_profile: str = "NONE",
                   presentation: dict[str, Any] | None = None) -> dict:
     if motion not in {"STATIC", "SLOW_PUSH", "SLOW_PAN", "SUBTLE_PUSH", "SUBTLE_PULL",
-                      "SUBTLE_PAN_LEFT", "SUBTLE_PAN_RIGHT", "MICRO_DRIFT"}:
+                      "SUBTLE_PAN_LEFT", "SUBTLE_PAN_RIGHT", "MICRO_DRIFT",
+                      "AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"}:
         raise MediaError("IMAGE_MOTION_INVALID", motion)
     frames = max(1, round(duration * target.fps))
     if presentation is not None:
@@ -75,6 +76,14 @@ def compile_image(source: Path, output: Path, *, duration: float, motion: str,
         visual = _ambient_filter(target, duration, frames, presentation)
     elif motion == "STATIC":
         visual = _cover_filter(target)
+    elif motion in {"AUTO_CONTINUOUS_ZOOM_IN", "AUTO_CONTINUOUS_ZOOM_OUT"}:
+        denominator = max(1, frames - 1)
+        progress = f"(0.5-0.5*cos(PI*on/{denominator}))"
+        zoom = f"1+0.06000*{progress}" if motion.endswith("IN") else f"1.06000-0.06000*{progress}"
+        visual = (f"scale={target.width * 2}:{target.height * 2}:force_original_aspect_ratio=increase,"
+                  f"crop={target.width * 2}:{target.height * 2},"
+                  f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                  f"d={frames}:s={target.width}x{target.height}:fps={target.fps},format={target.pixel_format}")
     elif motion == "SLOW_PUSH":
         visual = (f"scale={target.width * 2}:{target.height * 2}:force_original_aspect_ratio=increase,"
                   f"crop={target.width * 2}:{target.height * 2},"
