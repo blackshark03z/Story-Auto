@@ -324,7 +324,8 @@ class OperatorService:
         has_audio=bool(alignment.get("audio_sha256") and audio_manifest.get("audio_sha256")==alignment.get("audio_sha256"))
         mode=execution_mode(config.settings)
         render_settings,_=resolve_render_settings(config)
-        render_stale=bool(artifacts["final.mp4"] and final_manifest.get("composer",{}).get("settings") != render_settings)
+        rendered_settings=final_manifest.get("composer",{}).get("settings")
+        render_stale=bool(artifacts["final.mp4"] and isinstance(rendered_settings,dict) and rendered_settings and rendered_settings != render_settings)
         policy=stage_policy(mode,has_valid_audio=has_audio,has_accepted_visuals=accepted_visuals)
         for item in policy.values():
             if item.action=="BLOCK": blocked.append("EXECUTION_PREREQUISITE_MISSING")
