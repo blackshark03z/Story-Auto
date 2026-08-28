@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import uuid
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,11 +15,11 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
-from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
+from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, execution_mode, load_project, stage_policy
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
-from story_auto.pipeline import run_audio_stages, run_content_stage
+from story_auto.pipeline import adopt_existing_audio, run_audio_stages, run_content_stage
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
@@ -70,6 +71,12 @@ _ATTENTION = {
         "message": "Add one Narration section before Story Auto can begin.",
         "action": "Edit content",
         "action_id": "edit_content",
+    },
+    "EXECUTION_PREREQUISITE_MISSING": {
+        "title": "Execution option is unavailable",
+        "message": "A required canonical artifact is missing or no longer valid. Select a mode with available prerequisites or restore the required project work.",
+        "action": "Review project",
+        "action_id": "review_project",
     },
     "PLANNING_APPROVAL_REQUIRED": {
         "title": "Review the production plan",
@@ -234,12 +241,30 @@ class OperatorService:
 
     def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
                        ambient_style: str | None=None, content: str | None=None,
-                       settings: dict[str, Any] | None=None) -> dict[str, Any]:
+                       settings: dict[str, Any] | None=None, imported_audio: dict[str, Any] | None=None) -> dict[str, Any]:
         ident=project_id or "prj_"+uuid.uuid4().hex
         resolved_settings=dict(settings or {})
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
-        _validate_new_project_narrator(resolved_settings)
+        mode=execution_mode(resolved_settings)
+        if mode == "FULL": _validate_new_project_narrator(resolved_settings)
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
+        if imported_audio is not None:
+            try:
+                encoded=imported_audio.get("base64") if isinstance(imported_audio,dict) else None
+                filename=Path(str(imported_audio.get("filename","narration.wav"))).name if isinstance(imported_audio,dict) else "narration.wav"
+                if not isinstance(encoded,str) or not encoded or len(encoded) > 180_000_000: raise OperatorServiceError("NARRATION_AUDIO_SOURCE_INVALID")
+                payload=base64.b64decode(encoded,validate=True)
+                temporary_dir=self.runtime.temp/uuid.uuid4().hex
+                temporary_dir.mkdir(parents=True,exist_ok=False)
+                temporary=temporary_dir/filename
+                temporary.write_bytes(payload)
+                try: adopt_existing_audio(self.runtime.root,ident,temporary,source_type="IMPORTED")
+                finally:
+                    if temporary.exists(): temporary.unlink()
+                    if temporary_dir.exists(): temporary_dir.rmdir()
+            except Exception:
+                # The project remains explicit but no unverified external audio is ever bound to it.
+                raise
         return self.snapshot(paths.project_id)
 
     def _project(self, project_id: str): return load_project(self.runtime,project_id)
@@ -265,6 +290,7 @@ class OperatorService:
             "content_manifest.json","alignment.json","story_timeline.json","continuity_bible.json","shot_plan.json",
             "media_plan.json","generation_requests.json","render_plan.json","final.mp4","publishing_package.json")}
         blocked=[]
+        audio_manifest=_safe_json(paths.artifact_path("output/audio_manifest.json"),{})
         tts = config.settings.get("tts", {})
         narrator = {"provider": tts.get("provider", "NOT_CONFIGURED"), "voice_id": None,
                     "name": "Not configured", "status": "Not configured", "technical_code": None}
@@ -293,6 +319,12 @@ class OperatorService:
             shot_groups.setdefault(request.get("shot_id") or request.get("request_id"),[]).append(request.get("request_id"))
         total_visuals=len(shot_groups)
         finished_visuals=sum(all(entries.get(request_id,{}).get("status") in {"SUCCEEDED","QC_PENDING"} for request_id in request_ids) for request_ids in shot_groups.values())
+        accepted_visuals=bool(shot_groups) and all(all(entries.get(request_id,{}).get("status")=="SUCCEEDED" and entries.get(request_id,{}).get("selected_asset") for request_id in request_ids) for request_ids in shot_groups.values())
+        has_audio=bool(alignment.get("audio_sha256") and audio_manifest.get("audio_sha256")==alignment.get("audio_sha256"))
+        mode=execution_mode(config.settings)
+        policy=stage_policy(mode,has_valid_audio=has_audio,has_accepted_visuals=accepted_visuals)
+        for item in policy.values():
+            if item.action=="BLOCK": blocked.append("EXECUTION_PREREQUISITE_MISSING")
         progress=0
         stage="Content"
         activity="Add approved narration to begin."
@@ -356,7 +388,10 @@ class OperatorService:
                 "completed_visuals":finished_visuals,"total_visuals":total_visuals,"primary_action":primary_action,
                 "attention":attention,"work_saved":True,"updated_at":_updated_at(paths),"word_count":_word_count(narration),
                 "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] and visual_planning.get("status")!="NEEDS_REGENERATION" else None,
-                "visual_planning":visual_planning}
+                "visual_planning":visual_planning,"execution_mode":mode,
+                "execution_policy":{name:{"action":item.action,"reason":item.reason} for name,item in policy.items()},
+                "narration_source":audio_manifest.get("source_type", "GENERATE"),
+                "accepted_visuals":accepted_visuals}
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
@@ -377,10 +412,15 @@ class OperatorService:
 
     def start_or_resume(self, project_id: str, *, planning_provider=None, audio_adapter=None) -> dict[str, Any]:
         paths,config=self._project(project_id); actions={"content":run_content_stage(self.runtime.root,project_id)}
-        if "tts" in config.settings:
+        mode=execution_mode(config.settings)
+        if "tts" in config.settings or mode != "FULL":
             actions["tts"],actions["alignment"]=run_audio_stages(self.runtime.root,project_id,adapter=audio_adapter)
+        if mode=="RENDER_ONLY":
+            snapshot=self.snapshot(project_id)
+            if any(item.action=="BLOCK" for item in stage_policy(mode,has_valid_audio=bool(snapshot.get("duration_seconds")),has_accepted_visuals=snapshot.get("completed_visuals",0)==snapshot.get("total_visuals",0) and bool(snapshot.get("total_visuals"))).values()):
+                raise OperatorServiceError("No accepted visual assets are available for the current plan.")
+            actions["snapshot"]=self.snapshot(project_id); return actions
         if "llm" in config.settings:
-            if "tts" not in config.settings: raise OperatorServiceError("planning requires configured TTS")
             actions["timeline"],actions["continuity"]=run_planning_stages(self.runtime.root,project_id,provider=planning_provider)
         actions["snapshot"]=self.snapshot(project_id); return actions
 
@@ -389,7 +429,37 @@ class OperatorService:
         return {name:_safe_json(paths.artifact_path(f"output/{name}.json"),None) for name in ("story_timeline","continuity_bible","shot_plan","media_plan","generation_requests","review_state","publishing_package")}
 
     def plan_visuals(self, project_id: str, *, provider=None) -> dict[str, Any]:
+        _,config=self._project(project_id)
+        if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY reuses accepted visual assets and cannot create a visual plan.")
         run_visual_planning_stages(self.runtime.root,project_id,provider=provider); return self.planning_review(project_id)
+
+    def set_execution_mode(self, project_id: str, mode: str) -> dict[str, Any]:
+        paths,_=self._project(project_id)
+        snapshot=self.snapshot(project_id)
+        policy=stage_policy(mode,has_valid_audio=bool(snapshot.get("duration_seconds")),
+                            has_accepted_visuals=bool(snapshot.get("accepted_visuals")))
+        blocked=next((item for item in policy.values() if item.action=="BLOCK"),None)
+        if blocked: raise OperatorServiceError(blocked.reason or "Execution option is unavailable.")
+        project=read_json(paths.project_file); project.setdefault("settings",{}).setdefault("execution",{})["mode"]=mode
+        # Validate via the project contract before changing the durable config.
+        ProjectConfig.from_dict(project)
+        atomic_write_json(paths.project_file,project)
+        return self.snapshot(project_id)
+
+    def set_full_image_duration(self, project_id: str, seconds: float, cadence: str | None = None) -> dict[str, Any]:
+        paths,config=self._project(project_id)
+        if config.render_mode != "full_image": raise OperatorServiceError("Scene duration is available only for Full Image projects.")
+        project=read_json(paths.project_file); full_image=project.setdefault("settings",{}).setdefault("full_image",{})
+        full_image["image_duration_seconds"]=seconds
+        if cadence is not None: full_image["cadence"]=cadence
+        validated=ProjectConfig.from_dict(project)
+        atomic_write_json(paths.project_file,validated.to_dict())
+        required=("alignment.json","story_timeline.json","continuity_bible.json")
+        if all(paths.artifact_path(f"output/{name}").is_file() for name in required):
+            # FULL_IMAGE planning is local/deterministic; changed window identity leaves
+            # prior selected assets unbound unless their canonical request identity matches.
+            run_visual_planning_stages(self.runtime.root,project_id)
+        return self.snapshot(project_id)
 
     def approve_planning(self, project_id: str, *, shots: bool=False) -> dict[str, Any]:
         (approve_shot_plan if shots else approve_plan)(self.runtime.root,project_id)
@@ -595,6 +665,8 @@ class OperatorService:
         return {"pause_requested":bool(paused)}
 
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None, max_requests: int | None=None) -> dict[str, Any]:
+        _,config=self._project(project_id)
+        if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
         self.set_pause(project_id,False)
         if executor is None:
             paths,config=self._project(project_id); runtime=FlowRuntime.from_settings(paths.runtime,config.settings); capabilities=preflight(runtime,FlowInspector(runtime)); executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime))

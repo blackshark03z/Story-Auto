@@ -29,6 +29,37 @@ def build_alignment(*, project_id: str, audio_path: str, audio_sha256: str, narr
     return value
 
 
+def deterministic_text_alignment(*, project_id: str, audio_path: str, audio_sha256: str,
+                                 narration_sha256: str, narration: str,
+                                 duration_seconds: float) -> dict[str, Any]:
+    """A truthful non-ASR fallback: deterministic sentence windows proportional to text length."""
+    import re
+    # Keep separators in their preceding segment so concatenating canonical text
+    # remains byte-for-byte equivalent to the narration contract.
+    pieces, cursor = [], 0
+    for boundary in re.finditer(r"(?<=[.!?])\s+|\n{2,}", narration):
+        pieces.append(narration[cursor:boundary.end()])
+        cursor = boundary.end()
+    if cursor < len(narration):
+        pieces.append(narration[cursor:])
+    pieces = [item for item in pieces if item]
+    if not pieces:
+        raise AlignmentError("alignment needs narration text")
+    weights = [max(1, len(re.sub(r"\s+", "", item))) for item in pieces]
+    total = sum(weights)
+    cursor = 0.0
+    spans: list[TimedSpan] = []
+    for index, (piece, weight) in enumerate(zip(pieces, weights)):
+        end = float(duration_seconds) if index == len(pieces) - 1 else round(cursor + duration_seconds * weight / total, 6)
+        if end <= cursor:
+            end = cursor + .001
+        spans.append(TimedSpan(piece, cursor, end))
+        cursor = end
+    return build_alignment(project_id=project_id, audio_path=audio_path, audio_sha256=audio_sha256,
+                           narration_sha256=narration_sha256, duration_seconds=duration_seconds,
+                           source="deterministic_text_proportional_no_asr", spans=spans)
+
+
 def validate_alignment(value: Any, *, narration: str, narration_sha256: str, audio_sha256: str,
                        duration_seconds: float, tolerance_seconds: float = 0.15) -> None:
     if not isinstance(value, dict) or value.get("schema_version") != ALIGNMENT_SCHEMA_VERSION:

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import shutil
+
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
-from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, validate_alignment
+from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, deterministic_text_alignment, validate_alignment
+from story_auto.core.audio.media import inspect_audio
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import ContentValidationError, narration_hash, parse_content_markdown
-from story_auto.core.project import RuntimeLayout, load_project
+from story_auto.core.project import RuntimeLayout, execution_mode, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.providers.tts import provider_for
 from story_auto.core.planning import run_planning_stages
@@ -35,11 +38,88 @@ def _spans_for_result(adapter, request: TTSRequest, result) -> list[TimedSpan]:
     return [TimedSpan(**item) for item in adapter.align(request, result)]
 
 
+def _valid_reusable_audio(paths, narration_sha256: str) -> tuple[dict, Path] | None:
+    """Do not trust a saved path alone: verify manifest identity and observed media again."""
+    try:
+        manifest = read_json(paths.artifact_path("output/audio_manifest.json"))
+        relative = manifest["audio_path"]
+        audio_path = paths.artifact_path(relative)
+        if manifest.get("narration_sha256") != narration_sha256 or manifest.get("audio_sha256") != sha256_file(audio_path):
+            return None
+        observed = inspect_audio(audio_path, provider="existing_audio")
+        if abs(float(manifest.get("duration_seconds", 0)) - float(observed["duration_seconds"])) > .15:
+            return None
+        return manifest, audio_path
+    except Exception:
+        return None
+
+
+def adopt_existing_audio(runtime_root: Path | str, project_id: str, source: Path | str, *, source_type: str = "IMPORTED") -> dict:
+    """Copy, validate, hash, and align operator-supplied narration inside its project boundary."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    source_path = Path(source)
+    if source_type not in {"IMPORTED", "REUSED"} or not source_path.is_file():
+        raise ValueError("NARRATION_AUDIO_SOURCE_INVALID")
+    source_metadata = inspect_audio(source_path, provider="existing_audio")
+    source_sha = sha256_file(source_path)
+    suffix = source_path.suffix.lower()
+    target_relative = f"output/voice_existing{suffix}"
+    target = paths.artifact_path(target_relative)
+    with ProjectLock(paths.runtime, project_id):
+        temporary = target.with_name(target.stem + ".partial" + target.suffix)
+        try:
+            shutil.copyfile(source_path, temporary)
+            observed = inspect_audio(temporary, provider="existing_audio")
+            if sha256_file(temporary) != source_sha:
+                raise ValueError("NARRATION_AUDIO_COPY_IDENTITY_MISMATCH")
+            temporary.replace(target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration
+        narration_sha = narration_hash(narration)
+        manifest = {
+            "schema_version": "story-auto-audio/1.0.0", "audio_path": target_relative,
+            "audio_sha256": source_sha, "duration_seconds": observed["duration_seconds"],
+            "provider": "existing_audio", "voice_id": None, "narration_sha256": narration_sha,
+            "alignment_method": "deterministic_text_proportional_no_asr", "source_type": source_type,
+            "canonical_path": target_relative, "media_metadata": observed,
+            "provenance": {"imported_filename": source_path.name, "source_sha256": source_sha,
+                           "validation": "READABLE_AUDIO_STREAM"}, "metadata": {},
+        }
+        atomic_write_json(paths.artifact_path("output/audio_manifest.json"), manifest)
+        alignment = deterministic_text_alignment(project_id=project_id, audio_path=target_relative,
+            audio_sha256=source_sha, narration_sha256=narration_sha, narration=narration,
+            duration_seconds=float(observed["duration_seconds"]))
+        validate_alignment(alignment, narration=narration, narration_sha256=narration_sha,
+                           audio_sha256=source_sha, duration_seconds=float(observed["duration_seconds"]))
+        atomic_write_json(paths.artifact_path("output/alignment.json"), alignment)
+    return manifest
+
+
 def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None) -> tuple[str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     source = paths.content_file.read_text(encoding="utf-8")
     narration = parse_content_markdown(source).narration
     narration_sha256 = narration_hash(narration)
+    mode = execution_mode(config.settings)
+    if mode in {"EXISTING_VOICE", "VISUALS_ONLY", "RENDER_ONLY"}:
+        reusable = _valid_reusable_audio(paths, narration_sha256)
+        if reusable is None:
+            raise ValueError("No narration audio has been selected.")
+        manifest, _ = reusable
+        alignment_path = paths.artifact_path("output/alignment.json")
+        try:
+            alignment = read_json(alignment_path)
+            validate_alignment(alignment, narration=narration, narration_sha256=narration_sha256,
+                               audio_sha256=manifest["audio_sha256"], duration_seconds=float(manifest["duration_seconds"]))
+            return "REUSE", "REUSE"
+        except Exception:
+            alignment = deterministic_text_alignment(project_id=project_id, audio_path=manifest["audio_path"],
+                audio_sha256=manifest["audio_sha256"], narration_sha256=narration_sha256, narration=narration,
+                duration_seconds=float(manifest["duration_seconds"]))
+            atomic_write_json(alignment_path, alignment)
+            return "REUSE", "RUN"
     provider_name, voice_id, settings = _tts_settings(config)
     extension = "wav" if provider_name in {"typecast", "kokoro_local"} else "mp3"
     audio_relative, manifest_relative, alignment_relative = f"output/voice.{extension}", "output/audio_manifest.json", "output/alignment.json"

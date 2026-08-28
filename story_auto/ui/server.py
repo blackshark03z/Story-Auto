@@ -12,7 +12,7 @@ from story_auto.application import OperatorService
 from story_auto.core.project import load_project
 
 STATIC_ROOT=Path(__file__).with_name("static")
-MAX_BODY=1024*1024
+MAX_BODY=128*1024*1024
 
 
 class OperatorHandler(BaseHTTPRequestHandler):
@@ -67,11 +67,13 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","validate-content"]:
                 return self._json(self.service.inspect_content(body.get("content","")))
             if parts==["api","projects"]:
-                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings")),HTTPStatus.CREATED)
+                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio")),HTTPStatus.CREATED)
             if len(parts)!=4 or parts[:2]!=["api","projects"] or parts[3]!="actions": raise ValueError("unknown action route")
             project_id=parts[2]; action=body.get("action")
             if action=="save_content": result=self.service.save_content(project_id,body.get("content",""))
             elif action=="process": result=self.service.start_or_resume(project_id)
+            elif action=="set_execution_mode": result=self.service.set_execution_mode(project_id,body.get("mode",""))
+            elif action=="set_full_image_duration": result=self.service.set_full_image_duration(project_id,body.get("seconds"),body.get("cadence"))
             elif action=="approve_plan": result=self.service.approve_planning(project_id)
             elif action=="plan_visuals": result=self.service.plan_visuals(project_id)
             elif action=="approve_shots": result=self.service.approve_planning(project_id,shots=True)
