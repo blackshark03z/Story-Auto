@@ -84,6 +84,20 @@ class Goal49PipelineReuseTests(unittest.TestCase):
             self.assertEqual(result["alignment"], "REUSE")
             self.assertTrue(app.snapshot(paths.project_id)["accepted_visuals"])
 
+    def test_render_only_blocks_qc_pending_visuals(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths, source = self._project(root, "RENDER_ONLY")
+            adopt_existing_audio(runtime.root, paths.project_id, source)
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {
+                "requests": [{"request_id": "req_pending", "purpose": "SHOT", "shot_id": "sh_pending"}],
+            })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
+                "requests": [{"request_id": "req_pending", "status": "QC_PENDING",
+                              "selected_asset": {"sha256": "unreviewed"}}],
+            })
+            with self.assertRaisesRegex(OperatorServiceError, "No accepted visual assets"):
+                OperatorService(root).start_or_resume(paths.project_id, audio_adapter=_NoTts())
+
     def test_full_image_scene_duration_is_seconds_and_preserves_imported_narration(self):
         with tempfile.TemporaryDirectory() as root:
             runtime = RuntimeLayout.from_root(root)

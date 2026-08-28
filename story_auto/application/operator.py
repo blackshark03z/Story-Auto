@@ -417,7 +417,7 @@ class OperatorService:
             actions["tts"],actions["alignment"]=run_audio_stages(self.runtime.root,project_id,adapter=audio_adapter)
         if mode=="RENDER_ONLY":
             snapshot=self.snapshot(project_id)
-            if any(item.action=="BLOCK" for item in stage_policy(mode,has_valid_audio=bool(snapshot.get("duration_seconds")),has_accepted_visuals=snapshot.get("completed_visuals",0)==snapshot.get("total_visuals",0) and bool(snapshot.get("total_visuals"))).values()):
+            if any(item.action=="BLOCK" for item in stage_policy(mode,has_valid_audio=bool(snapshot.get("duration_seconds")),has_accepted_visuals=bool(snapshot.get("accepted_visuals"))).values()):
                 raise OperatorServiceError("No accepted visual assets are available for the current plan.")
             actions["snapshot"]=self.snapshot(project_id); return actions
         if "llm" in config.settings:
