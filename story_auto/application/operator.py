@@ -281,6 +281,7 @@ class OperatorService:
         requests=_safe_json(paths.artifact_path("output/generation_requests.json"),{"requests":[]})
         alignment=_safe_json(paths.artifact_path("output/alignment.json"),{})
         publishing=_safe_json(paths.artifact_path("output/publishing_package.json"),{})
+        final_manifest=_safe_json(paths.artifact_path("output/final_manifest.json"),{})
         active_request_ids={item.get("request_id") for item in requests.get("requests",[]) if item.get("request_id")}
         entries={item.get("request_id"):item for item in manifest.get("requests",[]) if item.get("request_id") in active_request_ids}
         counts={}
@@ -322,6 +323,8 @@ class OperatorService:
         accepted_visuals=bool(shot_groups) and all(all(entries.get(request_id,{}).get("status")=="SUCCEEDED" and entries.get(request_id,{}).get("selected_asset") for request_id in request_ids) for request_ids in shot_groups.values())
         has_audio=bool(alignment.get("audio_sha256") and audio_manifest.get("audio_sha256")==alignment.get("audio_sha256"))
         mode=execution_mode(config.settings)
+        render_settings,_=resolve_render_settings(config)
+        render_stale=bool(artifacts["final.mp4"] and final_manifest.get("composer",{}).get("settings") != render_settings)
         policy=stage_policy(mode,has_valid_audio=has_audio,has_accepted_visuals=accepted_visuals)
         for item in policy.values():
             if item.action=="BLOCK": blocked.append("EXECUTION_PREREQUISITE_MISSING")
@@ -339,7 +342,7 @@ class OperatorService:
             progress,stage,activity=max(progress,78),"Quality check",f"Checking quality — {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
         if artifacts["render_plan.json"]:
             progress,stage,activity=max(progress,88),"Render","Rendering the final video."
-        if artifacts["final.mp4"]:
+        if artifacts["final.mp4"] and not render_stale:
             progress,stage,activity=100,"Finish","Final video is ready."
 
         plan_status=review.get("plan_approval",{}).get("status")
@@ -356,8 +359,11 @@ class OperatorService:
                 progress,stage,activity=min(progress,74),"Create visuals",_ATTENTION[blocked[0]]["message"]
             user_status="Needs your attention"
             primary_action=_ATTENTION.get(blocked[0],{"action":"Review project","action_id":"review_project"})
-        elif artifacts["final.mp4"]:
+        elif artifacts["final.mp4"] and not render_stale:
             user_status="Complete"; primary_action={"action":"Open final video","action_id":"open_final"}
+        elif render_stale:
+            progress,stage,activity=max(progress,88),"Render","Render settings changed. The existing visuals will be reused."
+            user_status="Ready to render"; primary_action={"action":"Render final video","action_id":"render"}
         elif any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE"}):
             user_status=activity; primary_action={"action":"Resume","action_id":"resume_generation"}
         elif artifacts["generation_requests.json"] and total_visuals and finished_visuals>=total_visuals:
@@ -381,17 +387,18 @@ class OperatorService:
                 "continuity_status":"READY" if artifacts["continuity_bible.json"] else "NOT_STARTED",
                 "shot_plan_status":"READY" if artifacts["shot_plan.json"] else "NOT_STARTED",
                 "generation_status":counts or {"NOT_STARTED":0},
-                "render_status":"NOT_STARTED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("COMPLETE" if artifacts["final.mp4"] else ("PLANNED" if artifacts["render_plan.json"] else "NOT_STARTED")),
+                "render_status":"NOT_STARTED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("NEEDS_RENDER" if render_stale else ("COMPLETE" if artifacts["final.mp4"] else ("PLANNED" if artifacts["render_plan.json"] else "NOT_STARTED"))),
                 "publishing_status":"READY" if artifacts["publishing_package.json"] else "NOT_STARTED",
                 "blocked":blocked,"artifacts":artifacts,"project_path":str(paths.root),
                 "user_status":user_status,"current_stage":stage,"current_activity":activity,"progress":min(100,progress),
                 "completed_visuals":finished_visuals,"total_visuals":total_visuals,"primary_action":primary_action,
                 "attention":attention,"work_saved":True,"updated_at":_updated_at(paths),"word_count":_word_count(narration),
-                "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] and visual_planning.get("status")!="NEEDS_REGENERATION" else None,
+                "duration_seconds":duration,"thumbnail_path":thumbnail,"final_path":"output/final.mp4" if artifacts["final.mp4"] and not render_stale and visual_planning.get("status")!="NEEDS_REGENERATION" else None,
                 "visual_planning":visual_planning,"execution_mode":mode,
                 "execution_policy":{name:{"action":item.action,"reason":item.reason} for name,item in policy.items()},
                 "narration_source":audio_manifest.get("source_type", "GENERATE"),
-                "accepted_visuals":accepted_visuals}
+                "accepted_visuals":accepted_visuals,"full_image":config.settings.get("full_image") if config.render_mode=="full_image" else None,
+                "render_stale":render_stale}
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
@@ -459,6 +466,15 @@ class OperatorService:
             # FULL_IMAGE planning is local/deterministic; changed window identity leaves
             # prior selected assets unbound unless their canonical request identity matches.
             run_visual_planning_stages(self.runtime.root,project_id)
+        return self.snapshot(project_id)
+
+    def set_full_image_audio_visualizer(self, project_id: str, enabled: bool) -> dict[str, Any]:
+        paths,config=self._project(project_id)
+        if config.render_mode != "full_image": raise OperatorServiceError("Waveform is available only for Full Image projects.")
+        project=read_json(paths.project_file)
+        project.setdefault("settings",{}).setdefault("full_image",{})["audio_visualizer"]=bool(enabled)
+        validated=ProjectConfig.from_dict(project)
+        atomic_write_json(paths.project_file,validated.to_dict())
         return self.snapshot(project_id)
 
     def approve_planning(self, project_id: str, *, shots: bool=False) -> dict[str, Any]:

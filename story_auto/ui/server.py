@@ -74,6 +74,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="process": result=self.service.start_or_resume(project_id)
             elif action=="set_execution_mode": result=self.service.set_execution_mode(project_id,body.get("mode",""))
             elif action=="set_full_image_duration": result=self.service.set_full_image_duration(project_id,body.get("seconds"),body.get("cadence"))
+            elif action=="set_full_image_audio_visualizer": result=self.service.set_full_image_audio_visualizer(project_id,body.get("enabled"))
             elif action=="approve_plan": result=self.service.approve_planning(project_id)
             elif action=="plan_visuals": result=self.service.plan_visuals(project_id)
             elif action=="approve_shots": result=self.service.approve_planning(project_id,shots=True)

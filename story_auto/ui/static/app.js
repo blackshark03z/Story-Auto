@@ -154,9 +154,23 @@ function executionControls(snapshot) {
   return `<section class="surface"><div class="surface-head"><div><h2>Execution / Reuse</h2><p>What Story Auto will do next: ${esc(labels[snapshot.execution_mode] || snapshot.execution_mode)}. Narration is ${esc(snapshot.narration_source || 'GENERATE')}.</p></div></div><div class="choice-grid">${Object.entries(labels).map(([mode,label]) => { const item=policy[mode === 'FULL' ? 'audio' : mode === 'RENDER_ONLY' ? 'visuals' : 'audio']; const unavailable=mode === 'RENDER_ONLY' ? !snapshot.accepted_visuals : mode !== 'FULL' ? !snapshot.duration_seconds : false; const reason=mode === 'RENDER_ONLY' ? 'No accepted visual assets are available for the current plan.' : 'No narration audio has been selected.'; return `<div class="choice"><strong>${esc(label)}</strong><small>${unavailable ? esc(reason) : mode === snapshot.execution_mode ? 'Current execution intent.' : 'Available for this project.'}</small><button data-execution-mode="${mode}" type="button" ${unavailable || mode === snapshot.execution_mode ? 'disabled' : ''}>${mode === snapshot.execution_mode ? 'Selected' : 'Use this mode'}</button></div>`; }).join('')}</div></section>`;
 }
 
+function fullImageRenderControls(snapshot) {
+  if (snapshot.render_mode !== 'full_image' || !snapshot.full_image) return '';
+  const waveform = snapshot.full_image.audio_visualizer !== false;
+  const status = snapshot.render_stale ? 'Waveform changed. Render final video to apply it; narration, planning, and visuals remain reused.' : 'This applies only to the final render. It does not regenerate narration or visuals.';
+  return `<section class="surface"><div class="surface-head"><div><h2>Full Image render settings</h2><p>${esc(status)}</p></div></div><fieldset class="field"><legend>Waveform</legend><label class="choice"><input id="fullImageWaveformToggle" type="checkbox" ${waveform ? 'checked' : ''}><strong>Show audio visualizer</strong><small>Applies to this project’s final video only.</small></label></fieldset><div class="button-row"><button id="saveFullImageWaveform" type="button">Save render setting</button></div></section>`;
+}
+
 async function setExecutionMode(mode) {
   try { const value=await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'set_execution_mode',mode})}); state.snapshot=value; renderProject(); toast('Execution intent saved.'); }
   catch (error) { toast(friendlyError(error).message,true); }
+}
+
+async function setFullImageAudioVisualizer(enabled) {
+  try {
+    const value=await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:'set_full_image_audio_visualizer',enabled})});
+    state.snapshot=value; renderProject(); toast('Render setting saved.');
+  } catch (error) { toast(friendlyError(error).message,true); }
 }
 
 function projectHeader(snapshot) {
@@ -179,12 +193,14 @@ function renderProject() {
   </section>
   ${state.error ? errorCard(state.error) : ''}
   ${executionControls(snapshot)}
+  ${fullImageRenderControls(snapshot)}
   ${attention ? `<section class="attention-card" aria-labelledby="attentionTitle"><div><h2 id="attentionTitle">${esc(attention.title)}</h2><p>${esc(attention.message)}</p><p class="reassurance">Your completed work is saved.</p></div><div class="button-row"><button class="button-primary" data-project-action="${esc(attention.action_id)}" type="button">${esc(attention.action)}</button>${attention.code === 'FLOW_AUTH_REQUIRED' ? '<button data-project-action="review_project" type="button">Continue recovery</button>' : ''}</div><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(attention.code)}${snapshot.visual_planning?.failure_class ? `\n${esc(snapshot.visual_planning.failure_class)}` : ''}</div></details></section>` : `<section class="surface next-action"><div><h2>${esc(snapshot.primary_action.action)}</h2><p>${snapshot.work_saved ? 'Completed stages are saved, so Resume continues from the next unfinished step.' : esc(snapshot.current_activity)}</p>${state.busy ? '<p class="hint" id="busyReason">This may take several minutes. You can keep this window open.</p>' : ''}</div><button class="button-primary" data-project-action="${esc(snapshot.primary_action.action_id)}" type="button" ${state.busy ? 'disabled aria-describedby="busyReason"' : ''}>${state.busy ? 'Working…' : esc(snapshot.primary_action.action)}</button></section>`}
   <section class="surface"><div class="surface-head"><div><h2>Project overview</h2><p>Review the result when it is ready, or open technical detail when you need it.</p></div><div class="button-row"><button id="reviewProject" type="button">Review</button>${snapshot.current_stage === 'Create visuals' && !snapshot.final_path ? '<button id="pauseProject" type="button">Pause safely</button>' : ''}</div></div>
     <details class="disclosure" id="projectDetails"><summary>Show details</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details>
   </section>`;
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
   document.querySelectorAll('[data-execution-mode]').forEach(button => button.addEventListener('click', () => setExecutionMode(button.dataset.executionMode)));
+  $('#saveFullImageWaveform')?.addEventListener('click', () => setFullImageAudioVisualizer($('#fullImageWaveformToggle').checked));
   $('#reviewProject')?.addEventListener('click', showReview);
   $('#pauseProject')?.addEventListener('click', requestPause);
   bindErrorActions();
@@ -198,12 +214,14 @@ function renderComplete(snapshot) {
   </section>
   <section class="surface next-action"><div><h2>Review or start another</h2><p>Inspect quality checks and publishing copy, or begin a new video.</p></div><div class="button-row">${snapshot.execution_mode === 'RENDER_ONLY' ? '<button class="button-primary" id="renderAgain" type="button">Render again</button>' : ''}<button id="reviewComplete" type="button">Review</button><button id="createAnother" type="button">Create another video</button></div></section>
   ${executionControls(snapshot)}
+  ${fullImageRenderControls(snapshot)}
   <section class="surface"><details class="disclosure" id="projectDetails"><summary>Show details</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details></section>`;
   $('#openFolder').addEventListener('click', () => runAction('open_output','Opening the output folder…'));
   $('#renderAgain')?.addEventListener('click', () => runAction('render_again','Rendering the final video…'));
   $('#reviewComplete').addEventListener('click', showReview);
   $('#createAnother').addEventListener('click', openWizard);
   document.querySelectorAll('[data-execution-mode]').forEach(button => button.addEventListener('click', () => setExecutionMode(button.dataset.executionMode)));
+  $('#saveFullImageWaveform')?.addEventListener('click', () => setFullImageAudioVisualizer($('#fullImageWaveformToggle').checked));
   bindDiagnosticsDisclosure();
 }
 

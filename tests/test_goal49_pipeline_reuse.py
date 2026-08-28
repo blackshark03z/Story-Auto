@@ -9,6 +9,7 @@ import wave
 from story_auto.application.operator import OperatorService, OperatorServiceError
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, ProjectValidationError, RuntimeLayout, create_project
+from story_auto.core.render import resolve_render_settings
 from story_auto.pipeline import adopt_existing_audio, run_audio_stages
 
 
@@ -113,6 +114,32 @@ class Goal49PipelineReuseTests(unittest.TestCase):
             self.assertEqual(read_json(paths.project_file)["settings"]["full_image"]["cadence"],"FIXED")
             self.assertEqual(read_json(paths.artifact_path("output/audio_manifest.json"))["audio_sha256"],original["audio_sha256"])
             self.assertEqual(updated["duration_seconds"],2.0)
+
+    def test_waveform_change_requires_only_final_render_and_preserves_visuals(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime=RuntimeLayout.from_root(root)
+            config=ProjectConfig("prj_waveform",render_mode="full_image",settings={
+                "execution":{"mode":"EXISTING_VOICE"},
+                "full_image":{"audio_visualizer":False},
+            })
+            paths=create_project(runtime,config,"# Waveform\n\n## Narration\n\nA reusable voice stays unchanged.\n")
+            source=Path(root)/"voice.wav"; source.write_bytes(_wav())
+            original=adopt_existing_audio(runtime.root,paths.project_id,source)
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests":[{"request_id":"req_1","purpose":"SHOT","shot_id":"sh_1"}]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"requests":[{"request_id":"req_1","status":"SUCCEEDED","selected_asset":{"sha256":"accepted"}}]})
+            old_settings,_=resolve_render_settings(config)
+            paths.artifact_path("output/final.mp4").write_bytes(b"old final")
+            atomic_write_json(paths.artifact_path("output/final_manifest.json"), {"composer":{"settings":old_settings}})
+            before_requests=paths.artifact_path("output/generation_requests.json").read_bytes()
+            before_manifest=paths.artifact_path("output/generation_manifest.json").read_bytes()
+            updated=OperatorService(root).set_full_image_audio_visualizer(paths.project_id,True)
+            self.assertTrue(read_json(paths.project_file)["settings"]["full_image"]["audio_visualizer"])
+            self.assertEqual(read_json(paths.artifact_path("output/audio_manifest.json"))["audio_sha256"],original["audio_sha256"])
+            self.assertEqual(paths.artifact_path("output/generation_requests.json").read_bytes(),before_requests)
+            self.assertEqual(paths.artifact_path("output/generation_manifest.json").read_bytes(),before_manifest)
+            self.assertTrue(updated["render_stale"])
+            self.assertEqual(updated["render_status"],"NEEDS_RENDER")
+            self.assertIsNone(updated["final_path"])
 
 
 if __name__ == "__main__":
