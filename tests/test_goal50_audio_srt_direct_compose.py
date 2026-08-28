@@ -6,9 +6,11 @@ import tempfile
 import unittest
 import wave
 
-from story_auto.core.artifacts import read_json
+from story_auto.application.operator import OperatorService, OperatorServiceError
+from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.audio import SrtError, parse_srt_bytes
-from story_auto.core.planning.service import compile_full_image_shot_plan, validate_shot_plan
+from story_auto.core.planning.service import (compile_full_image_shot_plan, compile_generation_requests,
+                                              compile_media_plan, validate_shot_plan)
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.pipeline import adopt_existing_audio, adopt_existing_srt, run_audio_stages
 
@@ -97,3 +99,50 @@ class Goal50AudioSrtDirectComposeTests(unittest.TestCase):
         self.assertTrue(all(a["end"] == b["start"] for a, b in zip(plan["shots"], plan["shots"][1:])))
         validate_shot_plan(plan, timeline, continuity)
 
+    def test_fixed_windows_and_srt_change_create_new_exact_window_request_identities(self):
+        def plan_for(source: bytes, cadence: str):
+            cues, _, _ = parse_srt_bytes(source)
+            alignment = {"duration_seconds": 12.0, "segments": [
+                {"segment_id": cue.cue_id, "start": cue.start, "end": cue.end, "text": cue.text} for cue in cues]}
+            timeline = {"scenes": [{"scene_id": f"scn_{index:04d}", "start": 0.0 if index == 1 else cues[index - 1].start,
+                         "end": 12.0 if index == len(cues) else cue.end, "narration_segment_ids": [cue.cue_id],
+                         "summary": cue.text, "entity_ids": []} for index, cue in enumerate(cues, 1)]}
+            continuity = {"characters": [], "locations": [], "props": []}
+            full_image = {"image_duration_seconds": 5.0, "cadence": cadence, "motion": "AUTO_CONTINUOUS_ZOOM", "audio_visualizer": True}
+            plan = compile_full_image_shot_plan("prj_goal50", timeline, alignment, continuity, full_image,
+                timeline_sha256="timeline", continuity_sha256="continuity")
+            settings = {"full_image": full_image, "hook_seconds": 0.0, "motion_spike_threshold": 8,
+                        "overrides": {}, "max_attempts": 2, "aspect_ratio": "16:9",
+                        "large_batch_request_threshold": 20, "provider_video_clip_seconds": 8.0}
+            return plan, compile_generation_requests("prj_goal50", plan,
+                compile_media_plan("prj_goal50", plan, "full_image", settings), continuity, settings)
+
+        fixed, fixed_requests = plan_for(SRT, "FIXED")
+        changed, changed_requests = plan_for(SRT.replace(b"Another action happens.", b"A different action happens."), "FIXED")
+        self.assertLess(len(fixed["shots"]), 5)
+        self.assertEqual(fixed["shots"][-1]["end"], 12.0)  # final partial window covers audio master
+        self.assertNotEqual([shot["window_id"] for shot in fixed["shots"]], [shot["window_id"] for shot in changed["shots"]])
+        self.assertNotEqual([item["request_id"] for item in fixed_requests["requests"]],
+                            [item["request_id"] for item in changed_requests["requests"]])
+
+    def test_direct_compose_requires_current_exact_window_request_identity_and_never_calls_provider(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths = self._project(root)
+            audio, srt = Path(root) / "narration.wav", Path(root) / "timing.srt"
+            audio.write_bytes(_wav()); srt.write_bytes(SRT)
+            original = adopt_existing_audio(runtime.root, paths.project_id, audio)
+            adopt_existing_srt(runtime.root, paths.project_id, srt)
+            current = {"request_id": "req_current_window", "purpose": "SHOT", "shot_id": "sh_0001", "media_type": "IMAGE"}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [current]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"requests": [{
+                "request_id": "req_stale_window", "status": "SUCCEEDED", "selected_asset": {"sha256": "old"}}]})
+            project = read_json(paths.project_file); project["settings"]["execution"]["mode"] = "RENDER_ONLY"; atomic_write_json(paths.project_file, project)
+            app = OperatorService(root)
+            with self.assertRaisesRegex(OperatorServiceError, "No accepted visual assets"):
+                app.start_or_resume(paths.project_id, audio_adapter=_NoTts())
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"requests": [{
+                "request_id": "req_current_window", "status": "SUCCEEDED", "selected_asset": {"sha256": "accepted"}}]})
+            result = app.start_or_resume(paths.project_id, audio_adapter=_NoTts())
+            self.assertEqual((result["tts"], result["alignment"]), ("REUSE", "REUSE"))
+            self.assertEqual(read_json(paths.artifact_path("output/audio_manifest.json"))["audio_sha256"], original["audio_sha256"])
+            self.assertTrue(app.snapshot(paths.project_id)["accepted_visuals"])
