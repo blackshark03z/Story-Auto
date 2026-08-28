@@ -67,7 +67,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","validate-content"]:
                 return self._json(self.service.inspect_content(body.get("content","")))
             if parts==["api","projects"]:
-                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio")),HTTPStatus.CREATED)
+                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if len(parts)!=4 or parts[:2]!=["api","projects"] or parts[3]!="actions": raise ValueError("unknown action route")
             project_id=parts[2]; action=body.get("action")
             if action=="save_content": result=self.service.save_content(project_id,body.get("content",""))

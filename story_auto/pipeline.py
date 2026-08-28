@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
-from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, deterministic_text_alignment, validate_alignment
+from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, deterministic_text_alignment, parse_srt_file, validate_alignment
 from story_auto.core.audio.media import inspect_audio
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import ContentValidationError, narration_hash, parse_content_markdown
@@ -20,6 +20,7 @@ CONTENT_PRODUCER_VERSION = "story-auto-content-stage/1.0.0"
 CONTENT_MANIFEST_SCHEMA_VERSION = "story-auto-content-manifest/1.0.0"
 TTS_PRODUCER_VERSION = "story-auto-tts-stage/1.1.0"
 ALIGNMENT_PRODUCER_VERSION = "story-auto-alignment-stage/1.0.0"
+SRT_TIMELINE_TOLERANCE_SECONDS = 0.5
 
 
 def _tts_settings(config) -> tuple[str, str, dict]:
@@ -97,6 +98,54 @@ def adopt_existing_audio(runtime_root: Path | str, project_id: str, source: Path
     return manifest
 
 
+def adopt_existing_srt(runtime_root: Path | str, project_id: str, source: Path | str, *, source_type: str = "IMPORTED") -> dict:
+    """Copy and normalize SRT into the project, then bind it as canonical timing."""
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    source_path = Path(source)
+    if source_type not in {"IMPORTED", "REUSED"} or not source_path.is_file() or source_path.suffix.lower() != ".srt":
+        raise ValueError("SRT_SOURCE_INVALID")
+    narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration
+    narration_sha = narration_hash(narration)
+    reusable = _valid_reusable_audio(paths, narration_sha)
+    if reusable is None:
+        raise ValueError("SRT_REQUIRES_VALID_NARRATION_AUDIO")
+    audio_manifest, _ = reusable
+    target_relative = "output/timing.srt"
+    target = paths.artifact_path(target_relative)
+    with ProjectLock(paths.runtime, project_id):
+        temporary = target.with_name("timing.partial.srt")
+        try:
+            shutil.copyfile(source_path, temporary)
+            cues, encoding, stats = parse_srt_file(temporary)
+            source_sha = sha256_file(temporary)
+            difference = abs(float(audio_manifest["duration_seconds"]) - float(stats["last_timestamp"]))
+            if difference > SRT_TIMELINE_TOLERANCE_SECONDS:
+                raise ValueError("AUDIO_SRT_DURATION_MISMATCH")
+            temporary.replace(target)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        manifest = {"schema_version": "story-auto-srt/1.0.0", "source_type": source_type,
+            "canonical_path": target_relative, "sha256": source_sha, "encoding": encoding,
+            "cue_count": stats["raw_cue_count"], "non_empty_cue_count": stats["text_cue_count"],
+            "first_timestamp": stats["first_timestamp"], "last_timestamp": stats["last_timestamp"],
+            "normalization": {"RAW_CUE_COUNT": stats["raw_cue_count"], "TEXT_CUE_COUNT": stats["text_cue_count"],
+                              "IGNORED_EMPTY_CUES": stats["ignored_empty_cues"]}, "validation_result": "PASS",
+            "timeline_match": {"status": "PASS", "audio_duration": audio_manifest["duration_seconds"],
+                               "srt_end_time": stats["last_timestamp"], "tolerance_seconds": SRT_TIMELINE_TOLERANCE_SECONDS}}
+        atomic_write_json(paths.artifact_path("output/srt_manifest.json"), manifest)
+        alignment = build_alignment(project_id=project_id, audio_path=audio_manifest["audio_path"], audio_sha256=audio_manifest["audio_sha256"],
+            narration_sha256=narration_sha, duration_seconds=float(audio_manifest["duration_seconds"]), source="SRT",
+            spans=[TimedSpan(cue.text, cue.start, cue.end) for cue in cues])
+        alignment["timing_source"] = "SRT"
+        alignment["segments"] = [{"segment_id": cue.cue_id, "start": round(cue.start, 6), "end": round(cue.end, 6), "text": cue.text,
+                                  "canonical_cue_id": cue.cue_id} for cue in cues]
+        validate_alignment(alignment, narration=narration, narration_sha256=narration_sha,
+                           audio_sha256=audio_manifest["audio_sha256"], duration_seconds=float(audio_manifest["duration_seconds"]))
+        atomic_write_json(paths.artifact_path("output/alignment.json"), alignment)
+    return manifest
+
+
 def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None) -> tuple[str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     source = paths.content_file.read_text(encoding="utf-8")
@@ -109,12 +158,19 @@ def run_audio_stages(runtime_root: Path | str, project_id: str, *, adapter=None)
             raise ValueError("No narration audio has been selected.")
         manifest, _ = reusable
         alignment_path = paths.artifact_path("output/alignment.json")
+        srt_manifest_path = paths.artifact_path("output/srt_manifest.json")
+        if srt_manifest_path.is_file():
+            srt_manifest = read_json(srt_manifest_path)
+            if srt_manifest.get("validation_result") != "PASS" or srt_manifest.get("timeline_match", {}).get("status") != "PASS":
+                raise ValueError("SRT_VALIDATION_REQUIRED")
         try:
             alignment = read_json(alignment_path)
             validate_alignment(alignment, narration=narration, narration_sha256=narration_sha256,
                                audio_sha256=manifest["audio_sha256"], duration_seconds=float(manifest["duration_seconds"]))
             return "REUSE", "REUSE"
         except Exception:
+            if srt_manifest_path.is_file():
+                raise ValueError("SRT_CANONICAL_ALIGNMENT_INVALID")
             alignment = deterministic_text_alignment(project_id=project_id, audio_path=manifest["audio_path"],
                 audio_sha256=manifest["audio_sha256"], narration_sha256=narration_sha256, narration=narration,
                 duration_seconds=float(manifest["duration_seconds"]))

@@ -19,7 +19,7 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
-from story_auto.pipeline import adopt_existing_audio, run_audio_stages, run_content_stage
+from story_auto.pipeline import adopt_existing_audio, adopt_existing_srt, run_audio_stages, run_content_stage
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
@@ -241,7 +241,8 @@ class OperatorService:
 
     def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
                        ambient_style: str | None=None, content: str | None=None,
-                       settings: dict[str, Any] | None=None, imported_audio: dict[str, Any] | None=None) -> dict[str, Any]:
+                       settings: dict[str, Any] | None=None, imported_audio: dict[str, Any] | None=None,
+                       imported_srt: dict[str, Any] | None=None) -> dict[str, Any]:
         ident=project_id or "prj_"+uuid.uuid4().hex
         resolved_settings=dict(settings or {})
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
@@ -264,6 +265,22 @@ class OperatorService:
                     if temporary_dir.exists(): temporary_dir.rmdir()
             except Exception:
                 # The project remains explicit but no unverified external audio is ever bound to it.
+                raise
+        if imported_srt is not None:
+            try:
+                encoded=imported_srt.get("base64") if isinstance(imported_srt,dict) else None
+                filename=Path(str(imported_srt.get("filename","timing.srt"))).name if isinstance(imported_srt,dict) else "timing.srt"
+                if not isinstance(encoded,str) or not encoded or len(encoded) > 30_000_000: raise OperatorServiceError("SRT_SOURCE_INVALID")
+                payload=base64.b64decode(encoded,validate=True)
+                temporary_dir=self.runtime.temp/uuid.uuid4().hex
+                temporary_dir.mkdir(parents=True,exist_ok=False)
+                temporary=temporary_dir/filename
+                temporary.write_bytes(payload)
+                try: adopt_existing_srt(self.runtime.root,ident,temporary,source_type="IMPORTED")
+                finally:
+                    if temporary.exists(): temporary.unlink()
+                    if temporary_dir.exists(): temporary_dir.rmdir()
+            except Exception:
                 raise
         return self.snapshot(paths.project_id)
 
@@ -292,6 +309,7 @@ class OperatorService:
             "media_plan.json","generation_requests.json","render_plan.json","final.mp4","publishing_package.json")}
         blocked=[]
         audio_manifest=_safe_json(paths.artifact_path("output/audio_manifest.json"),{})
+        srt_manifest=_safe_json(paths.artifact_path("output/srt_manifest.json"),{})
         tts = config.settings.get("tts", {})
         narrator = {"provider": tts.get("provider", "NOT_CONFIGURED"), "voice_id": None,
                     "name": "Not configured", "status": "Not configured", "technical_code": None}
@@ -398,6 +416,11 @@ class OperatorService:
                 "visual_planning":visual_planning,"execution_mode":mode,
                 "execution_policy":{name:{"action":item.action,"reason":item.reason} for name,item in policy.items()},
                 "narration_source":audio_manifest.get("source_type", "GENERATE"),
+                "narration_audio":"MISSING" if not has_audio else ("IMPORTED" if audio_manifest.get("source_type")=="IMPORTED" else "REUSED"),
+                "subtitle_timing":"MISSING" if not srt_manifest else ("IMPORTED" if srt_manifest.get("source_type")=="IMPORTED" else "REUSED"),
+                "timing_source":alignment.get("timing_source", "DETERMINISTIC_ALIGNMENT" if has_audio else None),
+                "srt_validation":srt_manifest.get("validation_result"), "srt_normalization":srt_manifest.get("normalization"),
+                "timeline_match":srt_manifest.get("timeline_match",{}).get("status"),
                 "accepted_visuals":accepted_visuals,"full_image":config.settings.get("full_image") if config.render_mode=="full_image" else None,
                 "render_stale":render_stale}
 

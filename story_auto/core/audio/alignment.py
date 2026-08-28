@@ -80,5 +80,9 @@ def validate_alignment(value: Any, *, narration: str, narration_sha256: str, aud
         previous_end, reconstructed = end, reconstructed + [segment["text"]]
     if previous_end > duration_seconds + tolerance_seconds:
         raise AlignmentError("alignment exceeds validated audio duration")
+    if value.get("timing_source") == "SRT":
+        if value.get("source") != "SRT" or not all(str(item.get("segment_id", "")).startswith("cue_") for item in segments):
+            raise AlignmentError("SRT alignment provenance is invalid")
+        return
     if not narrations_equivalent("".join(reconstructed), narration):
         raise AlignmentError("alignment text does not reconstruct narration")

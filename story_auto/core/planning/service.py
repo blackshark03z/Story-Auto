@@ -304,8 +304,11 @@ def compile_full_image_shot_plan(project_id: str, timeline: dict[str, Any], alig
         # bounded timeline summary remains the image-prompt intent. Never
         # inject thirty seconds of narration verbatim into a provider prompt.
         semantic_summary = " ".join(summaries) or (narration_text[:300] if narration_text else "Narrated story progression")
+        window_identity = _hash_text(canonical_json({"source_cue_ids": narration_ids, "source_text": narration_text,
+                                                      "start": first["start"], "end": last["end"], "cadence": cadence}))[:24]
         shots.append({
             "shot_id": f"sh_{index:04d}", "scene_id": window_scenes[0],
+            "window_id": f"win_{window_identity}", "source_cue_ids": narration_ids, "source_text": narration_text,
             "source_scene_ids": window_scenes,
             "start": 0.0 if index == 1 else float(shots[-1]["end"]),
             "end": float(alignment["duration_seconds"]) if index == len(windows) else float(last["end"]),
