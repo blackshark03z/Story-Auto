@@ -196,10 +196,11 @@ function renderComplete(snapshot) {
   <section class="surface review-layout"><div>${snapshot.final_path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,snapshot.final_path)}" aria-label="Final video preview"></video>` : '<div class="video-frame"></div>'}</div>
     <aside class="review-sidebar"><span class="status-chip success">Complete</span><h3>${esc(snapshot.title)}</h3><p>${esc(formatDuration(snapshot.duration_seconds))} · ${esc(humanMode(snapshot.render_mode))}</p><p>Publishing package: <strong>${snapshot.publishing_status === 'READY' ? 'Ready' : 'Not prepared'}</strong></p><div class="button-row"><a class="button button-primary" href="${assetUrl(snapshot.project_id,snapshot.final_path)}" target="_blank" rel="noopener">Open final video</a><button id="openFolder" type="button">Open folder</button></div></aside>
   </section>
-  <section class="surface next-action"><div><h2>Review or start another</h2><p>Inspect quality checks and publishing copy, or begin a new video.</p></div><div class="button-row"><button id="reviewComplete" type="button">Review</button><button id="createAnother" type="button">Create another video</button></div></section>
+  <section class="surface next-action"><div><h2>Review or start another</h2><p>Inspect quality checks and publishing copy, or begin a new video.</p></div><div class="button-row">${snapshot.execution_mode === 'RENDER_ONLY' ? '<button class="button-primary" id="renderAgain" type="button">Render again</button>' : ''}<button id="reviewComplete" type="button">Review</button><button id="createAnother" type="button">Create another video</button></div></section>
   ${executionControls(snapshot)}
   <section class="surface"><details class="disclosure" id="projectDetails"><summary>Show details</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details></section>`;
   $('#openFolder').addEventListener('click', () => runAction('open_output','Opening the output folder…'));
+  $('#renderAgain')?.addEventListener('click', () => runAction('render','Rendering the final video…'));
   $('#reviewComplete').addEventListener('click', showReview);
   $('#createAnother').addEventListener('click', openWizard);
   document.querySelectorAll('[data-execution-mode]').forEach(button => button.addEventListener('click', () => setExecutionMode(button.dataset.executionMode)));
