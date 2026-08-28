@@ -200,7 +200,7 @@ function renderComplete(snapshot) {
   ${executionControls(snapshot)}
   <section class="surface"><details class="disclosure" id="projectDetails"><summary>Show details</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details></section>`;
   $('#openFolder').addEventListener('click', () => runAction('open_output','Opening the output folder…'));
-  $('#renderAgain')?.addEventListener('click', () => runAction('render','Rendering the final video…'));
+  $('#renderAgain')?.addEventListener('click', () => runAction('render_again','Rendering the final video…'));
   $('#reviewComplete').addEventListener('click', showReview);
   $('#createAnother').addEventListener('click', openWizard);
   document.querySelectorAll('[data-execution-mode]').forEach(button => button.addEventListener('click', () => setExecutionMode(button.dataset.executionMode)));

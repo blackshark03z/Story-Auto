@@ -96,7 +96,7 @@ def _atomic_media_publish(target: Path, producer) -> Any:
         candidate.unlink(missing_ok=True)
 
 
-def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+def run_render_stages(runtime_root: Path | str, project_id: str, *, force_final: bool = False) -> dict[str, Any]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     storage=config.settings.get("storage",{})
     if not isinstance(storage,dict): raise ValueError("settings.storage must be an object")
@@ -245,7 +245,7 @@ def run_render_stages(runtime_root: Path | str, project_id: str) -> dict[str, An
         final_valid = False
         upstream_ran = (actions["render_plan"] == "RUN" or actions["subtitles"] == "RUN" or
                         actions["audio_plan"] == "RUN" or any(value == "RUN" for value in actions["clips"].values()))
-        if decision.action == "SKIP" and not upstream_ran:
+        if not force_final and decision.action == "SKIP" and not upstream_ran:
             try:
                 current_manifest = read_json(final_manifest_path)
                 metadata = validate_video(final_path, target=target, silent=False,

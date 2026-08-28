@@ -92,6 +92,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="media_override": result=self.service.set_media_override(project_id,body["shot_id"],body["media_type"],body.get("requirement","REQUIRED"))
             elif action=="build_render_plan": result=self.service.build_render_plan(project_id)
             elif action=="render": result=self.service.render(project_id)
+            elif action=="render_again": result=self.service.render(project_id,force_final=True)
             elif action in {"metadata","prepare_thumbnail","finalize_thumbnail"}: result=self.service.publishing(project_id,action)
             elif action=="open_output": result={"path":self.service.open_output_folder(project_id)}
             else: raise ValueError("unknown action")

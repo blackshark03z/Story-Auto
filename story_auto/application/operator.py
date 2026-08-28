@@ -678,7 +678,8 @@ class OperatorService:
         plan=resolve_render_plan(project_id=project_id,project_root=paths.root,render_mode=config.render_mode,alignment=load("alignment"),shot_plan=load("shot_plan"),media_plan=load("media_plan"),generation_requests=load("generation_requests"),generation_manifest=load("generation_manifest"),settings=settings)
         atomic_write_json(paths.artifact_path("output/render_plan.json"),plan); return plan
 
-    def render(self, project_id: str) -> dict[str, Any]: return run_render_stages(self.runtime.root,project_id)
+    def render(self, project_id: str, *, force_final: bool = False) -> dict[str, Any]:
+        return run_render_stages(self.runtime.root, project_id, force_final=force_final)
 
     def publishing(self, project_id: str, action: str, *, provider=None) -> Any:
         if action=="metadata": return run_publishing_metadata(self.runtime.root,project_id,provider=provider)
