@@ -1,0 +1,160 @@
+"""Compact, rebuildable production read model for a project.
+
+The files inspected here remain the canonical evidence.  This module only
+materializes a small operational summary for queries and coordination.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.project.execution import execution_mode, stage_policy
+
+
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.0"
+PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _read(path: Path, default: Any) -> Any:
+    try:
+        return read_json(path)
+    except Exception:
+        return default
+
+
+def _signature(paths, relative: str) -> dict[str, Any]:
+    path = paths.artifact_path(relative)
+    if not path.is_file():
+        return {"path": relative, "present": False}
+    stat = path.stat()
+    return {"path": relative, "present": True, "bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+@dataclass(frozen=True)
+class ProjectProductionState:
+    """A deliberately small JSON-safe query model, never a source of truth."""
+
+    value: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return json.loads(json.dumps(self.value))
+
+    @property
+    def pipeline_status(self) -> str:
+        return str(self.value["pipeline_status"])
+
+    @property
+    def active_stage(self) -> str:
+        return str(self.value["active_stage"])
+
+
+class ProductionStateReconciler:
+    """Rebuild compact state lazily from durable project artifacts."""
+
+    _evidence_files = (
+        "output/content_manifest.json", "output/audio_manifest.json", "output/srt_manifest.json",
+        "output/alignment.json", "output/story_timeline.json", "output/continuity_bible.json",
+        "output/shot_plan.json", "output/media_plan.json", "output/generation_requests.json",
+        "output/generation_manifest.json", "output/review_state.json", "output/render_plan.json",
+        "output/final_manifest.json", "output/final.mp4", "output/execution_control.json",
+    )
+
+    @staticmethod
+    def state_path(paths) -> Path:
+        return paths.artifact_path("output/production_state.json")
+
+    def reconcile(self, paths, config) -> ProjectProductionState:
+        evidence = [_signature(paths, item) for item in self._evidence_files]
+        evidence_fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        existing = _read(self.state_path(paths), {})
+        rebuilt = self._derive(paths, config, evidence, evidence_fingerprint, existing)
+        # Do not churn the file when canonical evidence and compact projection agree.
+        comparable = dict(existing) if isinstance(existing, dict) else {}
+        if comparable.get("schema_version") == PRODUCTION_STATE_SCHEMA_VERSION:
+            comparable.pop("updated_at", None)
+            candidate = dict(rebuilt); candidate.pop("updated_at", None)
+            if comparable == candidate:
+                return ProjectProductionState(existing)
+        atomic_write_json(self.state_path(paths), rebuilt)
+        return ProjectProductionState(rebuilt)
+
+    def _derive(self, paths, config, evidence: list[dict[str, Any]], fingerprint: str, existing: Any) -> dict[str, Any]:
+        present = {item["path"]: item["present"] for item in evidence}
+        review = _read(paths.artifact_path("output/review_state.json"), {})
+        requests = _read(paths.artifact_path("output/generation_requests.json"), {"requests": []})
+        manifest = _read(paths.artifact_path("output/generation_manifest.json"), {"requests": []})
+        control = _read(paths.artifact_path("output/execution_control.json"), {})
+        request_ids = {item.get("request_id") for item in requests.get("requests", []) if item.get("purpose") == "SHOT" and item.get("request_id")}
+        entries = {item.get("request_id"): item for item in manifest.get("requests", []) if item.get("request_id")}
+        statuses = [str(entries[item].get("status", "NOT_STARTED")) for item in request_ids if item in entries]
+        selected = bool(request_ids) and all(entries.get(item, {}).get("status") == "SUCCEEDED" and entries.get(item, {}).get("selected_asset") for item in request_ids)
+        policy = stage_policy(execution_mode(config.settings), has_valid_audio=present["output/alignment.json"], has_accepted_visuals=selected)
+        stages: dict[str, dict[str, Any]] = {}
+        stages["SOURCE"] = self._stage("COMPLETE" if present["output/content_manifest.json"] else "READY", "RUN")
+        timing_execution = policy["audio"].action
+        stages["TIMING"] = self._stage("COMPLETE" if present["output/alignment.json"] else ("BLOCKED" if timing_execution == "BLOCK" else "READY"), timing_execution, policy["audio"].reason)
+        plan_approved = isinstance(review, dict) and review.get("plan_approval", {}).get("status") == "APPROVED"
+        plan_ready = present["output/continuity_bible.json"]
+        stages["PLAN"] = self._stage("COMPLETE" if present["output/generation_requests.json"] else ("BLOCKED" if plan_ready and not plan_approved else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
+        visual_status = "COMPLETE" if selected else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
+        stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
+        quality_status = "COMPLETE" if selected else ("BLOCKED" if "QC_PENDING" in statuses else ("NOT_STARTED" if not request_ids else "READY"))
+        stages["QUALITY"] = self._stage(quality_status, "RUN")
+        final_present = present["output/final.mp4"]
+        stages["RENDER"] = self._stage("COMPLETE" if final_present else ("BLOCKED" if policy["render"].action == "BLOCK" else "READY"), policy["render"].action, policy["render"].reason)
+
+        blocker = None
+        if control.get("pause_requested") is True:
+            blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
+        elif stages["PLAN"]["status"] == "BLOCKED":
+            blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
+        elif stages["QUALITY"]["status"] == "BLOCKED":
+            blocker = self._blocker("OWNER_DECISION_REQUIRED", "Generated visuals need the existing quality decision before rendering.", "Review visuals", True, True, "QUALITY")
+        elif any(status == "AUTH_REQUIRED" for status in statuses):
+            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
+        elif stages["VISUALS"]["status"] == "BLOCKED":
+            blocker = self._blocker("SAFETY_BLOCKED", "Visual generation needs reconciliation or provider recovery before another request is sent.", "Review recovery", True, False, "VISUALS")
+        elif stages["TIMING"]["status"] == "BLOCKED":
+            blocker = self._blocker("SAFETY_BLOCKED", stages["TIMING"]["human_message"] or "Narration audio is required.", "Review project", True, False, "TIMING")
+
+        if final_present:
+            pipeline_status, active_stage, next_action = "COMPLETE", "RENDER", {"action": "open_final", "label": "Open final video"}
+        elif blocker:
+            pipeline_status, active_stage, next_action = blocker["reason_code"], blocker.get("stage") or self._first_incomplete(stages), {"action": blocker["next_action"].lower().replace(" ", "_"), "label": blocker["next_action"]}
+        else:
+            active_stage = self._first_incomplete(stages)
+            pipeline_status, next_action = "READY", {"action": "run_to_final", "label": "Create video" if active_stage == "SOURCE" else "Continue production"}
+        revision = int(existing.get("state_revision", 0)) + 1 if isinstance(existing, dict) else 1
+        if isinstance(existing, dict) and existing.get("evidence_fingerprint") == fingerprint:
+            revision = int(existing.get("state_revision", 1))
+        old_run = existing.get("run", {}) if isinstance(existing, dict) and isinstance(existing.get("run"), dict) else {}
+        return {
+            "schema_version": PRODUCTION_STATE_SCHEMA_VERSION, "project_id": paths.project_id, "state_revision": revision,
+            "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
+            "pipeline_status": pipeline_status, "active_stage": active_stage,
+            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages,
+            "blocker": blocker, "next_action": next_action,
+            "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},
+            "evidence_fingerprint": fingerprint, "evidence": evidence, "updated_at": _now(),
+        }
+
+    @staticmethod
+    def _stage(status: str, execution: str, human_message: str | None = None) -> dict[str, Any]:
+        return {"status": status, "execution": execution, "progress": 100 if status == "COMPLETE" else 0, "reason_code": None, "human_message": human_message, "recoverable": status == "BLOCKED", "requires_owner_decision": False, "evidence": []}
+
+    @staticmethod
+    def _blocker(code: str, message: str, action: str, recoverable: bool, owner: bool, stage: str | None = None) -> dict[str, Any]:
+        return {"reason_code": code, "human_message": message, "next_action": action, "recoverable": recoverable, "requires_owner_decision": owner, "stage": stage}
+
+    @staticmethod
+    def _first_incomplete(stages: dict[str, dict[str, Any]]) -> str:
+        return next((name for name in PRODUCTION_STAGES if stages[name]["status"] != "COMPLETE"), "RENDER")

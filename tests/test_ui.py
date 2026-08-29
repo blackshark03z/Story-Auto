@@ -125,7 +125,7 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertEqual((status,inspection["status"],inspection["title"]),(200,"VALID","The Last Letter"))
                 with self.assertRaises(HTTPError): call("/api/validate-content",{"content":"# Missing narration"})
                 status,created=call("/api/projects",{"project_id":"prj_flow_a","render_mode":"hybrid_hook","content":"# The Last Letter\n\n## Narration\n\nA letter waited on the table.\n"})
-                self.assertEqual((status,created["user_status"],created["primary_action"]["action"]),(201,"Ready to start","Start production"))
+                self.assertEqual((status,created["user_status"],created["primary_action"]["action"]),(201,"Create video","Create video"))
                 _,projects=call("/api/projects"); self.assertEqual(projects["projects"][0]["title"],"The Last Letter")
                 _,settings=call("/api/settings"); self.assertEqual(settings["defaults"]["voice_name"],"George")
                 _,diagnostics=call("/api/projects/prj_flow_a/diagnostics")

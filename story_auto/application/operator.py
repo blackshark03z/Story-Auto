@@ -15,6 +15,8 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json
 from story_auto.core.audio import parse_srt_bytes
 from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
+from story_auto.application.production_commands import ProductionCommands
+from story_auto.application.production_queries import ProductionQueries
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, execution_mode, load_project, stage_policy
@@ -231,14 +233,19 @@ class OperatorService:
     def __init__(self, runtime_root: Path | str):
         self.runtime=RuntimeLayout.from_root(runtime_root).ensure()
         self.flow_connections=FlowConnectionService(self.runtime)
+        self.production_queries=ProductionQueries(self.runtime)
 
     def list_projects(self) -> list[dict[str, Any]]:
         result=[]
         for path in self.runtime.projects.glob("prj_*"):
             if not path.is_dir(): continue
-            try: result.append(self.snapshot(path.name))
+            try: result.append(self.production_queries.project_list_item(path.name))
             except Exception as error: result.append({"project_id":path.name,"status":"INVALID","error":str(error)})
         return sorted(result,key=lambda item:item.get("updated_at", ""),reverse=True)
+
+    def production_query(self, project_id: str) -> dict[str, Any]:
+        """Canonical Phase A production query; reconciles compact state lazily."""
+        return self.production_queries.production_query(project_id)
 
     @staticmethod
     def _decoded_import(value: dict[str, Any] | None, *, fallback_name: str, limit: int) -> tuple[str, bytes]:
@@ -346,6 +353,7 @@ class OperatorService:
 
     def snapshot(self, project_id: str) -> dict[str, Any]:
         paths,config=self._project(project_id)
+        production=self.production_query(project_id)
         content=paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
         try:
             narration=parse_content_markdown(content).narration; content_status="VALID"
@@ -463,7 +471,7 @@ class OperatorService:
         duration=alignment.get("duration_seconds") if isinstance(alignment,dict) else None
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
         ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
-        return {"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
+        result={"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
                 "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story","full_image":"Full Image"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
@@ -489,7 +497,19 @@ class OperatorService:
                 "timeline_match":srt_manifest.get("timeline_match",{}).get("status"),
                 "accepted_visuals":accepted_visuals,"full_image":config.settings.get("full_image") if config.render_mode=="full_image" else None,
                 "render_stale":render_stale,"flow_connection":flow_status,
-                "flow_binding":config.settings.get("flow_binding")}
+                "flow_binding":config.settings.get("flow_binding"),"production":production}
+        # The compact reconciled state owns the primary production command.  The
+        # existing detailed snapshot remains available for advanced compatibility.
+        if production["pipeline_status"] == "COMPLETE":
+            result.update({"user_status":"Complete","current_stage":"Finish","current_activity":"Final video is ready.","progress":100,
+                           "primary_action":{"action":"Open final video","action_id":"open_final"}})
+        elif production["pipeline_status"] == "READY" and not blocked:
+            label=production["next_action"]["label"]
+            stages={"SOURCE":"Content","TIMING":"Voice","PLAN":"Plan","VISUALS":"Create visuals","QUALITY":"Quality check","RENDER":"Render"}
+            result.update({"user_status":label,"current_stage":stages[production["active_stage"]],
+                           "current_activity":f"{label} runs the saved production path until it needs your decision.",
+                           "primary_action":{"action":label,"action_id":"run_to_final"}})
+        return result
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
@@ -521,6 +541,28 @@ class OperatorService:
         if "llm" in config.settings:
             actions["timeline"],actions["continuity"]=run_planning_stages(self.runtime.root,project_id,provider=planning_provider)
         actions["snapshot"]=self.snapshot(project_id); return actions
+
+    def _production_commands(self) -> ProductionCommands:
+        return ProductionCommands(self.production_query, {
+            "prepare": lambda project_id: self.start_or_resume(project_id),
+            "plan": lambda project_id: self.plan_visuals(project_id),
+            "visuals": lambda project_id: self._run_visuals_for_production(project_id),
+            "render": lambda project_id: self.render(project_id),
+        }, self.production_queries.record_run)
+
+    def _run_visuals_for_production(self, project_id: str) -> Any:
+        state=self.production_query(project_id)
+        if state["stages"]["VISUALS"]["status"] == "READY" and state["stages"]["PLAN"]["status"] == "COMPLETE":
+            paths,_=self._project(project_id)
+            if not paths.artifact_path("output/generation_requests.json").is_file():
+                return self.plan_visuals(project_id)
+        return self.generate(project_id)
+
+    def run_to_final(self, project_id: str) -> dict[str, Any]:
+        return self._production_commands().run_to_final(project_id)
+
+    def continue_production(self, project_id: str) -> dict[str, Any]:
+        return self._production_commands().continue_production(project_id)
 
     def planning_review(self, project_id: str) -> dict[str, Any]:
         paths,_=self._project(project_id)

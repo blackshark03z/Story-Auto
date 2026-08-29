@@ -49,6 +49,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if len(parts)>=3 and parts[:2]==["api","projects"]:
                 project_id=parts[2]; view=parts[3] if len(parts)>3 else "snapshot"
                 if view=="snapshot": result=self.service.snapshot(project_id)
+                elif view=="production": result=self.service.production_query(project_id)
                 elif view=="content": result=self.service.get_content(project_id)
                 elif view=="planning": result=self.service.planning_review(project_id)
                 elif view=="media": result=self.service.media_items(project_id)
@@ -79,7 +80,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if len(parts)!=4 or parts[:2]!=["api","projects"] or parts[3]!="actions": raise ValueError("unknown action route")
             project_id=parts[2]; action=body.get("action")
             if action=="save_content": result=self.service.save_content(project_id,body.get("content",""))
-            elif action=="process": result=self.service.start_or_resume(project_id)
+            elif action in {"process", "run_to_final"}: result=self.service.run_to_final(project_id)
+            elif action=="continue_production": result=self.service.continue_production(project_id)
             elif action=="set_execution_mode": result=self.service.set_execution_mode(project_id,body.get("mode",""))
             elif action=="set_full_image_duration": result=self.service.set_full_image_duration(project_id,body.get("seconds"),body.get("cadence"))
             elif action=="set_full_image_audio_visualizer": result=self.service.set_full_image_audio_visualizer(project_id,body.get("enabled"))

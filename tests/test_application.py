@@ -183,8 +183,8 @@ class OperatorApplicationTests(unittest.TestCase):
             ready=KokoroReadiness("READY","Kokoro is ready",None)
             with patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=ready):
                 created=app.create_project(project_id="prj_installed_default",content="# Default\n\n## Narration\n\nA ready narrator.\n",settings=settings)
-            self.assertEqual((created["user_status"],created["narrator"]),
-                             ("Ready to start",{"provider":"kokoro_local","voice_id":"bm_george","name":"George","status":"Ready","technical_code":None}))
+        self.assertEqual((created["user_status"],created["narrator"]),
+                         ("Create video",{"provider":"kokoro_local","voice_id":"bm_george","name":"George","status":"Ready","technical_code":None}))
 
     def test_missing_default_is_exposed_and_rejected_at_new_project_boundary(self):
         with tempfile.TemporaryDirectory() as root:

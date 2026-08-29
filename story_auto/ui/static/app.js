@@ -282,7 +282,8 @@ async function handleProjectAction(action) {
   if (action === 'review_plan') return showPlanReview();
   if (action === 'settings') return showSettings();
   if (action === 'review_visuals' || action === 'review_project' || action === 'open_final') return showReview();
-  if (action === 'process') return runAction('process','Creating voice and planning your story…');
+  if (action === 'process' || action === 'run_to_final') return runAction('run_to_final','Continuing production until it needs your decision…');
+  if (action === 'continue_production') return runAction('continue_production','Continuing production until it needs your decision…');
   if (action === 'plan_visuals') return runAction('plan_visuals','Preparing the visual plan…');
   if (action === 'resume_generation') return runAction('resume_generation','Creating visuals. Completed work remains saved…');
   if (action === 'render') return runAction('render','Rendering the final video…');
