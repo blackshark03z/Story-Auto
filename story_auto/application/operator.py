@@ -13,13 +13,16 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json
+from story_auto.core.audio import parse_srt_bytes
+from story_auto.core.audio.media import inspect_audio
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, execution_mode, load_project, stage_policy
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
-from story_auto.pipeline import adopt_existing_audio, adopt_existing_srt, run_audio_stages, run_content_stage
+from story_auto.pipeline import (SRT_TIMELINE_TOLERANCE_SECONDS, adopt_existing_audio, adopt_existing_srt,
+                                 run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
@@ -239,6 +242,49 @@ class OperatorService:
             except Exception as error: result.append({"project_id":path.name,"status":"INVALID","error":str(error)})
         return sorted(result,key=lambda item:item.get("updated_at", ""),reverse=True)
 
+    @staticmethod
+    def _decoded_import(value: dict[str, Any] | None, *, fallback_name: str, limit: int) -> tuple[str, bytes]:
+        if not isinstance(value, dict):
+            raise OperatorServiceError("IMPORT_SOURCE_INVALID")
+        encoded=value.get("base64")
+        filename=Path(str(value.get("filename",fallback_name))).name
+        if not isinstance(encoded,str) or not encoded or len(encoded)>limit:
+            raise OperatorServiceError("IMPORT_SOURCE_INVALID")
+        try:
+            return filename,base64.b64decode(encoded,validate=True)
+        except Exception as error:
+            raise OperatorServiceError("IMPORT_SOURCE_INVALID") from error
+
+    def inspect_imports(self, *, source_mode: str, imported_audio: dict[str, Any] | None,
+                        imported_srt: dict[str, Any] | None) -> dict[str, Any]:
+        """Validate untrusted browser uploads before a new project is created."""
+        if source_mode not in {"EXISTING_AUDIO","AUDIO_SRT"}:
+            return {"status":"NOT_REQUIRED","tts":"RUN","timing":"AUTO"}
+        if imported_audio is None:
+            raise OperatorServiceError("NARRATION_AUDIO_REQUIRED")
+        audio_name,audio_payload=self._decoded_import(imported_audio,fallback_name="narration.wav",limit=180_000_000)
+        temporary_dir=self.runtime.temp/uuid.uuid4().hex; temporary_dir.mkdir(parents=True,exist_ok=False)
+        try:
+            audio_path=temporary_dir/audio_name; audio_path.write_bytes(audio_payload)
+            observed=inspect_audio(audio_path,provider="existing_audio")
+            result={"status":"PASS","audio":{"status":"PASS","filename":audio_name,
+                    "duration_seconds":observed["duration_seconds"]},"tts":"SKIPPED","timing":"ALIGNMENT"}
+            if source_mode=="AUDIO_SRT":
+                if imported_srt is None:
+                    raise OperatorServiceError("SRT_REQUIRED")
+                srt_name,srt_payload=self._decoded_import(imported_srt,fallback_name="timing.srt",limit=30_000_000)
+                if Path(srt_name).suffix.lower()!=".srt":
+                    raise OperatorServiceError("SRT_SOURCE_INVALID")
+                cues,encoding,stats=parse_srt_bytes(srt_payload)
+                difference=abs(float(observed["duration_seconds"])-float(stats["last_timestamp"]))
+                if difference>SRT_TIMELINE_TOLERANCE_SECONDS:
+                    raise OperatorServiceError("AUDIO_SRT_DURATION_MISMATCH")
+                result.update({"srt":{"status":"PASS","filename":srt_name,"cue_count":len(cues),
+                                      "encoding":encoding,"duration_seconds":stats["last_timestamp"]},"timing":"SRT"})
+            return result
+        finally:
+            shutil.rmtree(temporary_dir,ignore_errors=True)
+
     def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
                        ambient_style: str | None=None, content: str | None=None,
                        settings: dict[str, Any] | None=None, imported_audio: dict[str, Any] | None=None,
@@ -247,7 +293,18 @@ class OperatorService:
         resolved_settings=dict(settings or {})
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
         mode=execution_mode(resolved_settings)
+        source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
+        if source_mode not in {"STORY_CONTENT","EXISTING_AUDIO","AUDIO_SRT"}:
+            raise OperatorServiceError("INPUT_SOURCE_INVALID")
         if mode == "FULL": _validate_new_project_narrator(resolved_settings)
+        if source_mode in {"EXISTING_AUDIO","AUDIO_SRT"}:
+            self.inspect_imports(source_mode=source_mode,imported_audio=imported_audio,imported_srt=imported_srt)
+        if source_mode=="AUDIO_SRT" and not content:
+            _,srt_payload=self._decoded_import(imported_srt,fallback_name="timing.srt",limit=30_000_000)
+            cues,_,_=parse_srt_bytes(srt_payload)
+            content="# Imported narration\n\n## Narration\n\n"+" ".join(cue.text for cue in cues)+"\n"
+        if source_mode=="EXISTING_AUDIO" and not content:
+            raise OperatorServiceError("EXISTING_AUDIO_TEXT_REQUIRED")
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         if imported_audio is not None:
             try:
@@ -416,6 +473,7 @@ class OperatorService:
                 "visual_planning":visual_planning,"execution_mode":mode,
                 "execution_policy":{name:{"action":item.action,"reason":item.reason} for name,item in policy.items()},
                 "narration_source":audio_manifest.get("source_type", "GENERATE"),
+                "input_source":config.settings.get("ui",{}).get("input_source","STORY_CONTENT"),
                 "narration_audio":"MISSING" if not has_audio else ("IMPORTED" if audio_manifest.get("source_type")=="IMPORTED" else "REUSED"),
                 "subtitle_timing":"MISSING" if not srt_manifest else ("IMPORTED" if srt_manifest.get("source_type")=="IMPORTED" else "REUSED"),
                 "timing_source":alignment.get("timing_source", "DETERMINISTIC_ALIGNMENT" if has_audio else None),
