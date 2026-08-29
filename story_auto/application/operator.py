@@ -19,7 +19,9 @@ from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
-from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, execution_mode, load_project, stage_policy
+from story_auto.core.project import (AUTO_ACCEPT, MANUAL_REVIEW, ProjectConfig, RuntimeLayout, create_project,
+                                     effective_qc_policy, execution_mode, load_project, stage_policy, validate_qc_policy)
+from story_auto.core.project.lock import ProjectLock
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
@@ -30,7 +32,7 @@ from story_auto.providers.flow import (
     reject_selected_asset,
 )
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
-                                               accept_pending_visuals_by_owner, reopen_false_positive_production_qc, review_production_asset,
+                                                accept_pending_visuals_by_owner, accept_selected_assets_by_owner, apply_auto_accept_policy, reopen_false_positive_production_qc, review_production_asset,
                                                supersede_ambiguous_request)
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -547,6 +549,7 @@ class OperatorService:
             "prepare": lambda project_id: self.start_or_resume(project_id),
             "plan": lambda project_id: self.plan_visuals(project_id),
             "visuals": lambda project_id: self._run_visuals_for_production(project_id),
+            "quality": lambda project_id: self.apply_qc_policy(project_id),
             "render": lambda project_id: self.render(project_id),
         }, self.production_queries.record_run)
 
@@ -783,6 +786,43 @@ class OperatorService:
 
     def accept_pending_visuals_by_owner(self, project_id: str, reason: str) -> dict[str, Any]:
         return accept_pending_visuals_by_owner(self.runtime.root, project_id, reason)
+
+    def set_qc_policy(self, project_id: str, policy: str) -> dict[str, Any]:
+        policy = validate_qc_policy(policy)
+        if policy not in {AUTO_ACCEPT, MANUAL_REVIEW}:
+            raise OperatorServiceError("AI_REVIEW_UNSUPPORTED")
+        paths, config = self._project(project_id)
+        with ProjectLock(paths.runtime, project_id):
+            saved = {**config.settings, "qc_policy": policy}
+            atomic_write_json(paths.project_file, ProjectConfig(project_id, content_path=config.content_path,
+                              render_mode=config.render_mode, settings=saved, schema_version=config.schema_version).to_dict())
+        return self.production_query(project_id)["quality"]
+
+    def query_qc_status(self, project_id: str) -> dict[str, Any]:
+        return self.production_query(project_id)["quality"]
+
+    def apply_qc_policy(self, project_id: str) -> dict[str, Any]:
+        paths, config = self._project(project_id)
+        policy, _explicit = effective_qc_policy(config.settings)
+        if policy == AUTO_ACCEPT:
+            return apply_auto_accept_policy(self.runtime.root, project_id)
+        if policy == MANUAL_REVIEW:
+            return self.query_qc_status(project_id)
+        raise OperatorServiceError("AI_REVIEW_UNSUPPORTED")
+
+    def accept_selected_assets(self, project_id: str, request_ids: set[str] | None, reason: str) -> dict[str, Any]:
+        return accept_selected_assets_by_owner(self.runtime.root, project_id, reason, request_ids)
+
+    def reject_selected_assets(self, project_id: str, request_ids: set[str], reason: str) -> dict[str, Any]:
+        if not request_ids or not isinstance(reason, str) or not reason.strip():
+            raise OperatorServiceError("OWNER_REJECTION_INVALID")
+        paths, config = self._project(project_id)
+        policy, _explicit = effective_qc_policy(config.settings)
+        if policy != MANUAL_REVIEW:
+            raise OperatorServiceError("QC_POLICY_NOT_MANUAL_REVIEW")
+        for request_id in request_ids:
+            reject_selected_asset(self.runtime.root, project_id, request_id, reason=reason)
+        return {"status": "REJECTED", "project_id": project_id, "rejected_assets": len(request_ids), "provider_dispatch_delta": 0}
 
     def reopen_false_positive_production_qc(self, project_id: str, request_id: str, *, expected_asset_sha256: str,
                                             reviewer: str, reason: str) -> dict[str, Any]:

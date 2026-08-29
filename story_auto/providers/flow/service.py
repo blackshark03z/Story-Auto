@@ -27,7 +27,8 @@ from story_auto.core.planning.qc_corrective import (
 from story_auto.core.planning.service import PlanningError, validate_generation_requests
 from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, TERMINAL_TEMPORAL_FAILURES,
                                        plan_motion, sample_dense_frames, temporal_video_qc)
-from story_auto.core.project import RuntimeLayout, load_project
+from story_auto.core.project import (AUTO_ACCEPT, MANUAL_REVIEW, RuntimeLayout, effective_qc_policy,
+                                     load_project)
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
 from story_auto.core.render import MediaError, derive_trim_retime_video
@@ -2185,8 +2186,97 @@ def review_production_asset(runtime_root: Path | str, project_id: str, request_i
         atomic_write_json(path, manifest)
 
 
-def accept_pending_visuals_by_owner(runtime_root: Path | str, project_id: str, reason: str) -> dict:
-    """Apply one explicit owner decision to safely persisted pending IMAGE assets.
+def _technical_integrity_eligible(paths, entry: dict, request: dict | None) -> bool:
+    """Prove an asset passed the non-editorial gate before a policy may decide it."""
+    selected = entry.get("selected_asset")
+    source_attempt = selected.get("source_provider_attempt", selected.get("attempt")) if isinstance(selected, dict) else None
+    attempt = next((item for item in entry.get("attempts", [])
+                    if isinstance(item, dict) and item.get("attempt") == source_attempt), None)
+    identity_matches = (
+        isinstance(request, dict)
+        and entry.get("request_identity_sha256") == request.get("fingerprint")
+        and entry.get("related_identity") == (request.get("shot_id") or request.get("entity_id"))
+        and entry.get("media_type") == request.get("media_type")
+        and entry.get("provider") == request.get("provider")
+    )
+    ownership_safe = (
+        isinstance(attempt, dict)
+        and attempt.get("status") == "SUCCEEDED"
+        and attempt.get("attribution_state") == "CONFIRMED"
+        and attempt.get("attribution_status") != "INVALIDATED"
+        and not any(isinstance(item, dict) and (
+            str(item.get("status", "")).startswith("FAILED") or item.get("status") == "AMBIGUOUS"
+            or item.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
+        ) for item in entry.get("attempts", []))
+    )
+    return (entry.get("status") == "QC_PENDING" and entry.get("failure_class") is None
+            and isinstance(selected, dict) and selected.get("production_qc") == "PENDING"
+            and identity_matches and ownership_safe and _valid_selected(paths, entry))
+
+
+def _record_editorial_acceptance(entry: dict, *, policy: str, actor: str, disposition: str,
+                                 reason: str | None, scope: str) -> dict:
+    selected = entry["selected_asset"]
+    source_attempt = selected.get("source_provider_attempt", selected.get("attempt"))
+    decision = {
+        "reviewed_at": _now(), "status": "OWNER_ACCEPTED" if actor == "OWNER" else "AUTO_ACCEPTED",
+        "decision": "ACCEPT", "disposition": disposition, "actor": actor, "policy": policy,
+        "scope": scope, "selected_asset_path": selected.get("path"),
+        "selected_asset_sha256": selected.get("sha256"), "selected_attempt": source_attempt,
+        "ownership_state": "CONFIRMED", "technical_integrity": "PASSED",
+    }
+    if reason:
+        decision["reason"] = reason
+    entry.setdefault("quality_reviews", []).append(decision)
+    selected["production_qc"] = "OWNER_ACCEPTED" if actor == "OWNER" else "AUTO_ACCEPTED"
+    entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": decision["reviewed_at"]})
+    return decision
+
+
+def apply_auto_accept_policy(runtime_root: Path | str, project_id: str) -> dict:
+    """Apply AUTO_ACCEPT only after the existing technical/provenance gate passes.
+
+    This command has no provider boundary.  Failed, unreadable, wrong-type, or
+    ambiguous assets remain untouched and are returned as ineligible evidence.
+    """
+    paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    policy, _explicit = effective_qc_policy(config.settings)
+    if policy != AUTO_ACCEPT:
+        raise FlowError("QC_POLICY_NOT_AUTO_ACCEPT")
+    with ProjectLock(paths.runtime, project_id):
+        path, manifest = _manifest(paths, project_id)
+        try:
+            requests = read_json(paths.artifact_path("output/generation_requests.json")).get("requests", [])
+        except Exception as error:
+            raise FlowError("GENERATION_REQUESTS_INVALID") from error
+        by_id = {item.get("request_id"): item for item in requests if isinstance(item, dict)}
+        accepted = already_accepted = 0
+        ineligible: list[str] = []
+        for entry in manifest["requests"]:
+            if not isinstance(entry, dict):
+                continue
+            selected = entry.get("selected_asset")
+            if entry.get("status") == "SUCCEEDED" and isinstance(selected, dict) and selected.get("production_qc") == "AUTO_ACCEPTED":
+                already_accepted += 1
+                continue
+            if entry.get("status") != "QC_PENDING":
+                continue
+            if not _technical_integrity_eligible(paths, entry, by_id.get(entry.get("request_id"))):
+                ineligible.append(str(entry.get("request_id", "")))
+                continue
+            _record_editorial_acceptance(entry, policy=AUTO_ACCEPT, actor="SYSTEM", disposition="AUTO_ACCEPTED",
+                                         reason=None, scope="ASSET")
+            accepted += 1
+        if accepted:
+            atomic_write_json(path, manifest)
+        return {"status": "AUTO_ACCEPTED", "project_id": project_id, "accepted_assets": accepted,
+                "already_auto_accepted_assets": already_accepted, "ineligible_assets": ineligible,
+                "provider_dispatch_delta": 0}
+
+
+def accept_selected_assets_by_owner(runtime_root: Path | str, project_id: str, reason: str,
+                                    request_ids: set[str] | None = None) -> dict:
+    """Apply a truthful Manual-review owner decision to selected eligible assets.
 
     This is intentionally distinct from ``review_production_asset``: it records
     that manual visual review was skipped by the owner, rather than fabricating
@@ -2194,7 +2284,10 @@ def accept_pending_visuals_by_owner(runtime_root: Path | str, project_id: str, r
     """
     if not isinstance(reason, str) or not reason.strip():
         raise FlowError("OWNER_ACCEPTANCE_REASON_REQUIRED")
-    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    policy, _explicit = effective_qc_policy(config.settings)
+    if policy != MANUAL_REVIEW:
+        raise FlowError("QC_POLICY_NOT_MANUAL_REVIEW")
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         try:
@@ -2202,60 +2295,54 @@ def accept_pending_visuals_by_owner(runtime_root: Path | str, project_id: str, r
         except Exception as error:
             raise FlowError("GENERATION_REQUESTS_INVALID") from error
         requests_by_id = {item.get("request_id"): item for item in requests if isinstance(item, dict)}
-        accepted = 0
-        already_accepted = 0
+        requested = set(request_ids) if request_ids is not None else None
+        accepted = already_accepted = 0
+        accepted_images = accepted_videos = 0
+        ineligible: list[str] = []
+        accepted_asset_set: list[dict] = []
         for entry in manifest["requests"]:
             if not isinstance(entry, dict):
                 continue
             selected = entry.get("selected_asset")
+            request_id = entry.get("request_id")
+            if requested is not None and request_id not in requested:
+                continue
             if (entry.get("status") == "SUCCEEDED" and isinstance(selected, dict)
                     and selected.get("production_qc") == "OWNER_ACCEPTED"):
                 already_accepted += 1
                 continue
             if entry.get("status") != "QC_PENDING":
                 continue
-            request = requests_by_id.get(entry.get("request_id"))
-            source_attempt = selected.get("source_provider_attempt", selected.get("attempt")) if isinstance(selected, dict) else None
-            attempt = next((item for item in entry.get("attempts", []) if isinstance(item, dict) and item.get("attempt") == source_attempt), None)
-            identity_matches = (
-                isinstance(request, dict)
-                and entry.get("request_identity_sha256") == request.get("fingerprint")
-                and entry.get("related_identity") == (request.get("shot_id") or request.get("entity_id"))
-                and entry.get("media_type") == request.get("media_type") == "IMAGE"
-                and entry.get("provider") == request.get("provider")
-            )
-            ownership_safe = (
-                isinstance(attempt, dict)
-                and attempt.get("status") == "SUCCEEDED"
-                and attempt.get("attribution_state") == "CONFIRMED"
-                and attempt.get("attribution_status") != "INVALIDATED"
-                and not any(
-                    isinstance(item, dict) and (
-                        str(item.get("status", "")).startswith("FAILED") or item.get("status") == "AMBIGUOUS"
-                        or item.get("attribution_state") in {"UNCERTAIN", "AMBIGUOUS"}
-                    )
-                    for item in entry.get("attempts", [])
-                )
-            )
-            if (entry.get("failure_class") is not None or not isinstance(selected, dict)
-                    or selected.get("production_qc") != "PENDING" or not identity_matches or not _valid_selected(paths, entry)
-                    or not ownership_safe):
-                raise FlowError("OWNER_ACCEPTANCE_ASSET_INELIGIBLE", str(entry.get("request_id", "")))
-            entry.setdefault("quality_reviews", []).append({
-                "reviewed_at": _now(), "status": "OWNER_ACCEPTED", "disposition": "MANUAL_REVIEW_SKIPPED",
-                "reason": reason.strip(), "selected_asset_path": selected.get("path"),
-                "selected_asset_sha256": selected.get("sha256"), "selected_attempt": source_attempt,
-                "ownership_state": "CONFIRMED",
-            })
-            selected["production_qc"] = "OWNER_ACCEPTED"
-            entry.update({"status": "SUCCEEDED", "failure_class": None, "updated_at": _now()})
+            if not _technical_integrity_eligible(paths, entry, requests_by_id.get(request_id)):
+                if requested is not None:
+                    raise FlowError("OWNER_ACCEPTANCE_ASSET_INELIGIBLE", str(request_id or ""))
+                ineligible.append(str(request_id or ""))
+                continue
+            scope = "BATCH" if requested is None or len(requested) != 1 else "SELECTED"
+            _record_editorial_acceptance(entry, policy=MANUAL_REVIEW, actor="OWNER",
+                                         disposition="MANUAL_REVIEW_SKIPPED", reason=reason.strip(), scope=scope)
+            accepted_asset_set.append({"request_id": request_id, "path": selected.get("path"), "sha256": selected.get("sha256")})
             accepted += 1
+            if entry.get("media_type") == "IMAGE": accepted_images += 1
+            elif entry.get("media_type") == "VIDEO": accepted_videos += 1
         if accepted:
+            manifest.setdefault("quality_batches", []).append({
+                "recorded_at": _now(), "decision": "ACCEPT", "scope": "BATCH" if requested is None or len(requested) != 1 else "SELECTED",
+                "actor": "OWNER", "policy": MANUAL_REVIEW, "disposition": "MANUAL_REVIEW_SKIPPED",
+                "reason": reason.strip(), "asset_set": accepted_asset_set,
+            })
             atomic_write_json(path, manifest)
         return {
-            "status": "OWNER_ACCEPTED", "project_id": project_id, "accepted_images": accepted,
-            "already_owner_accepted_images": already_accepted, "new_image_requests": 0, "video_requests": 0,
+            "status": "OWNER_ACCEPTED", "project_id": project_id, "accepted_assets": accepted,
+            "accepted_images": accepted_images, "accepted_videos": accepted_videos,
+            "already_owner_accepted_assets": already_accepted, "already_owner_accepted_images": already_accepted,
+            "ineligible_assets": ineligible, "new_image_requests": 0, "video_requests": 0, "provider_dispatch_delta": 0,
         }
+
+
+def accept_pending_visuals_by_owner(runtime_root: Path | str, project_id: str, reason: str) -> dict:
+    """Compatibility name for accepting every technically eligible pending asset."""
+    return accept_selected_assets_by_owner(runtime_root, project_id, reason, None)
 
 
 def reopen_malformed_production_qc_report(runtime_root: Path | str, project_id: str, request_id: str,

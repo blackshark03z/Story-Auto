@@ -10,6 +10,7 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.visual.ambient import AMBIENT_STYLES
 from .execution import execution_mode
+from .quality_policy import QC_POLICY_SETTING, validate_qc_policy, settings_with_default_qc_policy
 from .paths import ProjectPaths, RuntimeLayout
 
 
@@ -81,6 +82,11 @@ class ProjectConfig:
             execution_mode(self.settings)
         except ValueError as error:
             raise ProjectValidationError(str(error)) from error
+        if QC_POLICY_SETTING in self.settings:
+            try:
+                validate_qc_policy(self.settings[QC_POLICY_SETTING])
+            except ValueError as error:
+                raise ProjectValidationError(str(error)) from error
         ambient_style = self.settings.get("ambient_style")
         if self.render_mode == "ambient_story" and ambient_style not in AMBIENT_STYLES:
             raise ProjectValidationError("ambient_story requires settings.ambient_style to be quiet_verdict or hidden_mastery")
@@ -130,6 +136,10 @@ class ProjectConfig:
 
 
 def create_project(runtime: RuntimeLayout, config: ProjectConfig, narration_template: str = "# Story\n\n## Narration\n\nWrite narration here.\n") -> ProjectPaths:
+    # Defaults are materialized only for new projects.  Loading an historical
+    # project must not rewrite its truth or silently change its old manual gate.
+    config = ProjectConfig(config.project_id, content_path=config.content_path, render_mode=config.render_mode,
+                           settings=settings_with_default_qc_policy(config.settings), schema_version=config.schema_version)
     paths = ProjectPaths(runtime.ensure(), config.project_id)
     if paths.root.exists():
         raise ProjectValidationError(f"project already exists: {config.project_id}")

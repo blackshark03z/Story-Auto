@@ -17,7 +17,7 @@ from story_auto.providers.tts.kokoro_local import KokoroReadiness
 
 class OperatorApplicationTests(unittest.TestCase):
     def _owner_acceptance_fixture(self, app, project_id, count=1):
-        app.create_project(project_id=project_id,render_mode="full_image",content="# Owner acceptance\n\n## Narration\n\nUse existing visuals.\n")
+        app.create_project(project_id=project_id,render_mode="full_image",settings={"qc_policy":"MANUAL_REVIEW"},content="# Owner acceptance\n\n## Narration\n\nUse existing visuals.\n")
         paths,_=app._project(project_id)
         asset=paths.artifact_path("assets/selected.png"); asset.parent.mkdir(parents=True,exist_ok=True)
         Image.new("RGB",(1280,720),"navy").save(asset,"PNG")

@@ -50,6 +50,8 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"reopen_production_qc",script)
                 self.assertIn(b"Ambient Story",script); self.assertIn(b"Quiet Verdict",script); self.assertIn(b"Hidden Mastery",script)
                 self.assertIn(b'name="format"',script); self.assertIn(b'name="ambientStyle"',script)
+                self.assertIn(b'Quality review',script); self.assertIn(b'name="qcPolicy"',script)
+                self.assertIn(b'Accept eligible visuals',script); self.assertIn(b'accept_selected_assets',script)
                 self.assertNotIn(b"zoom percentage",script); self.assertNotIn(b"particle count",script)
                 status,payload,_=call("/api/projects",{"project_id":"prj_ui001","render_mode":"hybrid_hook","content":"# Story\n\n## Narration\n\nA local operator test.\n"}); self.assertEqual(status,201)
                 created=json.loads(payload); self.assertEqual(created["content_status"],"VALID")

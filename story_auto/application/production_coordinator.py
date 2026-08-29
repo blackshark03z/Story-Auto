@@ -31,12 +31,12 @@ class ProductionCoordinator:
                 return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
             stage = state["active_stage"]
             operation = {"SOURCE": "prepare", "TIMING": "prepare", "PLAN": "plan", "VISUALS": "visuals", "QUALITY": "quality", "RENDER": "render"}[stage]
-            if operation == "quality":
-                # Quality policy stays owner-driven in Phase A.
-                return self._result(project_id, run_id, "OWNER_DECISION_REQUIRED", invoked, state)
             try:
-                self.operations[operation](project_id)
+                operation_result = self.operations[operation](project_id)
                 invoked.append(operation)
+                if operation == "quality" and isinstance(operation_result, dict) and operation_result.get("ineligible_assets"):
+                    return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
+                                        reason_code="QC_TECHNICAL_INTEGRITY_REQUIRED")
             except Exception as error:
                 code = getattr(error, "failure_class", type(error).__name__)
                 outcome = "AUTH_RECOVERY_REQUIRED" if str(code).startswith("FLOW_") else "SAFETY_BLOCKED"

@@ -14,6 +14,7 @@ from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project.execution import execution_mode, stage_policy
+from story_auto.core.project.quality_policy import AI_REVIEW, AUTO_ACCEPT, MANUAL_REVIEW, effective_qc_policy
 
 
 PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.0"
@@ -96,7 +97,26 @@ class ProductionStateReconciler:
         request_ids = {item.get("request_id") for item in requests.get("requests", []) if item.get("purpose") == "SHOT" and item.get("request_id")}
         entries = {item.get("request_id"): item for item in manifest.get("requests", []) if item.get("request_id")}
         statuses = [str(entries[item].get("status", "NOT_STARTED")) for item in request_ids if item in entries]
-        selected = bool(request_ids) and all(entries.get(item, {}).get("status") == "SUCCEEDED" and entries.get(item, {}).get("selected_asset") for item in request_ids)
+        required_entries = [entries.get(item, {}) for item in request_ids]
+        accepted_markers = {"APPROVED", "OWNER_ACCEPTED", "AUTO_ACCEPTED"}
+        selected = bool(request_ids) and all(
+            entry.get("status") == "SUCCEEDED" and isinstance(entry.get("selected_asset"), dict)
+            and entry["selected_asset"].get("production_qc") in accepted_markers
+            for entry in required_entries
+        )
+        generated_for_quality = bool(request_ids) and all(
+            entry.get("status") in {"QC_PENDING", "SUCCEEDED"} and isinstance(entry.get("selected_asset"), dict)
+            for entry in required_entries
+        )
+        qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
+        quality = {
+            "status": "NOT_STARTED", "policy": qc_policy, "policy_explicit": qc_policy_explicit,
+            "technical_passed": sum(1 for entry in required_entries if entry.get("status") in {"QC_PENDING", "SUCCEEDED"} and isinstance(entry.get("selected_asset"), dict)),
+            "pending_review": sum(1 for entry in required_entries if entry.get("status") == "QC_PENDING"),
+            "accepted": sum(1 for entry in required_entries if entry.get("status") == "SUCCEEDED" and isinstance(entry.get("selected_asset"), dict) and entry["selected_asset"].get("production_qc") in accepted_markers),
+            "rejected": sum(1 for entry in required_entries if entry.get("status") in {"AMBIGUOUS", "FAILED_RETRYABLE", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"}),
+            "requires_owner_decision": False, "human_message": None, "next_action": None,
+        }
         policy = stage_policy(execution_mode(config.settings), has_valid_audio=present["output/alignment.json"], has_accepted_visuals=selected)
         stages: dict[str, dict[str, Any]] = {}
         stages["SOURCE"] = self._stage("COMPLETE" if present["output/content_manifest.json"] else "READY", "RUN")
@@ -105,10 +125,25 @@ class ProductionStateReconciler:
         plan_approved = isinstance(review, dict) and review.get("plan_approval", {}).get("status") == "APPROVED"
         plan_ready = present["output/continuity_bible.json"]
         stages["PLAN"] = self._stage("COMPLETE" if present["output/generation_requests.json"] else ("BLOCKED" if plan_ready and not plan_approved else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
-        visual_status = "COMPLETE" if selected else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
+        visual_status = "COMPLETE" if generated_for_quality else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
         stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
-        quality_status = "COMPLETE" if selected else ("BLOCKED" if "QC_PENDING" in statuses else ("NOT_STARTED" if not request_ids else "READY"))
-        stages["QUALITY"] = self._stage(quality_status, "RUN")
+        if not request_ids:
+            quality_status = "NOT_STARTED"
+        elif selected:
+            quality_status = "COMPLETE"
+        elif qc_policy == MANUAL_REVIEW and quality["pending_review"]:
+            quality_status = "BLOCKED"; quality.update({"requires_owner_decision": True, "human_message": "Generated visuals are ready for your review.", "next_action": "Review visuals"})
+        elif qc_policy == AUTO_ACCEPT and quality["pending_review"]:
+            quality_status = "READY"; quality.update({"human_message": "Technical checks passed; Story Auto will accept eligible visuals automatically.", "next_action": "Continue production"})
+        elif qc_policy == AI_REVIEW:
+            quality_status = "BLOCKED"; quality.update({"human_message": "AI review is reserved but is not available in this version.", "next_action": "Choose a supported quality review policy"})
+        elif quality["rejected"]:
+            quality_status = "BLOCKED"; quality.update({"human_message": "A technical or provenance safety check needs recovery before quality can continue.", "next_action": "Review recovery"})
+        else:
+            quality_status = "READY"
+        quality["status"] = quality_status
+        stages["QUALITY"] = self._stage(quality_status, "RUN", quality["human_message"])
+        stages["QUALITY"]["requires_owner_decision"] = quality["requires_owner_decision"]
         final_present = present["output/final.mp4"]
         stages["RENDER"] = self._stage("COMPLETE" if final_present else ("BLOCKED" if policy["render"].action == "BLOCK" else "READY"), policy["render"].action, policy["render"].reason)
 
@@ -117,12 +152,14 @@ class ProductionStateReconciler:
             blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
         elif stages["PLAN"]["status"] == "BLOCKED":
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
-        elif stages["QUALITY"]["status"] == "BLOCKED":
-            blocker = self._blocker("OWNER_DECISION_REQUIRED", "Generated visuals need the existing quality decision before rendering.", "Review visuals", True, True, "QUALITY")
-        elif any(status == "AUTH_REQUIRED" for status in statuses):
-            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["VISUALS"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", "Visual generation needs reconciliation or provider recovery before another request is sent.", "Review recovery", True, False, "VISUALS")
+        elif stages["QUALITY"]["status"] == "BLOCKED" and qc_policy == MANUAL_REVIEW:
+            blocker = self._blocker("OWNER_DECISION_REQUIRED", "Generated visuals need the existing quality decision before rendering.", "Review visuals", True, True, "QUALITY")
+        elif stages["QUALITY"]["status"] == "BLOCKED":
+            blocker = self._blocker("SAFETY_BLOCKED", quality["human_message"] or "Quality cannot continue safely.", quality["next_action"] or "Review recovery", True, False, "QUALITY")
+        elif any(status == "AUTH_REQUIRED" for status in statuses):
+            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["TIMING"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", stages["TIMING"]["human_message"] or "Narration audio is required.", "Review project", True, False, "TIMING")
 
@@ -141,7 +178,7 @@ class ProductionStateReconciler:
             "schema_version": PRODUCTION_STATE_SCHEMA_VERSION, "project_id": paths.project_id, "state_revision": revision,
             "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
             "pipeline_status": pipeline_status, "active_stage": active_stage,
-            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages,
+            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality,
             "blocker": blocker, "next_action": next_action,
             "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},
             "evidence_fingerprint": fingerprint, "evidence": evidence, "updated_at": _now(),

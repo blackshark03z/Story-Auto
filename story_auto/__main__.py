@@ -31,6 +31,19 @@ def main() -> int:
     accept_visuals = commands.add_parser("accept-pending-visuals-by-owner", help="Record owner acceptance when manual visual review is explicitly skipped")
     accept_visuals.add_argument("project_id")
     accept_visuals.add_argument("--reason", required=True)
+    qc_policy = commands.add_parser("set-qc-policy", help="Set a supported project quality review policy")
+    qc_policy.add_argument("project_id")
+    qc_policy.add_argument("policy", choices=("AUTO_ACCEPT", "MANUAL_REVIEW"))
+    qc_status = commands.add_parser("qc-status", help="Show compact project quality status")
+    qc_status.add_argument("project_id")
+    accept_assets = commands.add_parser("accept-assets", help="Accept selected eligible assets under Manual review")
+    accept_assets.add_argument("project_id")
+    accept_assets.add_argument("request_ids", nargs="+")
+    accept_assets.add_argument("--reason", required=True)
+    reject_assets = commands.add_parser("reject-assets", help="Reject selected assets under Manual review")
+    reject_assets.add_argument("project_id")
+    reject_assets.add_argument("request_ids", nargs="+")
+    reject_assets.add_argument("--reason", required=True)
     flow = commands.add_parser("flow-preflight", help="Discover the dedicated Flow session capabilities")
     flow.add_argument("project_id")
     open_flow = commands.add_parser("flow-open-session", help="Open the isolated Flow profile for operator login")
@@ -75,6 +88,18 @@ def main() -> int:
             return 0
         if args.command == "accept-pending-visuals-by-owner":
             print(json.dumps(app.accept_pending_visuals_by_owner(args.project_id, args.reason), sort_keys=True))
+            return 0
+        if args.command == "set-qc-policy":
+            print(json.dumps(app.set_qc_policy(args.project_id, args.policy), sort_keys=True))
+            return 0
+        if args.command == "qc-status":
+            print(json.dumps(app.query_qc_status(args.project_id), sort_keys=True))
+            return 0
+        if args.command == "accept-assets":
+            print(json.dumps(app.accept_selected_assets(args.project_id, set(args.request_ids), args.reason), sort_keys=True))
+            return 0
+        if args.command == "reject-assets":
+            print(json.dumps(app.reject_selected_assets(args.project_id, set(args.request_ids), args.reason), sort_keys=True))
             return 0
         if args.command == "plan-visuals":
             result=app.plan_visuals(args.project_id)

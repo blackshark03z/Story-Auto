@@ -83,6 +83,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action in {"process", "run_to_final"}: result=self.service.run_to_final(project_id)
             elif action=="continue_production": result=self.service.continue_production(project_id)
             elif action=="set_execution_mode": result=self.service.set_execution_mode(project_id,body.get("mode",""))
+            elif action=="set_qc_policy": result=self.service.set_qc_policy(project_id,body.get("policy",""))
+            elif action=="query_qc_status": result=self.service.query_qc_status(project_id)
             elif action=="set_full_image_duration": result=self.service.set_full_image_duration(project_id,body.get("seconds"),body.get("cadence"))
             elif action=="set_full_image_audio_visualizer": result=self.service.set_full_image_audio_visualizer(project_id,body.get("enabled"))
             elif action=="approve_plan": result=self.service.approve_planning(project_id)
@@ -96,6 +98,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="update_flow_connection": result=self.service.update_flow_connection(project_id,body.get("project_url", ""))
             elif action=="approve_asset": result=self.service.review_asset(project_id,body["request_id"],body["report"])
             elif action=="accept_pending_visuals_by_owner": result=self.service.accept_pending_visuals_by_owner(project_id,body.get("reason", ""))
+            elif action=="accept_selected_assets": result=self.service.accept_selected_assets(project_id,set(body.get("request_ids", [])) or None,body.get("reason", ""))
+            elif action=="reject_selected_assets": result=self.service.reject_selected_assets(project_id,set(body.get("request_ids", [])),body.get("reason", ""))
             elif action=="reopen_production_qc": result=self.service.reopen_false_positive_production_qc(
                 project_id, body["request_id"], expected_asset_sha256=body["expected_asset_sha256"],
                 reviewer=body.get("reviewer", "local_operator"), reason=body.get("reason", ""))
