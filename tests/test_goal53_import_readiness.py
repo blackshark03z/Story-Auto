@@ -90,6 +90,32 @@ class Goal53ImportReadinessTests(unittest.TestCase):
                 app.create_project(project_id="prj_goal53_blocked", settings={"execution": {"mode": "EXISTING_VOICE"}, "ui": {"input_source": "AUDIO_SRT"}}, imported_audio=audio, imported_srt=bad)
             self.assertEqual(blocked.exception.readiness["timeline"]["code"], "TIMELINE_MISMATCH")
 
+    def test_timeline_mismatch_messages_preserve_direction_and_magnitude(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root); audio = _upload("voice.wav", _wav())
+            after = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio,
+                                        imported_srt=_upload("after.srt", b"1\n00:00:00,000 --> 00:00:03,000\nToo late.\n"))
+            before = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio,
+                                         imported_srt=_upload("before.srt", b"1\n00:00:00,000 --> 00:00:00,200\nToo early.\n"))
+        self.assertEqual((after["status"], after["timeline"]["code"], after["timeline"]["direction"]),
+                         ("BLOCKED", "TIMELINE_MISMATCH", "SRT_AFTER_AUDIO"))
+        self.assertIn("after", after["timeline"]["message"]); self.assertNotIn("before", after["timeline"]["message"])
+        self.assertEqual((before["status"], before["timeline"]["code"], before["timeline"]["direction"]),
+                         ("BLOCKED", "TIMELINE_MISMATCH", "SRT_BEFORE_AUDIO"))
+        self.assertIn("before", before["timeline"]["message"]); self.assertNotIn("after", before["timeline"]["message"])
+        self.assertAlmostEqual(before["timeline"]["signed_offset_ms"], -1800.0)
+        self.assertEqual(before["timeline"]["delta_ms"], 1800.0)
+
+    def test_existing_audio_semantics_remain_alignment_when_blocked_or_ready(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            missing = app.inspect_imports(source_mode="EXISTING_AUDIO", imported_audio=None, imported_srt=None)
+            invalid = app.inspect_imports(source_mode="EXISTING_AUDIO", imported_audio=_upload("bad.wav", b"not audio"), imported_srt=None)
+            ready = app.inspect_imports(source_mode="EXISTING_AUDIO", imported_audio=_upload("voice.wav", _wav()), imported_srt=None)
+        for readiness in (missing, invalid):
+            self.assertEqual((readiness["status"], readiness["tts"], readiness["timing"]), ("BLOCKED", "SKIPPED", "ALIGNMENT"))
+        self.assertEqual((ready["status"], ready["tts"], ready["timing"]), ("READY", "SKIPPED", "ALIGNMENT"))
+
     def test_valid_m4a_srt_is_ready(self):
         ffmpeg = shutil.which("ffmpeg")
         self.assertIsNotNone(ffmpeg, "ffmpeg is required by the M4A import contract")
@@ -132,7 +158,10 @@ class Goal53ImportReadinessTests(unittest.TestCase):
                     self.assertTrue(page.get_by_role("button", name="Continue", exact=True).is_enabled())
                     page.locator("#existingSrt").set_input_files({"name": "late.srt", "mimeType": "text/plain", "buffer": b"1\n00:00:00,000 --> 00:00:00,200\nLate subtitle.\n"})
                     page.locator("#sourceReadiness").get_by_text("Subtitle timing ends", exact=False).first.wait_for(timeout=5000)
-                    self.assertIn("Allowed: 0.500 s", page.locator("#sourceReadiness").inner_text())
+                    readiness_text = page.locator("#sourceReadiness").inner_text()
+                    self.assertIn("before the narration audio", readiness_text)
+                    self.assertNotIn("after the narration audio", readiness_text)
+                    self.assertIn("Allowed: 0.500 s", readiness_text)
                     self.assertFalse(page.get_by_role("button", name="Continue", exact=True).is_enabled())
                     browser.close()
             finally:
