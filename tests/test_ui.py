@@ -38,6 +38,8 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"ArtifactWriteError",script); self.assertIn(b"does not send another Flow request",script)
                 self.assertIn(b"issue.technical_code || issue.request_id",script)
                 self.assertIn(b"const projectId = state.project",script)
+                self.assertIn(b"$('#saveFlowConnection').disabled=true",script)
+                self.assertIn(b"else $('#saveFlowConnection').disabled=true",script)
                 self.assertIn(b"state.view === 'project' && state.project === projectId",script)
                 self.assertIn(b"Create again",script)
                 self.assertIn(b"Use recovered file",script)

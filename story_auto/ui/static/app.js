@@ -181,8 +181,8 @@ async function validateProjectFlowConnection(save = false) {
   const input = $('#flowProjectUrl'), url = input?.value.trim();
   if (!url) { toast('Paste the Story Auto Flow project URL first.',true); input?.focus(); return; }
   const button = save ? $('#saveFlowConnection') : $('#validateFlowConnection'); if (button) button.disabled = true;
-  try { const value = await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:save ? 'update_flow_connection' : 'validate_flow_connection',project_url:url})}); $('#flowValidationMessage').textContent=value.message || value.status; if (value.status==='CONNECTED') { $('#saveFlowConnection').disabled=false; toast(save ? 'Flow connection saved and this project is bound.' : 'Flow profile, project, and IMAGE capability are confirmed.'); } if (save) await openProject(state.project,false); }
-  catch (error) { const friendly=friendlyError(error); $('#flowValidationMessage').textContent=friendly.message; toast(friendly.title,true); }
+  try { const value = await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:save ? 'update_flow_connection' : 'validate_flow_connection',project_url:url})}); $('#flowValidationMessage').textContent=value.message || value.status; if (value.status==='CONNECTED') { $('#saveFlowConnection').disabled=false; toast(save ? 'Flow connection saved and this project is bound.' : 'Flow profile, project, and IMAGE capability are confirmed.'); } else $('#saveFlowConnection').disabled=true; if (save) await openProject(state.project,false); }
+  catch (error) { const friendly=friendlyError(error); $('#flowValidationMessage').textContent=friendly.message; $('#saveFlowConnection').disabled=true; toast(friendly.title,true); }
   finally { if (button) button.disabled=false; }
 }
 
