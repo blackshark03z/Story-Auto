@@ -28,6 +28,9 @@ def main() -> int:
     visual.add_argument("project_id")
     approve_shots = commands.add_parser("approve-shot-plan", help="Approve validated shot/media/generation planning")
     approve_shots.add_argument("project_id")
+    accept_visuals = commands.add_parser("accept-pending-visuals-by-owner", help="Record owner acceptance when manual visual review is explicitly skipped")
+    accept_visuals.add_argument("project_id")
+    accept_visuals.add_argument("--reason", required=True)
     flow = commands.add_parser("flow-preflight", help="Discover the dedicated Flow session capabilities")
     flow.add_argument("project_id")
     open_flow = commands.add_parser("flow-open-session", help="Open the isolated Flow profile for operator login")
@@ -69,6 +72,9 @@ def main() -> int:
         if args.command == "approve-shot-plan":
             app.approve_planning(args.project_id,shots=True)
             print("review_state: APPROVED")
+            return 0
+        if args.command == "accept-pending-visuals-by-owner":
+            print(json.dumps(app.accept_pending_visuals_by_owner(args.project_id, args.reason), sort_keys=True))
             return 0
         if args.command == "plan-visuals":
             result=app.plan_visuals(args.project_id)

@@ -28,7 +28,7 @@ from story_auto.providers.flow import (
     reject_selected_asset,
 )
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
-                                               reopen_false_positive_production_qc, review_production_asset,
+                                               accept_pending_visuals_by_owner, reopen_false_positive_production_qc, review_production_asset,
                                                supersede_ambiguous_request)
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -738,6 +738,9 @@ class OperatorService:
 
     def review_asset(self, project_id: str, request_id: str, report: dict[str, Any]) -> dict[str, Any]:
         review_production_asset(self.runtime.root,project_id,request_id,report); return self.media_items(project_id)
+
+    def accept_pending_visuals_by_owner(self, project_id: str, reason: str) -> dict[str, Any]:
+        return accept_pending_visuals_by_owner(self.runtime.root, project_id, reason)
 
     def reopen_false_positive_production_qc(self, project_id: str, request_id: str, *, expected_asset_sha256: str,
                                             reviewer: str, reason: str) -> dict[str, Any]:

@@ -93,6 +93,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="validate_flow_connection": result=self.service.validate_flow_connection(project_id,body.get("project_url", ""))
             elif action=="update_flow_connection": result=self.service.update_flow_connection(project_id,body.get("project_url", ""))
             elif action=="approve_asset": result=self.service.review_asset(project_id,body["request_id"],body["report"])
+            elif action=="accept_pending_visuals_by_owner": result=self.service.accept_pending_visuals_by_owner(project_id,body.get("reason", ""))
             elif action=="reopen_production_qc": result=self.service.reopen_false_positive_production_qc(
                 project_id, body["request_id"], expected_asset_sha256=body["expected_asset_sha256"],
                 reviewer=body.get("reviewer", "local_operator"), reason=body.get("reason", ""))

@@ -16,6 +16,51 @@ from story_auto.providers.tts.kokoro_local import KokoroReadiness
 
 
 class OperatorApplicationTests(unittest.TestCase):
+    def _owner_acceptance_fixture(self, app, project_id, count=1):
+        app.create_project(project_id=project_id,render_mode="full_image",content="# Owner acceptance\n\n## Narration\n\nUse existing visuals.\n")
+        paths,_=app._project(project_id)
+        asset=paths.artifact_path("assets/selected.png"); asset.parent.mkdir(parents=True,exist_ok=True)
+        Image.new("RGB",(1280,720),"navy").save(asset,"PNG")
+        digest=hashlib.sha256(asset.read_bytes()).hexdigest()
+        requests=[]; entries=[]
+        for number in range(count):
+            request_id=f"req_owner_{number:03d}"; fingerprint=hashlib.sha256(request_id.encode()).hexdigest()
+            request={"request_id":request_id,"fingerprint":fingerprint,"purpose":"SHOT","shot_id":f"sh_{number:04d}",
+                     "media_type":"IMAGE","provider":"google_flow","prompt":"fixture"}
+            requests.append(request)
+            entries.append({"request_id":request_id,"request_identity_sha256":fingerprint,"related_identity":request["shot_id"],
+                            "media_type":"IMAGE","provider":"google_flow","status":"QC_PENDING","failure_class":None,
+                            "attempts":[{"attempt":1,"status":"SUCCEEDED","attribution_state":"CONFIRMED","asset_path":"assets/selected.png","asset_sha256":digest}],
+                            "selected_asset":{"path":"assets/selected.png","sha256":digest,"attempt":1,"source_provider_attempt":1,"production_qc":"PENDING"}})
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":requests})
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"schema_version":"story-auto-generation-manifest/1.0.0","project_id":project_id,"requests":entries})
+        return paths
+
+    def test_owner_batch_accepts_exactly_42_persisted_pending_images_without_dispatch_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root); paths=self._owner_acceptance_fixture(app,"prj_owner_42",count=42)
+            first=app.accept_pending_visuals_by_owner("prj_owner_42","Owner explicitly skipped manual visual review for this run.")
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            self.assertEqual((first["accepted_images"],first["new_image_requests"],first["video_requests"]),(42,0,0))
+            self.assertTrue(all(item["status"]=="SUCCEEDED" and item["selected_asset"]["production_qc"]=="OWNER_ACCEPTED" for item in manifest["requests"]))
+            self.assertTrue(all(item["quality_reviews"][-1]["disposition"]=="MANUAL_REVIEW_SKIPPED" for item in manifest["requests"]))
+            second=app.accept_pending_visuals_by_owner("prj_owner_42","Owner explicitly skipped manual visual review for this run.")
+            replay=read_json(paths.artifact_path("output/generation_manifest.json"))
+            self.assertEqual((second["accepted_images"],second["already_owner_accepted_images"],replay),(0,42,manifest))
+
+    def test_owner_batch_does_not_accept_failed_or_ambiguous_assets(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root); paths=self._owner_acceptance_fixture(app,"prj_owner_safety",count=3)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"][1].update({"status":"FAILED_RETRYABLE","failure_class":"FLOW_TIMEOUT"})
+            manifest["requests"][2].update({"status":"AMBIGUOUS","failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS"})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),manifest)
+            result=app.accept_pending_visuals_by_owner("prj_owner_safety","Owner explicitly skipped manual visual review for eligible assets only.")
+            saved=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]
+            self.assertEqual(result["accepted_images"],1)
+            self.assertEqual((saved[0]["status"],saved[1]["status"],saved[2]["status"]),("SUCCEEDED","FAILED_RETRYABLE","AMBIGUOUS"))
+            self.assertEqual([len(item["attempts"]) for item in saved],[1,1,1])
+
     def test_goal37_reopen_is_available_through_operator_surface(self):
         with tempfile.TemporaryDirectory() as root:
             app=OperatorService(root); app.create_project(project_id="prj_goal37",content="# Appeal\n\n## Narration\n\nTest.\n")
