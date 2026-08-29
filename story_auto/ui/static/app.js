@@ -559,11 +559,17 @@ async function hydrateCreationDefaults(draft) {
 }
 function sourceStatusMarkup(wizard) {
   if (wizard.source === 'STORY_CONTENT') return '<p class="hint">Add approved narration text. Story Auto will generate narration with the selected voice.</p>';
-  if (wizard.source === 'EXISTING_AUDIO' && !wizard.importedAudio) return '<p class="hint">Audio: BLOCKED — choose a readable narration file. TTS will be skipped.</p>';
-  if (wizard.source === 'AUDIO_SRT' && (!wizard.importedAudio || !wizard.importedSrt)) return `<p class="hint">Audio: ${wizard.importedAudio ? 'selected' : 'BLOCKED — required'} · SRT: ${wizard.importedSrt ? 'selected' : 'BLOCKED — required'}. Create remains unavailable until both files validate.</p>`;
-  if (wizard.sourceValidation?.status === 'PASS') return `<p class="hint">Audio: PASS · ${wizard.source === 'AUDIO_SRT' ? 'SRT: PASS · TIMING: SRT' : 'TIMING: ALIGNMENT'} · TTS: SKIPPED</p>`;
-  if (wizard.sourceValidation?.status === 'FAIL') return `<p class="hint">Validation: BLOCKED — ${esc(wizard.sourceValidation.reason)}</p>`;
-  return '<p class="hint">Files selected. Continue to validate them before configuring the video.</p>';
+  const readiness = wizard.sourceValidation;
+  if (!readiness) return `<p class="hint" id="sourceReadiness">${wizard.source === 'AUDIO_SRT' ? 'Choose narration audio and a matching SRT. Continue becomes available after both files are ready.' : 'Choose a readable narration file. Continue becomes available after it is ready.'}</p>`;
+  const mark = component => component?.status === 'READY' ? '✓' : component?.status === 'BLOCKED' ? '✕' : '–';
+  const audio = readiness.audio || {}, srt = readiness.srt || {}, timeline = readiness.timeline || {};
+  const seconds = value => Number.isFinite(Number(value)) ? (Number(value) / 1000).toFixed(3) : '';
+  const audioFacts = audio.status === 'READY' ? `${esc(String(audio.format || '').toUpperCase())}${audio.codec ? ` / ${esc(String(audio.codec).toUpperCase())}` : ''}${audio.duration_ms != null ? ` · ${seconds(audio.duration_ms)} s` : ''}` : '';
+  const srtFacts = srt.status === 'READY' ? `${esc(srt.text_cue_count)} text cues · ${esc(srt.ignored_empty_cues)} empty separators ignored${srt.last_timestamp_ms != null ? ` · Last cue: ${seconds(srt.last_timestamp_ms)} s` : ''}` : '';
+  const timelineFacts = timeline.status === 'BLOCKED' || timeline.status === 'READY'
+    ? `${timeline.delta_ms != null ? `Difference: ${seconds(timeline.delta_ms)} s` : ''}${timeline.tolerance_ms != null ? ` · Allowed: ${seconds(timeline.tolerance_ms)} s` : ''}` : '';
+  const overall = readiness.status === 'READY' ? `<p class="hint">${esc(readiness.message || '')}</p>` : '';
+  return `<section class="surface" id="sourceReadiness" aria-live="polite"><strong>Import readiness: ${readiness.status === 'READY' ? 'READY' : 'BLOCKED'}</strong><p>${mark(audio)} Narration audio${audioFacts ? ` — ${audioFacts}` : ''}<br><small>${esc(audio.message || '')}</small></p>${wizard.source === 'AUDIO_SRT' ? `<p>${mark(srt)} Matching SRT${srtFacts ? ` — ${srtFacts}` : ''}<br><small>${esc(srt.message || '')}</small></p><p>${mark(timeline)} Timeline${timelineFacts ? ` — ${timelineFacts}` : ''}<br><small>${esc(timeline.message || '')}</small></p>` : ''}${overall}</section>`;
 }
 async function readBrowserImport(event, property) {
   const file=event.target.files?.[0]; if (!file) return;
@@ -658,7 +664,10 @@ function renderWizard() {
     $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Input source</dt><dd>${esc(sourceLabel(source))}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Narration</dt><dd>${source === 'STORY_CONTENT' ? esc(wizard.info?.title || voiceName(wizard.voice)) : esc(wizard.importedAudio?.filename || 'Not selected')}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Format</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>${wizard.mode === 'full_image' ? `<div class="summary-row"><dt>Scene duration</dt><dd>${esc(wizard.fullImage.image_duration_seconds)} seconds · ${esc(wizard.fullImage.cadence === 'FIXED' ? 'Fixed' : 'Semantic Adaptive')} · Waveform ${wizard.fullImage.audio_visualizer ? 'ON' : 'OFF'} · AUTO CONTINUOUS ZOOM</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>` : ''}</dl><section class="surface" style="margin-top:22px"><h3>Execution summary</h3><p class="hint">Narration audio: ${source === 'STORY_CONTENT' ? 'GENERATE' : 'IMPORT'}<br>TTS: ${source === 'STORY_CONTENT' ? 'RUN' : 'SKIP'}<br>Timing: ${source === 'AUDIO_SRT' ? 'SRT' : source === 'STORY_CONTENT' ? 'RUN' : 'ALIGNMENT'}<br>Visual planning: RUN<br>${visualRun}<br>QC: RUN<br>Compose: RUN</p></section>`;
     document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); }));
   }
-  $('#wizardActions').innerHTML = `<button class="button-quiet" id="cancelWizard" type="button">Cancel</button><div class="right">${wizard.step > 1 ? '<button id="wizardBack" type="button">Back</button>' : ''}<button class="button-primary" id="wizardNext" type="button">${wizard.step === 3 ? 'Create video' : 'Continue'}</button></div>`;
+  const importBlocked = wizard.step === 1 && wizard.source !== 'STORY_CONTENT' && wizard.sourceValidation?.status !== 'READY';
+  const nextDisabled = importBlocked || wizard.creating;
+  const nextReason = importBlocked ? ' aria-describedby="sourceReadiness"' : '';
+  $('#wizardActions').innerHTML = `<button class="button-quiet" id="cancelWizard" type="button">Cancel</button><div class="right">${wizard.step > 1 ? '<button id="wizardBack" type="button">Back</button>' : ''}<button class="button-primary" id="wizardNext" type="button" ${nextDisabled ? 'disabled' : ''}${nextReason}>${wizard.step === 3 ? 'Create video' : 'Continue'}</button></div>`;
   $('#cancelWizard').addEventListener('click', closeWizard);
   $('#wizardBack')?.addEventListener('click', () => { wizard.step -= 1; touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); });
   $('#wizardNext').addEventListener('click', advanceWizard);
@@ -682,7 +691,11 @@ async function advanceWizard() {
     if (wizard.source !== 'STORY_CONTENT') {
       if (!wizard.importedAudio?.base64) { showWizardError('No narration audio has been selected.','existingAudio'); return; }
       if (wizard.source === 'AUDIO_SRT' && !wizard.importedSrt?.base64) { showWizardError('A matching SRT file is required.','existingSrt'); return; }
-      try { await validateSourceImports(wizard); } catch (error) { if (!activeDraft(wizard)) return; showWizardError(friendlyError(error).message,wizard.source === 'AUDIO_SRT' ? 'existingSrt' : 'existingAudio'); return; }
+      try {
+        const readiness=await validateSourceImports(wizard);
+        if (!bindingIsCurrent(wizard,binding)) return;
+        if (readiness?.status !== 'READY') { showWizardError(readiness?.message || 'Choose valid narration imports before continuing.',wizard.source === 'AUDIO_SRT' ? 'existingSrt' : 'existingAudio'); renderWizard(); return; }
+      } catch (error) { if (!activeDraft(wizard)) return; showWizardError(friendlyError(error).message,wizard.source === 'AUDIO_SRT' ? 'existingSrt' : 'existingAudio'); return; }
     }
     if (!bindingIsCurrent(wizard,binding)) return;
     wizard.execution=sourceExecution(wizard.source); wizard.step = 2; touchDraft(wizard,'step'); renderWizard(); focusWizardStep();
@@ -696,6 +709,11 @@ async function advanceWizard() {
     wizard.step = 3; touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); return;
   }
   if (wizard.creating) return;
+  if (wizard.source !== 'STORY_CONTENT') {
+    const readiness=await validateSourceImports(wizard);
+    if (!activeDraft(wizard)) return;
+    if (readiness?.status !== 'READY') { showWizardError(readiness?.message || 'Choose valid narration imports before creating a video.'); renderWizard(); return; }
+  }
   const button = $('#wizardNext'); wizard.creating = true; button.disabled = true; button.textContent = 'Creating…';
   try {
     const settings = clone(state.creationDefaults?.creation_defaults || state.settings?.creation_defaults || {});

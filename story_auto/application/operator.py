@@ -14,14 +14,14 @@ from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json
 from story_auto.core.audio import parse_srt_bytes
-from story_auto.core.audio.media import inspect_audio
+from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, execution_mode, load_project, stage_policy
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
-from story_auto.pipeline import (SRT_TIMELINE_TOLERANCE_SECONDS, adopt_existing_audio, adopt_existing_srt,
+from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
     FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
@@ -257,31 +257,27 @@ class OperatorService:
 
     def inspect_imports(self, *, source_mode: str, imported_audio: dict[str, Any] | None,
                         imported_srt: dict[str, Any] | None) -> dict[str, Any]:
-        """Validate untrusted browser uploads before a new project is created."""
+        """Return the canonical readiness result for untrusted browser uploads."""
         if source_mode not in {"EXISTING_AUDIO","AUDIO_SRT"}:
-            return {"status":"NOT_REQUIRED","tts":"RUN","timing":"AUTO"}
-        if imported_audio is None:
-            raise OperatorServiceError("NARRATION_AUDIO_REQUIRED")
-        audio_name,audio_payload=self._decoded_import(imported_audio,fallback_name="narration.wav",limit=180_000_000)
+            return not_required_readiness()
+        try:
+            audio_name,audio_payload=self._decoded_import(imported_audio,fallback_name="narration.wav",limit=180_000_000)
+        except OperatorServiceError as error:
+            readiness,_=inspect_import_readiness(source_mode=source_mode,audio_error=str(error))
+            return readiness
         temporary_dir=self.runtime.temp/uuid.uuid4().hex; temporary_dir.mkdir(parents=True,exist_ok=False)
         try:
             audio_path=temporary_dir/audio_name; audio_path.write_bytes(audio_payload)
-            observed=inspect_audio(audio_path,provider="existing_audio")
-            result={"status":"PASS","audio":{"status":"PASS","filename":audio_name,
-                    "duration_seconds":observed["duration_seconds"]},"tts":"SKIPPED","timing":"ALIGNMENT"}
+            srt_name = None; srt_payload = None; srt_error = None
             if source_mode=="AUDIO_SRT":
-                if imported_srt is None:
-                    raise OperatorServiceError("SRT_REQUIRED")
-                srt_name,srt_payload=self._decoded_import(imported_srt,fallback_name="timing.srt",limit=30_000_000)
-                if Path(srt_name).suffix.lower()!=".srt":
-                    raise OperatorServiceError("SRT_SOURCE_INVALID")
-                cues,encoding,stats=parse_srt_bytes(srt_payload)
-                difference=abs(float(observed["duration_seconds"])-float(stats["last_timestamp"]))
-                if difference>SRT_TIMELINE_TOLERANCE_SECONDS:
-                    raise OperatorServiceError("AUDIO_SRT_DURATION_MISMATCH")
-                result.update({"srt":{"status":"PASS","filename":srt_name,"cue_count":len(cues),
-                                      "encoding":encoding,"duration_seconds":stats["last_timestamp"]},"timing":"SRT"})
-            return result
+                try:
+                    srt_name,srt_payload=self._decoded_import(imported_srt,fallback_name="timing.srt",limit=30_000_000)
+                    if Path(srt_name).suffix.lower()!=".srt": srt_error="SRT_SOURCE_INVALID"
+                except OperatorServiceError as error:
+                    srt_error=str(error)
+            readiness,_=inspect_import_readiness(source_mode=source_mode,audio_path=audio_path,audio_filename=audio_name,
+                                                  srt_payload=srt_payload,srt_filename=srt_name,srt_error=srt_error)
+            return readiness
         finally:
             shutil.rmtree(temporary_dir,ignore_errors=True)
 
@@ -298,7 +294,11 @@ class OperatorService:
             raise OperatorServiceError("INPUT_SOURCE_INVALID")
         if mode == "FULL": _validate_new_project_narrator(resolved_settings)
         if source_mode in {"EXISTING_AUDIO","AUDIO_SRT"}:
-            self.inspect_imports(source_mode=source_mode,imported_audio=imported_audio,imported_srt=imported_srt)
+            readiness=self.inspect_imports(source_mode=source_mode,imported_audio=imported_audio,imported_srt=imported_srt)
+            if readiness["status"]!="READY":
+                error=OperatorServiceError(readiness["code"])
+                error.readiness=readiness
+                raise error
         if source_mode=="AUDIO_SRT" and not content:
             _,srt_payload=self._decoded_import(imported_srt,fallback_name="timing.srt",limit=30_000_000)
             cues,_,_=parse_srt_bytes(srt_payload)

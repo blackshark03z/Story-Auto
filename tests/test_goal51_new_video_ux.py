@@ -57,12 +57,12 @@ class Goal51NewVideoUxTests(unittest.TestCase):
     def test_audio_srt_validation_fails_closed_for_missing_invalid_and_mismatched_inputs(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root); audio = _upload("voice.wav", _wav())
-            with self.assertRaisesRegex(OperatorServiceError, "SRT_REQUIRED"):
-                app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=None)
-            with self.assertRaisesRegex(Exception, "SRT_TIMESTAMP_INVALID"):
-                app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=_upload("bad.srt", b"1\n00:99:00,000 --> 00:00:02,000\nBad\n"))
-            with self.assertRaisesRegex(OperatorServiceError, "AUDIO_SRT_DURATION_MISMATCH"):
-                app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=_upload("short.wav", _wav(2)), imported_srt=_upload("timing.srt", SRT))
+            missing=app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=None)
+            malformed=app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=_upload("bad.srt", b"1\n00:99:00,000 --> 00:00:02,000\nBad\n"))
+            mismatch=app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=_upload("short.wav", _wav(2)), imported_srt=_upload("timing.srt", SRT))
+            self.assertEqual((missing["status"],missing["code"]),("BLOCKED","SRT_INVALID"))
+            self.assertEqual((malformed["status"],malformed["srt"]["code"]),("BLOCKED","SRT_TIMESTAMP_INVALID"))
+            self.assertEqual((mismatch["status"],mismatch["timeline"]["code"]),("BLOCKED","TIMELINE_MISMATCH"))
 
     def test_source_first_markup_has_required_choices_and_execution_summary(self):
         script = (Path(__file__).parents[1] / "story_auto/ui/static/app.js").read_text(encoding="utf-8")

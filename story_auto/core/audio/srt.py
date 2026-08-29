@@ -46,12 +46,15 @@ def parse_srt_bytes(payload: bytes) -> tuple[list[SrtCue], str, dict[str, int | 
     text, encoding = _decode(payload)
     if "\x00" in text:
         raise SrtError("SRT_ENCODING_UNSUPPORTED")
-    blocks = re.split(r"\r?\n[\t ]*\r?\n", text.strip())
+    # Normalize before interpreting blocks.  In particular, a numbered timing-only
+    # micro-cue is a real cue; repeated physical blank separators around it are not.
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [block for block in re.split(r"\n[\t ]*\n", normalized.strip()) if block.strip()]
     if not blocks:
         raise SrtError("SRT_CUES_MISSING")
     raw, non_empty, previous_end, prior_number = [], [], 0.0, None
     for raw_index, block in enumerate(blocks, 1):
-        lines = block.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        lines = block.split("\n")
         if len(lines) < 2:
             raise SrtError("SRT_CUE_MALFORMED")
         number = None

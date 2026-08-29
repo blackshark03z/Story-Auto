@@ -101,7 +101,10 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="open_output": result={"path":self.service.open_output_folder(project_id)}
             else: raise ValueError("unknown action")
             self._json(result)
-        except Exception as error: self._json({"error":str(error)[-500:],"failure_class":getattr(error,"failure_class",type(error).__name__)},HTTPStatus.BAD_REQUEST)
+        except Exception as error:
+            payload={"error":str(error)[-500:],"failure_class":getattr(error,"failure_class",type(error).__name__)}
+            if hasattr(error,"readiness"): payload["readiness"]=error.readiness
+            self._json(payload,HTTPStatus.BAD_REQUEST)
 
 def create_server(runtime_root: Path | str, host: str="127.0.0.1", port: int=8765) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1","localhost","::1"}: raise ValueError("operator UI must bind to loopback")
