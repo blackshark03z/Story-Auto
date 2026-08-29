@@ -672,6 +672,25 @@ class OperatorService:
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
+    def creation_defaults(self) -> dict[str, Any]:
+        """Return only the data a new-video draft can safely hydrate with.
+
+        This deliberately does not inspect existing projects.  Project snapshots
+        can contain large generation manifests and belong to Home/Settings, not
+        to the first interaction in the New Video dialog.
+        """
+        voice_id="bm_george"
+        base_settings=_creation_settings({},voice_id)
+        voice_options, inventory_failure=_kokoro_voice_options(base_settings)
+        installed_voice_ids={item["voice_id"] for item in voice_options}
+        return {
+            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,
+                        "narrator_available":voice_id in installed_voice_ids},
+            "creation_defaults":base_settings,
+            "voice_options":voice_options,
+            "voice_inventory_failure":inventory_failure,
+        }
+
     def diagnostics(self, project_id: str) -> dict[str, Any]:
         return {"snapshot":self.snapshot(project_id),"planning":self.planning_review(project_id),"media":self.media_items(project_id)}
 

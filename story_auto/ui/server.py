@@ -43,6 +43,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if not parts: return self._static("index.html")
             if parts[0]=="static" and len(parts)==2: return self._static(parts[1])
             if parts==["api","settings"]: return self._json(self.service.settings_overview())
+            if parts==["api","creation-defaults"]: return self._json(self.service.creation_defaults())
             if parts==["api","projects"]: return self._json({"projects":self.service.list_projects()})
             if len(parts)>=3 and parts[:2]==["api","projects"]:
                 project_id=parts[2]; view=parts[3] if len(parts)>3 else "snapshot"

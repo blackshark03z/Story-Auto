@@ -1,7 +1,7 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
   busy: false, busyLabel: '', error: null, lastAction: null, runToken: null,
-  wizard: { step: 1, source: 'STORY_CONTENT', content: '', info: null, voice: 'bm_george', style: 'natural', mode: 'hybrid_hook', execution: 'FULL', importedAudio: null, importedSrt: null, sourceValidation: null, ambientStyle: 'quiet_verdict', fullImage: {image_duration_seconds:30, cadence:'SEMANTIC_ADAPTIVE', motion:'AUTO_CONTINUOUS_ZOOM', audio_visualizer:true}, creating: false }
+  wizard: null, creationDefaults: null, nextDraftId: 0
 };
 
 const $ = selector => document.querySelector(selector);
@@ -112,6 +112,7 @@ async function showHome(announce = false) {
   state.view = 'home'; state.project = null; state.snapshot = null; state.error = null;
   setNav('home');
   setHeader('YOUR VIDEOS','Home','<button class="button-primary" id="newVideoTop" type="button">＋ New video</button>');
+  $('#newVideoTop').addEventListener('click', openWizard);
   const view = $('#view');
   view.innerHTML = '<div class="empty-library"><p>Loading your videos…</p></div>';
   try { await loadProjects(); } catch (error) {
@@ -471,7 +472,10 @@ function savedDefaults() {
   try { return JSON.parse(localStorage.getItem('storyAutoDefaults') || '{}'); } catch (_) { return {}; }
 }
 
-function installedVoices() { return Array.isArray(state.settings?.voice_options) ? state.settings.voice_options : []; }
+function installedVoices() {
+  const source = state.creationDefaults || state.settings;
+  return Array.isArray(source?.voice_options) ? source.voice_options : [];
+}
 function hasInstalledVoice(voiceId) { return installedVoices().some(voice => voice.voice_id === voiceId); }
 function voiceName(voiceId) { return installedVoices().find(voice => voice.voice_id === voiceId)?.name || voiceId || 'Choose a narrator'; }
 function voiceOptions(selectedVoice, placeholder = 'Choose an installed narrator') {
@@ -516,10 +520,43 @@ async function showDiagnostics(projectId) {
   focusMain();
 }
 
-async function ensureSettings() { if (!state.settings) state.settings = await api('/api/settings'); }
-
 function sourceLabel(source) { return ({STORY_CONTENT:'Story / Content',EXISTING_AUDIO:'Existing Audio',AUDIO_SRT:'Audio + SRT'})[source] || source; }
 function sourceExecution(source) { return source === 'STORY_CONTENT' ? 'FULL' : 'EXISTING_VOICE'; }
+function freshDraft() {
+  const saved = savedDefaults();
+  return {
+    id: ++state.nextDraftId, revision: 0, step: 1, source: 'STORY_CONTENT', content: '', info: null,
+    voice: saved.voice_id || '', style: 'natural', mode: saved.render_mode || 'hybrid_hook', execution: 'FULL',
+    importedAudio: null, importedSrt: null, sourceValidation: null, ambientStyle: saved.ambient_style || 'quiet_verdict',
+    fullImage: saved.full_image || {image_duration_seconds:30, cadence:'SEMANTIC_ADAPTIVE', motion:'AUTO_CONTINUOUS_ZOOM', audio_visualizer:true},
+    touched: {}, creating: false,
+  };
+}
+function activeDraft(draft) { return state.wizard === draft; }
+function draftBinding(draft) { return {id:draft.id, revision:draft.revision, source:draft.source, audio:draft.importedAudio, srt:draft.importedSrt}; }
+function bindingIsCurrent(draft, binding) {
+  return activeDraft(draft) && draft.id === binding.id && draft.revision === binding.revision &&
+    draft.source === binding.source && draft.importedAudio === binding.audio && draft.importedSrt === binding.srt;
+}
+function touchDraft(draft, field) { draft.touched[field] = true; draft.revision += 1; }
+function hydrateDraftDefaults(draft, payload) {
+  if (!activeDraft(draft)) return;
+  state.creationDefaults = payload;
+  const defaults = payload.defaults || {};
+  if (!draft.touched.voice && !draft.voice) draft.voice = defaults.voice_id || '';
+  if (!draft.touched.mode && !draft.mode) draft.mode = defaults.render_mode || 'hybrid_hook';
+  if (!draft.touched.ambientStyle && !draft.ambientStyle) draft.ambientStyle = defaults.ambient_style || 'quiet_verdict';
+}
+async function hydrateCreationDefaults(draft) {
+  try {
+    const payload = await api('/api/creation-defaults');
+    if (!activeDraft(draft)) return;
+    hydrateDraftDefaults(draft, payload);
+    if ($('#newVideoDialog').open) renderWizard();
+  } catch (_) {
+    // The shell remains usable. Execution-time validation still fails closed.
+  }
+}
 function sourceStatusMarkup(wizard) {
   if (wizard.source === 'STORY_CONTENT') return '<p class="hint">Add approved narration text. Story Auto will generate narration with the selected voice.</p>';
   if (wizard.source === 'EXISTING_AUDIO' && !wizard.importedAudio) return '<p class="hint">Audio: BLOCKED — choose a readable narration file. TTS will be skipped.</p>';
@@ -531,34 +568,34 @@ function sourceStatusMarkup(wizard) {
 async function readBrowserImport(event, property) {
   const file=event.target.files?.[0]; if (!file) return;
   const wizard=state.wizard;
+  if (!wizard) return;
   const encoded=await new Promise((resolve,reject) => { const reader=new FileReader(); reader.onload=() => resolve(String(reader.result).split(',')[1] || ''); reader.onerror=reject; reader.readAsDataURL(file); });
-  wizard[property]={filename:file.name,base64:encoded}; wizard.sourceValidation=null; renderWizard();
+  if (!activeDraft(wizard)) return;
+  wizard[property]={filename:file.name,base64:encoded}; wizard.sourceValidation=null; touchDraft(wizard,property); renderWizard();
   const ready=wizard.source === 'EXISTING_AUDIO' ? !!wizard.importedAudio : wizard.source === 'AUDIO_SRT' ? !!wizard.importedAudio && !!wizard.importedSrt : false;
-  if (ready) { try { await validateSourceImports(); } catch (_) {} renderWizard(); }
+  if (ready) { try { await validateSourceImports(wizard); } catch (_) {} if (activeDraft(wizard)) renderWizard(); }
 }
-async function validateSourceImports() {
-  const wizard=state.wizard;
+async function validateSourceImports(wizard=state.wizard) {
+  if (!wizard) return null;
+  const binding=draftBinding(wizard);
   try {
     const value=await api('/api/validate-imports',{method:'POST',body:JSON.stringify({source_mode:wizard.source,imported_audio:wizard.importedAudio,imported_srt:wizard.importedSrt})});
+    if (!bindingIsCurrent(wizard,binding)) return null;
     wizard.sourceValidation=value; return value;
-  } catch (error) { wizard.sourceValidation={status:'FAIL',reason:friendlyError(error).message}; throw error; }
+  } catch (error) {
+    if (!bindingIsCurrent(wizard,binding)) return null;
+    wizard.sourceValidation={status:'FAIL',reason:friendlyError(error).message}; throw error;
+  }
 }
 
 async function openWizard() {
-  try { await ensureSettings(); } catch (error) { toast(friendlyError(error).message,true); return; }
-  const saved = savedDefaults();
-  if (!state.wizard.content) {
-    const preferredVoice = saved.voice_id || state.settings.defaults.voice_id || '';
-    state.wizard.voice = hasInstalledVoice(preferredVoice) ? preferredVoice : '';
-    state.wizard.mode = saved.render_mode || state.settings.defaults.render_mode || 'hybrid_hook';
-    state.wizard.ambientStyle = saved.ambient_style || state.settings.defaults.ambient_style || 'quiet_verdict';
-    state.wizard.source = 'STORY_CONTENT'; state.wizard.execution = 'FULL'; state.wizard.importedAudio = null; state.wizard.importedSrt = null; state.wizard.sourceValidation = null;
-    state.wizard.fullImage = saved.full_image || {image_duration_seconds:30, cadence:'SEMANTIC_ADAPTIVE', motion:'AUTO_CONTINUOUS_ZOOM', audio_visualizer:true};
-  }
-  state.wizard.step = 1;
+  const isNew = !state.wizard;
+  if (isNew) state.wizard = freshDraft();
+  const wizard=state.wizard;
   renderWizard();
-  $('#newVideoDialog').showModal();
+  if (!$('#newVideoDialog').open) $('#newVideoDialog').showModal();
   focusWizardStep();
+  if (isNew) hydrateCreationDefaults(wizard);
 }
 
 function wizardSteps() {
@@ -593,9 +630,9 @@ function renderWizard() {
         ? `<div class="file-drop"><label class="field-label" for="existingAudio">Narration audio</label><input id="existingAudio" type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/aac,audio/flac,audio/ogg,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus"><p class="hint">${wizard.importedAudio ? `Selected: ${esc(wizard.importedAudio.filename)}.` : 'Choose a readable narration file.'} TTS will be skipped.</p></div><div class="field" style="margin-top:18px"><label for="contentInput">Canonical narration text</label><textarea id="contentInput" spellcheck="true" placeholder="# Narration source\n\n## Narration\n\nPaste the narration spoken in this audio.">${esc(wizard.content)}</textarea><small id="contentHelp">Needed to plan visuals truthfully when no SRT timing is supplied.</small></div>`
         : `<div class="file-drop"><label class="field-label" for="existingAudio">Narration audio</label><input id="existingAudio" type="file" accept="audio/wav,audio/mpeg,audio/mp4,audio/aac,audio/flac,audio/ogg,.wav,.mp3,.m4a,.aac,.flac,.ogg,.opus"><p class="hint">${wizard.importedAudio ? `Selected: ${esc(wizard.importedAudio.filename)}.` : 'Required.'}</p></div><div class="file-drop" style="margin-top:18px"><label class="field-label" for="existingSrt">Matching SRT timing</label><input id="existingSrt" type="file" accept=".srt,text/plain"><p class="hint">${wizard.importedSrt ? `Selected: ${esc(wizard.importedSrt.filename)}.` : 'Required.'} Its text becomes the canonical project narration; no content.md is required from you.</p></div>`;
     $('#wizardContent').innerHTML = `<fieldset class="field"><legend>INPUT SOURCE</legend><div class="choice-grid"><label class="choice"><input id="sourceStory" type="radio" name="inputSource" value="STORY_CONTENT" ${wizard.source === 'STORY_CONTENT' ? 'checked' : ''}><strong>STORY / CONTENT</strong><small>Supply content.md or narration text. Run the full pipeline.</small></label><label class="choice"><input type="radio" name="inputSource" value="EXISTING_AUDIO" ${wizard.source === 'EXISTING_AUDIO' ? 'checked' : ''}><strong>EXISTING AUDIO</strong><small>Import narration audio. TTS will be skipped.</small></label><label class="choice"><input type="radio" name="inputSource" value="AUDIO_SRT" ${wizard.source === 'AUDIO_SRT' ? 'checked' : ''}><strong>AUDIO + SRT</strong><small>Import matching audio and SRT. TTS is skipped; SRT is timing.</small></label></div></fieldset><div style="margin-top:20px">${fields}${sourceStatusMarkup(wizard)}</div>`;
-    document.querySelectorAll('input[name="inputSource"]').forEach(input => input.addEventListener('change', event => { wizard.source=event.target.value; wizard.execution=sourceExecution(wizard.source); wizard.sourceValidation=null; renderWizard(); focusWizardStep(); }));
-    $('#contentInput')?.addEventListener('input', event => wizard.content = event.target.value);
-    $('#contentFile')?.addEventListener('change', async event => { const file=event.target.files?.[0]; if (file) { wizard.content=await file.text(); $('#contentInput').value=wizard.content; } });
+    document.querySelectorAll('input[name="inputSource"]').forEach(input => input.addEventListener('change', event => { wizard.source=event.target.value; wizard.execution=sourceExecution(wizard.source); wizard.sourceValidation=null; touchDraft(wizard,'source'); renderWizard(); focusWizardStep(); }));
+    $('#contentInput')?.addEventListener('input', event => { wizard.content = event.target.value; touchDraft(wizard,'content'); });
+    $('#contentFile')?.addEventListener('change', async event => { const file=event.target.files?.[0]; if (file) { const content=await file.text(); if (activeDraft(wizard)) { wizard.content=content; touchDraft(wizard,'content'); $('#contentInput').value=wizard.content; } } });
     $('#existingAudio')?.addEventListener('change', event => readBrowserImport(event,'importedAudio'));
     $('#existingSrt')?.addEventListener('change', event => readBrowserImport(event,'importedSrt'));
   } else if (wizard.step === 2) {
@@ -607,40 +644,48 @@ function renderWizard() {
     const narratorHelp = installedVoices().length ? (wizard.voice ? 'Kokoro Local uses the installed narrator you select here.' : 'The saved default narrator is unavailable. Choose an installed narrator before continuing.') : 'No installed Kokoro narrators are available. Configure Kokoro in Settings before creating a video.';
     const sourceContext = wizard.source === 'STORY_CONTENT' ? `<div class="field" style="margin-top:20px"><label for="voiceChoice">Narrator voice</label><select id="voiceChoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(wizard.voice)}</select><small>${esc(narratorHelp)}</small></div>` : `<section class="surface" style="margin-top:20px"><strong>${esc(sourceLabel(wizard.source))}</strong><p class="hint">Narration audio: IMPORT · TTS: SKIP · Timing: ${wizard.source === 'AUDIO_SRT' ? 'SRT' : 'ALIGNMENT'}.</p></section>`;
     $('#wizardContent').innerHTML = `<fieldset class="field"><legend>Format</legend><div class="choice-grid format-grid"><label class="choice"><input id="formatChoice" type="radio" name="format" value="hybrid_hook" ${wizard.mode === 'hybrid_hook' ? 'checked' : ''}><strong>Cinematic opening</strong><small>Video-led opening with an image-led story body.</small></label><label class="choice"><input type="radio" name="format" value="full_video_ai" ${wizard.mode === 'full_video_ai' ? 'checked' : ''}><strong>Full video animation</strong><small>Generated video coverage for every final scene.</small></label><label class="choice"><input type="radio" name="format" value="ambient_story" ${wizard.mode === 'ambient_story' ? 'checked' : ''}><strong>Ambient Story</strong><small>Narrative-led long-form video with a few chapter images and subtle local motion.</small></label><label class="choice"><input type="radio" name="format" value="full_image" ${wizard.mode === 'full_image' ? 'checked' : ''}><strong>FULL IMAGE</strong><small>Images only, AUTO CONTINUOUS ZOOM, and optional waveform.</small></label></div></fieldset>${contextualStyle}${sourceContext}`;
-    document.querySelectorAll('input[name="format"]').forEach(input => input.addEventListener('change', event => { wizard.mode = event.target.value; renderWizard(); document.querySelector(`input[name="format"][value="${wizard.mode}"]`)?.focus(); }));
-    document.querySelectorAll('input[name="style"]').forEach(input => input.addEventListener('change', event => wizard.style = event.target.value));
-    document.querySelectorAll('input[name="ambientStyle"]').forEach(input => input.addEventListener('change', event => wizard.ambientStyle = event.target.value));
-    $('#fullImageDuration')?.addEventListener('input', event => wizard.fullImage.image_duration_seconds = Number(event.target.value));
-    document.querySelectorAll('input[name="fullImagePreset"]').forEach(input => input.addEventListener('change', event => { if (event.target.value !== 'custom') wizard.fullImage.image_duration_seconds=Number(event.target.value); else if ([10,15,20,30,60].includes(Number(wizard.fullImage.image_duration_seconds))) wizard.fullImage.image_duration_seconds=25; renderWizard(); }));
-    $('#fullImageCadence')?.addEventListener('change', event => wizard.fullImage.cadence = event.target.value);
-    $('#fullImageWaveform')?.addEventListener('change', event => { wizard.fullImage.audio_visualizer = event.target.checked; renderWizard(); });
-    $('#voiceChoice')?.addEventListener('change', event => wizard.voice = event.target.value);
+    document.querySelectorAll('input[name="format"]').forEach(input => input.addEventListener('change', event => { wizard.mode = event.target.value; touchDraft(wizard,'mode'); renderWizard(); document.querySelector(`input[name="format"][value="${wizard.mode}"]`)?.focus(); }));
+    document.querySelectorAll('input[name="style"]').forEach(input => input.addEventListener('change', event => { wizard.style = event.target.value; touchDraft(wizard,'style'); }));
+    document.querySelectorAll('input[name="ambientStyle"]').forEach(input => input.addEventListener('change', event => { wizard.ambientStyle = event.target.value; touchDraft(wizard,'ambientStyle'); }));
+    $('#fullImageDuration')?.addEventListener('input', event => { wizard.fullImage.image_duration_seconds = Number(event.target.value); touchDraft(wizard,'fullImage'); });
+    document.querySelectorAll('input[name="fullImagePreset"]').forEach(input => input.addEventListener('change', event => { if (event.target.value !== 'custom') wizard.fullImage.image_duration_seconds=Number(event.target.value); else if ([10,15,20,30,60].includes(Number(wizard.fullImage.image_duration_seconds))) wizard.fullImage.image_duration_seconds=25; touchDraft(wizard,'fullImage'); renderWizard(); }));
+    $('#fullImageCadence')?.addEventListener('change', event => { wizard.fullImage.cadence = event.target.value; touchDraft(wizard,'fullImage'); });
+    $('#fullImageWaveform')?.addEventListener('change', event => { wizard.fullImage.audio_visualizer = event.target.checked; touchDraft(wizard,'fullImage'); renderWizard(); });
+    $('#voiceChoice')?.addEventListener('change', event => { wizard.voice = event.target.value; touchDraft(wizard,'voice'); });
   } else {
     const source = wizard.source;
     const visualRun = wizard.mode === 'full_image' ? 'Image generation: RUN · Video generation: SKIP' : 'Visual generation: RUN';
     $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Input source</dt><dd>${esc(sourceLabel(source))}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Narration</dt><dd>${source === 'STORY_CONTENT' ? esc(wizard.info?.title || voiceName(wizard.voice)) : esc(wizard.importedAudio?.filename || 'Not selected')}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Format</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>${wizard.mode === 'full_image' ? `<div class="summary-row"><dt>Scene duration</dt><dd>${esc(wizard.fullImage.image_duration_seconds)} seconds · ${esc(wizard.fullImage.cadence === 'FIXED' ? 'Fixed' : 'Semantic Adaptive')} · Waveform ${wizard.fullImage.audio_visualizer ? 'ON' : 'OFF'} · AUTO CONTINUOUS ZOOM</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>` : ''}</dl><section class="surface" style="margin-top:22px"><h3>Execution summary</h3><p class="hint">Narration audio: ${source === 'STORY_CONTENT' ? 'GENERATE' : 'IMPORT'}<br>TTS: ${source === 'STORY_CONTENT' ? 'RUN' : 'SKIP'}<br>Timing: ${source === 'AUDIO_SRT' ? 'SRT' : source === 'STORY_CONTENT' ? 'RUN' : 'ALIGNMENT'}<br>Visual planning: RUN<br>${visualRun}<br>QC: RUN<br>Compose: RUN</p></section>`;
-    document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); renderWizard(); focusWizardStep(); }));
+    document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); }));
   }
   $('#wizardActions').innerHTML = `<button class="button-quiet" id="cancelWizard" type="button">Cancel</button><div class="right">${wizard.step > 1 ? '<button id="wizardBack" type="button">Back</button>' : ''}<button class="button-primary" id="wizardNext" type="button">${wizard.step === 3 ? 'Create video' : 'Continue'}</button></div>`;
   $('#cancelWizard').addEventListener('click', closeWizard);
-  $('#wizardBack')?.addEventListener('click', () => { wizard.step -= 1; renderWizard(); focusWizardStep(); });
+  $('#wizardBack')?.addEventListener('click', () => { wizard.step -= 1; touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); });
   $('#wizardNext').addEventListener('click', advanceWizard);
 }
 
 async function advanceWizard() {
   const wizard = state.wizard;
+  if (!wizard) return;
   if (wizard.step === 1) {
     wizard.content = $('#contentInput')?.value || wizard.content;
+    const binding=draftBinding(wizard);
     if (wizard.source === 'STORY_CONTENT' || wizard.source === 'EXISTING_AUDIO') {
-      try { wizard.info = await api('/api/validate-content',{method:'POST',body:JSON.stringify({content:wizard.content})}); }
-      catch (_) { showWizardError(wizard.source === 'EXISTING_AUDIO' ? 'Add the canonical narration text needed to plan visuals.' : 'Add exactly one non-empty Narration section before continuing.','contentInput'); $('#contentInput')?.focus(); return; }
+      try {
+        const info=await api('/api/validate-content',{method:'POST',body:JSON.stringify({content:wizard.content})});
+        if (!bindingIsCurrent(wizard,binding)) return;
+        wizard.info=info;
+      }
+      catch (_) { if (!bindingIsCurrent(wizard,binding)) return; showWizardError(wizard.source === 'EXISTING_AUDIO' ? 'Add the canonical narration text needed to plan visuals.' : 'Add exactly one non-empty Narration section before continuing.','contentInput'); $('#contentInput')?.focus(); return; }
     }
+    if (!bindingIsCurrent(wizard,binding)) return;
     if (wizard.source !== 'STORY_CONTENT') {
       if (!wizard.importedAudio?.base64) { showWizardError('No narration audio has been selected.','existingAudio'); return; }
       if (wizard.source === 'AUDIO_SRT' && !wizard.importedSrt?.base64) { showWizardError('A matching SRT file is required.','existingSrt'); return; }
-      try { await validateSourceImports(); } catch (error) { showWizardError(friendlyError(error).message,wizard.source === 'AUDIO_SRT' ? 'existingSrt' : 'existingAudio'); return; }
+      try { await validateSourceImports(wizard); } catch (error) { if (!activeDraft(wizard)) return; showWizardError(friendlyError(error).message,wizard.source === 'AUDIO_SRT' ? 'existingSrt' : 'existingAudio'); return; }
     }
-    wizard.execution=sourceExecution(wizard.source); wizard.step = 2; renderWizard(); focusWizardStep();
+    if (!bindingIsCurrent(wizard,binding)) return;
+    wizard.execution=sourceExecution(wizard.source); wizard.step = 2; touchDraft(wizard,'step'); renderWizard(); focusWizardStep();
     return;
   }
   if (wizard.step === 2) {
@@ -648,12 +693,12 @@ async function advanceWizard() {
     if (wizard.mode === 'ambient_story' && !['quiet_verdict','hidden_mastery'].includes(wizard.ambientStyle)) { showWizardError('Choose an Ambient Story style.','ambientStyleField'); return; }
     if (wizard.mode === 'full_image' && (!Number.isFinite(Number(wizard.fullImage.image_duration_seconds)) || Number(wizard.fullImage.image_duration_seconds) < 5 || Number(wizard.fullImage.image_duration_seconds) > 120 || !['SEMANTIC_ADAPTIVE','FIXED'].includes(wizard.fullImage.cadence))) { showWizardError('Choose an image duration between 5 and 120 seconds and a cadence.','fullImageSettings'); return; }
     if (wizard.source === 'STORY_CONTENT' && !hasInstalledVoice(wizard.voice)) { showWizardError('Choose an installed narrator before continuing.','voiceChoice'); return; }
-    wizard.step = 3; renderWizard(); focusWizardStep(); return;
+    wizard.step = 3; touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); return;
   }
   if (wizard.creating) return;
   const button = $('#wizardNext'); wizard.creating = true; button.disabled = true; button.textContent = 'Creating…';
   try {
-    const settings = clone(state.settings.creation_defaults || {});
+    const settings = clone(state.creationDefaults?.creation_defaults || state.settings?.creation_defaults || {});
     const existingKokoro = settings.tts?.kokoro_local || {};
     wizard.execution=sourceExecution(wizard.source);
     if (wizard.execution === 'FULL') settings.tts = {provider:'kokoro_local',allow_cross_provider_fallback:false,kokoro_local:{...existingKokoro,voice_id:wizard.voice}};
@@ -665,11 +710,15 @@ async function advanceWizard() {
     const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,ambient_style:wizard.mode === 'ambient_story' ? wizard.ambientStyle : null,content:wizard.source === 'AUDIO_SRT' ? null : wizard.content,settings,imported_audio:wizard.execution === 'FULL' ? null : wizard.importedAudio,imported_srt:wizard.source === 'AUDIO_SRT' ? wizard.importedSrt : null})});
     state.projects = [created,...state.projects.filter(project => project.project_id !== created.project_id)];
     state.project = created.project_id; state.snapshot = created; state.view = 'project'; setNav('home'); renderProject(); focusMain();
-    closeWizard(); state.wizard = {step:1,source:'STORY_CONTENT',content:'',info:null,voice:wizard.voice,style:'natural',mode:wizard.mode,execution:'FULL',importedAudio:null,importedSrt:null,sourceValidation:null,ambientStyle:wizard.ambientStyle,fullImage:wizard.fullImage,creating:false}; toast('Video project created.');
+    closeWizard(); toast('Video project created.');
   } catch (error) { wizard.creating = false; showWizardError(friendlyError(error).message); button.disabled = false; button.textContent = 'Create video'; }
 }
 
-function closeWizard() { const dialog = $('#newVideoDialog'); if (dialog.open) dialog.close(); }
+function closeWizard() {
+  const draft=state.wizard;
+  if (draft) { draft.revision += 1; state.wizard=null; }
+  const dialog = $('#newVideoDialog'); if (dialog.open) dialog.close();
+}
 
 $('#closeWizard').addEventListener('click', closeWizard);
 $('#newVideoDialog').addEventListener('cancel', event => { event.preventDefault(); closeWizard(); });
