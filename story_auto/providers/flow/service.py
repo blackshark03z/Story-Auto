@@ -5758,7 +5758,7 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
 
 def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False,
                        request_ids: set[str] | None = None, production_batch: bool = False,
-                       max_requests: int | None = None) -> dict:
+                       max_requests: int | None = None, flow_connection_provenance: dict | None = None) -> dict:
     """Run the bounded vertical slice while preserving every provider attempt."""
     if not execute: raise FlowError("EXECUTION_CONFIRMATION_REQUIRED", "pass explicit execute-generation permission")
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -5877,6 +5877,14 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 entry["updated_at"]=_now(); atomic_write_json(path,manifest); continue
             attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False,
                        "provider_execution_state":"NOT_STARTED"}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
+            if flow_connection_provenance is not None:
+                if not isinstance(flow_connection_provenance,dict) or not isinstance(flow_connection_provenance.get("flow_connection_id"),str):
+                    raise FlowError("FLOW_CONNECTION_PROVENANCE_INVALID")
+                # Persist before the only provider boundary.  Later runtime changes
+                # cannot reinterpret this historical attempt.
+                attempt["flow_connection"]=dict(flow_connection_provenance)
+                entry["flow_connection"]=dict(flow_connection_provenance)
+                atomic_write_json(path, manifest)
             temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
             # Provider adapters receive concrete local files, never manifest-
             # relative paths.  In particular CDP's file-input API silently

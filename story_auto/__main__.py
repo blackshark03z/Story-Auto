@@ -75,24 +75,26 @@ def main() -> int:
             print(f"shot_plan: READY\nmedia_plan: READY\ngeneration_requests: {len(result['generation_requests']['requests'])}")
             return 0
         if args.command == "flow-preflight":
-            from .core.project import load_project
-            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
-            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            connection,status=app.flow_connections.connection_for_project(args.project_id,required_capabilities=["IMAGE"])
+            if connection is None: raise ValueError(status["code"])
+            runtime=app.flow_connections.runtime_for_connection(connection)
             capabilities = preflight(runtime, FlowInspector(runtime))
             print(json.dumps(capabilities.__dict__, default=str, sort_keys=True))
             return 0
         if args.command == "flow-open-session":
-            from .core.project import load_project
-            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
-            launch_dedicated_session(FlowRuntime.from_settings(paths.runtime, config.settings))
+            connection,status=app.flow_connections.connection_for_project(args.project_id)
+            if connection is None: raise ValueError(status["code"])
+            launch_dedicated_session(app.flow_connections.runtime_for_connection(connection))
             print("FLOW_SESSION_OPENED: sign in manually in the dedicated Story Auto Chrome profile, then run flow-preflight")
             return 0
         if args.command == "execute-generation":
             if not args.confirm_execute_generation:
                 raise ValueError("explicit --confirm-execute-generation is required")
             from .core.project import load_project
-            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
-            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            paths, _config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
+            connection,status=app.flow_connections.connection_for_project(args.project_id,required_capabilities=["IMAGE"])
+            if connection is None: raise ValueError(status["code"])
+            runtime=app.flow_connections.runtime_for_connection(connection)
             capabilities = preflight(runtime, FlowInspector(runtime))
             requests = __import__('story_auto.core.artifacts', fromlist=['read_json']).read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
             selected = requests if args.all_ready else []
@@ -118,10 +120,10 @@ def main() -> int:
         if args.command == "generate-thumbnail":
             if not args.confirm_execute_generation:
                 raise ValueError("explicit --confirm-execute-generation is required")
-            from .core.project import load_project
-            paths, config = load_project(RuntimeLayout.from_root(args.runtime_root), args.project_id)
             request = app.publishing(args.project_id,"prepare_thumbnail")
-            runtime = FlowRuntime.from_settings(paths.runtime, config.settings)
+            connection,status=app.flow_connections.connection_for_project(args.project_id,required_capabilities=["IMAGE"])
+            if connection is None: raise ValueError(status["code"])
+            runtime=app.flow_connections.runtime_for_connection(connection)
             capabilities = preflight(runtime, FlowInspector(runtime))
             result = app.generate(args.project_id,executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime)),request_ids={request["request_id"]})
             print(json.dumps(result, sort_keys=True))

@@ -190,8 +190,8 @@ class OperatorApplicationTests(unittest.TestCase):
             }
             atomic_write_json(paths.project_file,project)
             defaults=app.settings_overview()["creation_defaults"]
-            self.assertEqual(set(defaults),{"llm","flow","tts"})
-            self.assertEqual(set(defaults["flow"]),{"cdp_url","project_identity"})
+            self.assertEqual(set(defaults),{"llm","tts"})
+            self.assertNotIn("flow",defaults)
             self.assertNotIn("token",str(defaults).lower())
             self.assertNotIn("overrides",str(defaults).lower())
             self.assertNotIn("bgm_path",str(defaults).lower())

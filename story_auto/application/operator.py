@@ -24,7 +24,7 @@ from story_auto.core.visual import ambient_style_label, temporal_video_qc_applic
 from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
-    FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
+    FlowConnectionError, FlowConnectionService, FlowExecutor, FlowRuntime, adopt_manual_recovery, execute_generation, launch_dedicated_session, preflight,
     reject_selected_asset,
 )
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
@@ -159,7 +159,6 @@ def _word_count(narration: str) -> int:
 def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any]:
     """Build new-project defaults from a small secret-free global allowlist."""
     llm=settings.get("llm",{}) if isinstance(settings,dict) else {}
-    flow=settings.get("flow",{}) if isinstance(settings,dict) else {}
     tts=settings.get("tts",{}) if isinstance(settings,dict) else {}
     kokoro=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
     result={
@@ -179,8 +178,6 @@ def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any
     if isinstance(model_snapshot,str) and model_snapshot.strip():
         result["tts"]["kokoro_local"]["model_snapshot"]=model_snapshot
     if isinstance(llm.get("max_attempts"),int): result["llm"]["max_attempts"]=llm["max_attempts"]
-    safe_flow={key:str(flow[key]) for key in ("cdp_url","project_url","project_identity") if isinstance(flow.get(key),str)}
-    if safe_flow: result["flow"]=safe_flow
     return result
 
 
@@ -233,6 +230,7 @@ class OperatorService:
 
     def __init__(self, runtime_root: Path | str):
         self.runtime=RuntimeLayout.from_root(runtime_root).ensure()
+        self.flow_connections=FlowConnectionService(self.runtime)
 
     def list_projects(self) -> list[dict[str, Any]]:
         result=[]
@@ -305,6 +303,9 @@ class OperatorService:
             content="# Imported narration\n\n## Narration\n\n"+" ".join(cue.text for cue in cues)+"\n"
         if source_mode=="EXISTING_AUDIO" and not content:
             raise OperatorServiceError("EXISTING_AUDIO_TEXT_REQUIRED")
+        connection=self.flow_connections.get_current_connection()
+        if connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
+            resolved_settings["flow_binding"]={"connection_id":connection.connection_id,"connection_revision":connection.revision}
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         if imported_audio is not None:
             try:
@@ -383,12 +384,19 @@ class OperatorService:
         if content_status!="VALID": blocked.append("VALID_NARRATION_REQUIRED")
         if visual_planning.get("status")=="NEEDS_REGENERATION": blocked.append("VISUAL_PLANNING_REGENERATION_REQUIRED")
         elif review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
+        mode=execution_mode(config.settings)
+        required_flow=[] if mode=="RENDER_ONLY" else ["IMAGE"]
+        _connection,flow_status=self.flow_connections.connection_for_project(project_id,required_capabilities=required_flow)
         if counts.get("AUTH_REQUIRED"): blocked.append("FLOW_AUTH_REQUIRED")
         if counts.get("CREDIT_BLOCKED"): blocked.append("PROVIDER_CREDITS_REQUIRED")
         if counts.get("FAILED_PERMANENT") or counts.get("FAILED_FATAL"): blocked.append("GENERATION_SETUP_REQUIRED")
         if counts.get("CANCELLED"): blocked.append("GENERATION_CANCELLED")
         if counts.get("AMBIGUOUS"): blocked.append("GENERATION_RECONCILIATION_REQUIRED")
         if counts.get("QC_PENDING"): blocked.append("MEDIA_QC_REQUIRED")
+        # A missing connection blocks a future provider boundary, not a finished
+        # project, local Render Again, or an already-recorded provider recovery.
+        awaiting_provider=any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE"})
+        if mode!="RENDER_ONLY" and awaiting_provider and not blocked and flow_status["status"]!="CONNECTED": blocked.append(flow_status["code"])
         shot_groups={}
         for request in requests.get("requests",[]):
             if request.get("purpose")!="SHOT": continue
@@ -480,7 +488,8 @@ class OperatorService:
                 "srt_validation":srt_manifest.get("validation_result"), "srt_normalization":srt_manifest.get("normalization"),
                 "timeline_match":srt_manifest.get("timeline_match",{}).get("status"),
                 "accepted_visuals":accepted_visuals,"full_image":config.settings.get("full_image") if config.render_mode=="full_image" else None,
-                "render_stale":render_stale}
+                "render_stale":render_stale,"flow_connection":flow_status,
+                "flow_binding":config.settings.get("flow_binding")}
 
     def get_content(self, project_id: str) -> dict[str, str]:
         paths,_=self._project(project_id); text=paths.content_file.read_text(encoding="utf-8")
@@ -635,9 +644,8 @@ class OperatorService:
         tts=latest_settings.get("tts",{}) if isinstance(latest_settings,dict) else {}
         provider=tts.get("provider")
         kokoro_settings=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
-        flow=latest_settings.get("flow",{}) if isinstance(latest_settings,dict) else {}
         llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
-        flow_auth=any("FLOW_AUTH_REQUIRED" in item.get("blocked",[]) for item in projects)
+        flow_status=self.flow_connections.get_connection_status(required_capabilities=["IMAGE"])
         usage=shutil.disk_usage(self.runtime.root)
         voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
         inventory_settings = latest_settings if provider == "kokoro_local" else _creation_settings({}, voice_id)
@@ -664,11 +672,12 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Visual generation","detail":"Google Flow","status":"Sign-in required" if flow_auth else ("Ready" if flow else "Not configured")},
+                {"name":"Visual generation","detail":"Google Flow","status":"Ready" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
-            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow.get("project_identity","Not configured"),"tts_provider":provider or "Not configured",
+            "flow_connection":flow_status,
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
@@ -689,15 +698,43 @@ class OperatorService:
             "creation_defaults":base_settings,
             "voice_options":voice_options,
             "voice_inventory_failure":inventory_failure,
+            "flow_connection":self.flow_connections.get_connection_status(required_capabilities=["IMAGE"]),
         }
 
     def diagnostics(self, project_id: str) -> dict[str, Any]:
         return {"snapshot":self.snapshot(project_id),"planning":self.planning_review(project_id),"media":self.media_items(project_id)}
 
     def open_flow_sign_in(self, project_id: str) -> dict[str, str]:
-        paths,config=self._project(project_id)
-        launch_dedicated_session(FlowRuntime.from_settings(paths.runtime,config.settings))
+        connection,_=self.flow_connections.connection_for_project(project_id)
+        if connection is None: raise FlowConnectionError("FLOW_NOT_CONFIGURED")
+        launch_dedicated_session(self.flow_connections.runtime_for_connection(connection))
         return {"status":"OPENED","message":"Complete Google sign-in in the Story Auto Flow window, then return and try again."}
+
+    def flow_connection_status(self, project_id: str | None = None) -> dict[str, Any]:
+        if project_id:
+            _connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
+            return status
+        return self.flow_connections.get_connection_status(required_capabilities=["IMAGE"])
+
+    def validate_flow_connection(self, project_id: str, project_url: str) -> dict[str, Any]:
+        return self.flow_connections.validate_candidate(project_url,required_capabilities=["IMAGE"])
+
+    def update_flow_connection(self, project_id: str, project_url: str) -> dict[str, Any]:
+        validation=self.validate_flow_connection(project_id,project_url)
+        if validation["status"]!="CONNECTED":
+            error=FlowConnectionError(validation["code"]); error.failure_class=validation["code"]
+            raise error
+        connection=self.flow_connections.save_validated_candidate(validation)
+        binding=self.flow_connections.bind_project(project_id,connection)
+        return {**validation,"connection_id":connection.connection_id,"connection_revision":connection.revision,"binding":binding}
+
+    def update_runtime_flow_connection(self, project_url: str) -> dict[str, Any]:
+        validation=self.flow_connections.validate_candidate(project_url,required_capabilities=["IMAGE"])
+        if validation["status"]!="CONNECTED":
+            error=FlowConnectionError(validation["code"]); error.failure_class=validation["code"]
+            raise error
+        connection=self.flow_connections.save_validated_candidate(validation)
+        return {**validation,"connection_id":connection.connection_id,"connection_revision":connection.revision}
 
     def review_asset(self, project_id: str, request_id: str, report: dict[str, Any]) -> dict[str, Any]:
         review_production_asset(self.runtime.root,project_id,request_id,report); return self.media_items(project_id)
@@ -785,9 +822,22 @@ class OperatorService:
         _,config=self._project(project_id)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
         self.set_pause(project_id,False)
+        connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
+        if connection is None and status.get("code")=="FLOW_LEGACY_PROJECT_BINDING":
+            connection=self.flow_connections.get_current_connection()
+            if connection is not None: self.flow_connections.bind_project(project_id,connection)
+        elif connection is not None and not isinstance(config.settings.get("flow_binding"),dict):
+            # An unstarted pre-Goal54 project can safely adopt the one runtime
+            # connection before it reaches the provider boundary.
+            self.flow_connections.bind_project(project_id,connection)
+        connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
+        if connection is None or status.get("status")!="CONNECTED":
+            error=FlowConnectionError(status.get("code","FLOW_NOT_CONFIGURED")); error.failure_class=status.get("code","FLOW_NOT_CONFIGURED")
+            raise error
         if executor is None:
-            paths,config=self._project(project_id); runtime=FlowRuntime.from_settings(paths.runtime,config.settings); capabilities=preflight(runtime,FlowInspector(runtime)); executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime))
-        return execute_generation(self.runtime.root,project_id,executor=executor,execute=True,request_ids=request_ids,production_batch=True,max_requests=max_requests)
+            runtime=self.flow_connections.runtime_for_connection(connection); capabilities=preflight(runtime,FlowInspector(runtime)); executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime))
+        return execute_generation(self.runtime.root,project_id,executor=executor,execute=True,request_ids=request_ids,production_batch=True,max_requests=max_requests,
+                                  flow_connection_provenance=self.flow_connections.provenance(connection))
 
     def build_render_plan(self, project_id: str) -> dict[str, Any]:
         paths,config=self._project(project_id); load=lambda name:read_json(paths.artifact_path(f"output/{name}.json"))

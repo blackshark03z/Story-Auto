@@ -107,6 +107,12 @@ class ProjectConfig:
                 raise ProjectValidationError("settings.llm.model must be non-empty text")
             if any(key.lower() in {"api_key", "key", "token", "secret", "credential"} for key in llm):
                 raise ProjectValidationError("settings.llm must not contain credentials")
+        binding = self.settings.get("flow_binding")
+        if binding is not None:
+            if (not isinstance(binding, dict) or set(binding) != {"connection_id", "connection_revision"}
+                    or not isinstance(binding["connection_id"], str) or not binding["connection_id"].startswith("flow_")
+                    or not isinstance(binding["connection_revision"], int) or binding["connection_revision"] < 1):
+                raise ProjectValidationError("settings.flow_binding must reference a Flow connection revision")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "project_id": self.project_id,

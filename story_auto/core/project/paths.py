@@ -48,6 +48,15 @@ class RuntimeLayout:
         return self.root / "browser" / "flow-profile"
 
     @property
+    def config(self) -> Path:
+        """Runtime-owned, non-secret application configuration."""
+        return self.root / "config"
+
+    @property
+    def flow_connection_file(self) -> Path:
+        return self.config / "flow_connection.json"
+
+    @property
     def cache(self) -> Path:
         return self.root / "cache"
 
@@ -72,6 +81,7 @@ class RuntimeLayout:
 
         for directory in (
             self.projects,
+            self.config,
             self.flow_profile,
             self.cache,
             self.temp,

@@ -170,6 +170,22 @@ function fullImageRenderControls(snapshot) {
   return `<section class="surface"><div class="surface-head"><div><h2>Full Image render settings</h2><p>${esc(status)}</p></div></div><fieldset class="field"><legend>Waveform</legend><label class="choice"><input id="fullImageWaveformToggle" type="checkbox" ${waveform ? 'checked' : ''}><strong>Show audio visualizer</strong><small>Applies to this project’s final video only.</small></label></fieldset><div class="button-row"><button id="saveFullImageWaveform" type="button">Save render setting</button></div></section>`;
 }
 
+function flowProjectCard(snapshot) {
+  if (snapshot.execution_mode === 'RENDER_ONLY') return '';
+  const flow = snapshot.flow_connection || {}, ready = flow.status === 'CONNECTED';
+  const note = ready ? 'READY — this project will use the validated runtime Flow connection.' : (flow.message || 'Visual creation is blocked until Flow is configured.');
+  return `<section class="surface" id="flowProjectCard"><div class="surface-head"><div><h2>Flow Project</h2><p>Status: <strong>${esc((flow.status || 'NOT_CONFIGURED').replaceAll('_',' '))}</strong> · ${esc(note)}</p></div></div><dl class="summary-list"><div class="summary-row"><dt>Current Flow project</dt><dd>${esc(flow.project_identity || 'None')}</dd></div><div class="summary-row"><dt>Connection</dt><dd>${flow.connection_id ? `${esc(flow.connection_id)} / revision ${esc(flow.connection_revision)}` : 'No runtime connection'}</dd></div></dl><div class="field"><label for="flowProjectUrl">Choose / Update Flow project</label><input id="flowProjectUrl" type="url" placeholder="Paste the Story Auto Flow project URL" value="${esc(flow.project_url || '')}"><small id="flowValidationMessage">${esc(ready ? 'Validated profile, project identity, and IMAGE capability.' : 'Paste a Flow project URL, then validate it before saving.')}</small></div><div class="button-row"><button id="validateFlowConnection" type="button">Validate connection</button><button class="button-primary" id="saveFlowConnection" type="button" ${ready ? '' : 'disabled'}>Save and bind project</button></div></section>`;
+}
+
+async function validateProjectFlowConnection(save = false) {
+  const input = $('#flowProjectUrl'), url = input?.value.trim();
+  if (!url) { toast('Paste the Story Auto Flow project URL first.',true); input?.focus(); return; }
+  const button = save ? $('#saveFlowConnection') : $('#validateFlowConnection'); if (button) button.disabled = true;
+  try { const value = await api(`/api/projects/${encodeURIComponent(state.project)}/actions`,{method:'POST',body:JSON.stringify({action:save ? 'update_flow_connection' : 'validate_flow_connection',project_url:url})}); $('#flowValidationMessage').textContent=value.message || value.status; if (value.status==='CONNECTED') { $('#saveFlowConnection').disabled=false; toast(save ? 'Flow connection saved and this project is bound.' : 'Flow profile, project, and IMAGE capability are confirmed.'); } if (save) await openProject(state.project,false); }
+  catch (error) { const friendly=friendlyError(error); $('#flowValidationMessage').textContent=friendly.message; toast(friendly.title,true); }
+  finally { if (button) button.disabled=false; }
+}
+
 function existingProjectControls(snapshot) {
   const full = snapshot.full_image || {};
   const canRender = !!snapshot.accepted_visuals;
@@ -210,6 +226,7 @@ function renderProject() {
   </section>
   ${state.error ? errorCard(state.error) : ''}
   ${executionControls(snapshot)}
+  ${flowProjectCard(snapshot)}
   ${timingControls(snapshot)}
   ${existingProjectControls(snapshot)}
   ${fullImageRenderControls(snapshot)}
@@ -220,6 +237,8 @@ function renderProject() {
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
   document.querySelectorAll('[data-execution-mode]').forEach(button => button.addEventListener('click', () => setExecutionMode(button.dataset.executionMode)));
   $('#saveFullImageWaveform')?.addEventListener('click', () => setFullImageAudioVisualizer($('#fullImageWaveformToggle').checked));
+  $('#validateFlowConnection')?.addEventListener('click', () => validateProjectFlowConnection(false));
+  $('#saveFlowConnection')?.addEventListener('click', () => validateProjectFlowConnection(true));
   $('#reviewProject')?.addEventListener('click', showReview);
   $('#pauseProject')?.addEventListener('click', requestPause);
   bindErrorActions();
@@ -321,7 +340,10 @@ function friendlyError(error) {
   const known = {
     FLOW_AUTH_REQUIRED: ['Google sign-in required','Sign in to Google Flow, then return here and choose Try again.','open_flow_sign_in','Open Flow sign-in'],
     FLOW_CDP_UNAVAILABLE: ['Google Flow is not open','Open the dedicated Story Auto Flow window, sign in if needed, then try again.','open_flow_sign_in','Open Flow sign-in'],
-    FLOW_PROJECT_MISMATCH: ['Choose the Story Auto Flow project','Open the configured Story Auto project in Google Flow, then try again.','open_flow_sign_in','Open Flow project'],
+    FLOW_PROJECT_MISMATCH: ['Choose the Story Auto Flow project','The active Flow project does not match. Paste the intended project URL on the project page, validate it, and save the confirmed connection.','open_project','Open project'],
+    FLOW_NOT_CONFIGURED: ['Flow is not configured','Open this project and choose a Flow project URL. Validation does not create images or videos.','open_project','Open project'],
+    FLOW_CONNECTION_STALE: ['Flow connection needs validation','The project points to an older Flow connection. Open the project and validate or update it before creating visuals.','open_project','Open project'],
+    FLOW_CAPABILITY_UNAVAILABLE: ['Flow image capability is unavailable','Validate the configured Flow project and confirm that IMAGE generation is available before creating visuals.','open_project','Open project'],
     FLOW_CAPABILITY_UNAVAILABLE: ['Visual setup needs attention','Review the Flow project and production mode in Settings before trying again.','settings','Open Settings'],
     TTS_PROVIDER_CREDITS_REQUIRED: ["Voice generation can't continue",'The selected paid voice provider does not have enough credits. Choose another voice or update the provider account.','settings','Open settings'],
     CREDENTIAL_MISSING: ['AI quality is not configured','Add the provider credential in the secure Story Auto configuration, then try again.','settings','Open settings'],
@@ -493,10 +515,13 @@ async function showSettings() {
   const selectedDefaultVoice = hasInstalledVoice(defaults.voice_id) ? defaults.voice_id : '';
   const narratorMessage = state.settings.defaults.narrator_message || (installedVoices().length ? '' : 'No installed Kokoro narrators are available. Configure Kokoro before creating a video.');
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
+  const flow = state.settings.flow_connection || {};
+  const flowDetails = `<section class="settings-section"><h2>Flow Connection</h2><p>One validated runtime connection is shared by new visual projects. It never stores browser cookies or account secrets.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(flow.status || 'NOT_CONFIGURED')}</dd></div><div class="summary-row"><dt>Project identity</dt><dd>${esc(flow.project_identity || 'Not configured')}</dd></div><div class="summary-row"><dt>Validated capabilities</dt><dd>${esc(Object.entries(flow.observed_capabilities || {}).filter(([,ok]) => ok).map(([name]) => name).join(', ') || 'None')}</dd></div></dl><div class="field"><label for="settingsFlowUrl">Project URL</label><input id="settingsFlowUrl" type="url" value="${esc(flow.project_url || '')}" placeholder="Paste the Story Auto Flow project URL"><small id="settingsFlowMessage">${esc(flow.message || 'Validate before saving a connection.')}</small></div><div class="button-row"><button id="validateSettingsFlow" type="button">Validate</button><button class="button-primary" id="updateSettingsFlow" type="button">Update</button></div></section>`;
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
   $('#view').innerHTML = `<div class="settings-layout">
     <section class="settings-section"><h2>General</h2><p>Defaults are applied to new videos and saved only in this local browser.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default format</label><select id="defaultMode"><option value="hybrid_hook" ${defaults.render_mode === 'hybrid_hook' ? 'selected' : ''}>Cinematic opening</option><option value="full_video_ai" ${defaults.render_mode === 'full_video_ai' ? 'selected' : ''}>Full video animation</option><option value="ambient_story" ${defaults.render_mode === 'ambient_story' ? 'selected' : ''}>Ambient Story</option><option value="full_image" ${defaults.render_mode === 'full_image' ? 'selected' : ''}>Full Image</option></select></div><div class="field" id="defaultAmbientStyleField" ${defaults.render_mode === 'ambient_story' ? '' : 'hidden'}><label for="defaultAmbientStyle">Default Ambient Story style</label><select id="defaultAmbientStyle"><option value="quiet_verdict" ${defaults.ambient_style !== 'hidden_mastery' ? 'selected' : ''}>Quiet Verdict</option><option value="hidden_mastery" ${defaults.ambient_style === 'hidden_mastery' ? 'selected' : ''}>Hidden Mastery</option></select></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(selectedDefaultVoice)}</select>${narratorMessage ? `<small class="field-error">${esc(narratorMessage)}</small>` : ''}</div></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button" ${installedVoices().length ? '' : 'disabled'}>Save defaults</button></div></section>
     <section class="settings-section"><h2>Provider health</h2><p>Concise readiness based on this workspace's current configuration and project state.</p><div class="provider-list">${providerRows}</div></section>
+    ${flowDetails}
     <section class="settings-section"><h2>Storage</h2><p>Story Auto keeps projects and generated media in its isolated local workspace.</p><dl class="summary-list"><div class="summary-row"><dt>Project location</dt><dd>${esc(state.settings.storage.project_location)}</dd></div><div class="summary-row"><dt>Free space</dt><dd>${state.settings.storage.free_gb} GB</dd></div></dl></section>
     <section class="settings-section"><h2>Advanced</h2><p>Technical configuration and diagnostics for troubleshooting.</p><details class="disclosure"><summary>Provider details</summary><dl class="summary-list"><div class="summary-row"><dt>Voice provider</dt><dd>${esc(state.settings.advanced.tts_provider)}</dd></div>${state.settings.advanced.kokoro_readiness ? `<div class="summary-row"><dt>Kokoro readiness</dt><dd>${esc(state.settings.advanced.kokoro_readiness.technical_code || state.settings.advanced.kokoro_readiness.state)}</dd></div>` : ''}<div class="summary-row"><dt>Gemini model</dt><dd>${esc(state.settings.advanced.gemini_model)}</dd></div><div class="summary-row"><dt>Flow project</dt><dd>${esc(state.settings.advanced.flow_project)}</dd></div><div class="summary-row"><dt>Runtime root</dt><dd>${esc(state.settings.advanced.runtime_root)}</dd></div></dl></details>
       <details class="disclosure"><summary>Diagnostics</summary><div class="field"><label for="diagnosticProject">Project</label><select id="diagnosticProject">${projectOptions || '<option value="">No projects available</option>'}</select><small>Diagnostics may include internal IDs, exact paths, manifests, provider attempts, and raw status codes.</small></div><button id="openDiagnostics" type="button" style="margin-top:14px" ${projectOptions ? '' : 'disabled'}>Open diagnostics</button></details>
@@ -505,6 +530,9 @@ async function showSettings() {
   $('#defaultMode').addEventListener('change', () => { $('#defaultAmbientStyleField').hidden = $('#defaultMode').value !== 'ambient_story'; });
   $('#saveDefaults').addEventListener('click', () => { const voiceId=$('#defaultVoice').value; if (!hasInstalledVoice(voiceId)) { toast('Choose an installed narrator before saving defaults.',true); return; } localStorage.setItem('storyAutoDefaults',JSON.stringify({render_mode:$('#defaultMode').value,ambient_style:$('#defaultAmbientStyle').value,voice_id:voiceId})); toast('Defaults saved.'); });
   $('#openDiagnostics')?.addEventListener('click', () => showDiagnostics($('#diagnosticProject').value));
+  async function applySettingsFlow(save) { const url=$('#settingsFlowUrl').value.trim(); if (!url) { toast('Paste the Story Auto Flow project URL first.',true); return; } const button=save ? $('#updateSettingsFlow') : $('#validateSettingsFlow'); button.disabled=true; try { const value=await api(`/api/flow-connection/${save ? 'update' : 'validate'}`,{method:'POST',body:JSON.stringify({project_url:url})}); $('#settingsFlowMessage').textContent=value.message || value.status; toast(save ? 'Runtime Flow connection updated.' : 'Flow connection confirmed.'); if (save) await showSettings(); } catch (error) { const friendly=friendlyError(error); $('#settingsFlowMessage').textContent=friendly.message; toast(friendly.title,true); } finally { button.disabled=false; } }
+  $('#validateSettingsFlow')?.addEventListener('click', () => applySettingsFlow(false));
+  $('#updateSettingsFlow')?.addEventListener('click', () => applySettingsFlow(true));
   focusMain();
 }
 
@@ -529,7 +557,7 @@ function freshDraft() {
     voice: saved.voice_id || '', style: 'natural', mode: saved.render_mode || 'hybrid_hook', execution: 'FULL',
     importedAudio: null, importedSrt: null, sourceValidation: null, ambientStyle: saved.ambient_style || 'quiet_verdict',
     fullImage: saved.full_image || {image_duration_seconds:30, cadence:'SEMANTIC_ADAPTIVE', motion:'AUTO_CONTINUOUS_ZOOM', audio_visualizer:true},
-    touched: {}, creating: false,
+    flowConnection: null, touched: {}, creating: false,
   };
 }
 function activeDraft(draft) { return state.wizard === draft; }
@@ -542,6 +570,7 @@ function touchDraft(draft, field) { draft.touched[field] = true; draft.revision 
 function hydrateDraftDefaults(draft, payload) {
   if (!activeDraft(draft)) return;
   state.creationDefaults = payload;
+  draft.flowConnection = payload.flow_connection || null;
   const defaults = payload.defaults || {};
   if (!draft.touched.voice && !draft.voice) draft.voice = defaults.voice_id || '';
   if (!draft.touched.mode && !draft.mode) draft.mode = defaults.render_mode || 'hybrid_hook';
@@ -661,7 +690,9 @@ function renderWizard() {
   } else {
     const source = wizard.source;
     const visualRun = wizard.mode === 'full_image' ? 'Image generation: RUN · Video generation: SKIP' : 'Visual generation: RUN';
-    $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Input source</dt><dd>${esc(sourceLabel(source))}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Narration</dt><dd>${source === 'STORY_CONTENT' ? esc(wizard.info?.title || voiceName(wizard.voice)) : esc(wizard.importedAudio?.filename || 'Not selected')}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Format</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>${wizard.mode === 'full_image' ? `<div class="summary-row"><dt>Scene duration</dt><dd>${esc(wizard.fullImage.image_duration_seconds)} seconds · ${esc(wizard.fullImage.cadence === 'FIXED' ? 'Fixed' : 'Semantic Adaptive')} · Waveform ${wizard.fullImage.audio_visualizer ? 'ON' : 'OFF'} · AUTO CONTINUOUS ZOOM</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>` : ''}</dl><section class="surface" style="margin-top:22px"><h3>Execution summary</h3><p class="hint">Narration audio: ${source === 'STORY_CONTENT' ? 'GENERATE' : 'IMPORT'}<br>TTS: ${source === 'STORY_CONTENT' ? 'RUN' : 'SKIP'}<br>Timing: ${source === 'AUDIO_SRT' ? 'SRT' : source === 'STORY_CONTENT' ? 'RUN' : 'ALIGNMENT'}<br>Visual planning: RUN<br>${visualRun}<br>QC: RUN<br>Compose: RUN</p></section>`;
+    const flowReady = wizard.execution === 'RENDER_ONLY' || wizard.flowConnection?.status === 'CONNECTED';
+    const flowLine = wizard.execution === 'RENDER_ONLY' ? 'Flow: NOT REQUIRED (Render only)' : flowReady ? `Flow: READY · Project: ${esc(wizard.flowConnection?.project_identity || '')}` : 'Flow: NOT CONFIGURED · Visual generation will be blocked until Flow is configured.';
+    $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Input source</dt><dd>${esc(sourceLabel(source))}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Narration</dt><dd>${source === 'STORY_CONTENT' ? esc(wizard.info?.title || voiceName(wizard.voice)) : esc(wizard.importedAudio?.filename || 'Not selected')}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Format</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="2" type="button">Change</button></div><div class="summary-row"><dt>Flow</dt><dd>${flowLine}</dd></div>${wizard.mode === 'full_image' ? `<div class="summary-row"><dt>Scene duration</dt><dd>${esc(wizard.fullImage.image_duration_seconds)} seconds · ${esc(wizard.fullImage.cadence === 'FIXED' ? 'Fixed' : 'Semantic Adaptive')} · Waveform ${wizard.fullImage.audio_visualizer ? 'ON' : 'OFF'} · AUTO CONTINUOUS ZOOM</dd><button class="change-step" data-change-step="2" type="button">Change</button></div>` : ''}</dl><section class="surface" style="margin-top:22px"><h3>Execution summary</h3><p class="hint">Narration audio: ${source === 'STORY_CONTENT' ? 'GENERATE' : 'IMPORT'}<br>TTS: ${source === 'STORY_CONTENT' ? 'RUN' : 'SKIP'}<br>Timing: ${source === 'AUDIO_SRT' ? 'SRT' : source === 'STORY_CONTENT' ? 'RUN' : 'ALIGNMENT'}<br>Visual planning: RUN<br>${visualRun}<br>QC: RUN<br>Compose: RUN</p></section>`;
     document.querySelectorAll('[data-change-step]').forEach(button => button.addEventListener('click', () => { wizard.step = Number(button.dataset.changeStep); touchDraft(wizard,'step'); renderWizard(); focusWizardStep(); }));
   }
   const importBlocked = wizard.step === 1 && wizard.source !== 'STORY_CONTENT' && wizard.sourceValidation?.status !== 'READY';
