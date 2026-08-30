@@ -77,7 +77,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:
-                return self._json(self.service.validate_flow_connection(str(body.get("project_id", "")),body.get("project_url", "")))
+                return self._json(self.service.flow_connections.validate_candidate(body.get("project_url", ""),required_capabilities=["IMAGE"]))
             if parts==["api","flow-connection","update"]:
                 return self._json(self.service.update_runtime_flow_connection(body.get("project_url", "")))
             if len(parts)!=4 or parts[:2]!=["api","projects"] or parts[3]!="actions": raise ValueError("unknown action route")
@@ -97,8 +97,11 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="pause": result=self.service.set_pause(project_id,True)
             elif action=="resume_generation": result=self.service.generate(project_id,max_requests=body.get("max_requests"))
             elif action=="open_flow_sign_in": result=self.service.open_flow_sign_in(project_id)
-            elif action=="validate_flow_connection": result=self.service.validate_flow_connection(project_id,body.get("project_url", ""))
-            elif action=="update_flow_connection": result=self.service.update_flow_connection(project_id,body.get("project_url", ""))
+            elif action=="flow_status": result=self.service.flow_status(project_id)
+            elif action=="prepare_flow_recovery": result=self.service.prepare_flow_recovery(project_id)
+            elif action=="validate_flow_connection": result=self.service.validate_flow_connection(project_id,body.get("project_url"))
+            elif action=="rebind_flow_project": result=self.service.rebind_flow_project(project_id,explicit_owner_decision=body.get("explicit_owner_decision") is True)
+            elif action=="update_flow_connection": result=self.service.update_flow_connection(project_id,body.get("project_url", ""),explicit_owner_decision=body.get("explicit_owner_decision") is True)
             elif action=="approve_asset": result=self.service.review_asset(project_id,body["request_id"],body["report"])
             elif action=="accept_pending_visuals_by_owner": result=self.service.accept_pending_visuals_by_owner(project_id,body.get("reason", ""))
             elif action=="accept_selected_assets": result=self.service.accept_selected_assets(project_id,set(body.get("request_ids", [])) or None,body.get("reason", ""))

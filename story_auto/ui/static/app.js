@@ -35,7 +35,9 @@ function setBusy(value, label = '') {
   state.busyLabel = label;
   $('#view').setAttribute('aria-busy', String(value));
   document.querySelector('.loading-line')?.remove();
+  document.querySelector('#busyReason')?.remove();
   if (value) document.body.insertAdjacentHTML('beforeend', '<div class="loading-line" aria-hidden="true"></div>');
+  if (value && label) document.body.insertAdjacentHTML('beforeend', `<span id="busyReason" class="sr-only" role="status">${esc(label)}</span>`);
   $('#runtimeState').textContent = value ? 'Working' : 'Ready';
 }
 
@@ -212,19 +214,24 @@ function projectHeader(snapshot) {
 }
 
 function renderProject() {
-  const workspace=state.snapshot, production=workspace.production, blocker=production.blocker, action=production.next_action;
+  const workspace=state.snapshot, production=workspace.production, blocker=production.blocker, action=production.next_action, flow=production.flow;
   projectHeader(workspace);
   if (production.pipeline_status === 'COMPLETE') { renderComplete(workspace); return; }
   const visual=production.stages.VISUALS || {}, activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
   const primary=`<button class="button-primary" data-project-action="${esc(action.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(state.busy ? 'Working…' : action.label)}</button>`;
   $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(action.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
   ${state.error ? errorCard(state.error) : ''}
-  ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">Action needed</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${primary}</section>` : ''}
+  ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">Action needed</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${primary}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
+  ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
   <section class="surface"><div class="surface-head"><div><h2>Output and preview</h2><p>${workspace.final_path ? 'Your latest final video is ready.' : 'Your final video will appear here when production is complete.'}</p></div></div>${workspace.final_path ? `<a class="button button-primary" href="${assetUrl(workspace.project_id,workspace.final_path)}" target="_blank" rel="noopener">Open final video</a>` : '<div class="empty-library"><p>No final video yet.</p></div>'}</section>
   <section class="surface"><div class="surface-head"><div><h2>Project summary</h2><p>These are the effective settings saved with this project.</p></div></div><dl class="summary-list"><div class="summary-row"><dt>Source</dt><dd>${esc(workspace.summary.source)}</dd></div>${workspace.summary.narrator ? `<div class="summary-row"><dt>Narrator</dt><dd>${esc(workspace.summary.narrator)}</dd></div>` : ''}<div class="summary-row"><dt>Style</dt><dd>${esc(workspace.summary.style)}</dd></div><div class="summary-row"><dt>Quality review</dt><dd>${esc(workspace.summary.quality)}</dd></div><div class="summary-row"><dt>Waveform</dt><dd>${esc(workspace.summary.waveform)}</dd></div><div class="summary-row"><dt>Resolution</dt><dd>${esc(workspace.summary.resolution)}</dd></div></dl></section>
   <details class="surface disclosure"><summary>More actions</summary><div class="button-row"><button id="reviewProject" type="button">Review visuals</button>${workspace.can_render_again ? '<button id="renderAgain" type="button">Render final video again</button>' : ''}</div></details>
   <details class="surface disclosure" id="projectDetails"><summary>Advanced, Diagnostics, and History</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details>`;
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
+  document.querySelectorAll('[data-rebind-flow]').forEach(button => button.addEventListener('click', async () => {
+    if (!window.confirm('Use the currently validated Flow project for future requests? Existing request history will remain unchanged.')) return;
+    await runAction('rebind_flow_project','Rebinding future Flow requests…', {explicit_owner_decision:true});
+  }));
   $('#reviewProject')?.addEventListener('click', showReview);
   $('#renderAgain')?.addEventListener('click', () => runAction('render_again','Rendering the final video again…'));
   bindErrorActions();
@@ -259,13 +266,14 @@ async function handleProjectAction(action) {
   if (action === 'review_visuals' || action === 'review_project' || action === 'review_recovery' || action === 'open_final') return showReview();
   if (action === 'process' || action === 'run_to_final') return runAction('run_to_final','Continuing production until it needs your decision…');
   if (action === 'continue_production') return runAction('continue_production','Continuing production until it needs your decision…');
+  if (action === 'validate_flow_connection') return runAction('validate_flow_connection','Validating the expected Flow project…');
   if (action === 'plan_visuals') return runAction('plan_visuals','Preparing the visual plan…');
   if (action === 'resume_generation') return runAction('resume_generation','Creating visuals. Completed work remains saved…');
   if (action === 'render') return runAction('render','Rendering the final video…');
   if (action === 'open_flow_sign_in') return runAction('open_flow_sign_in','Opening the Story Auto Flow sign-in window…');
 }
 
-async function runAction(action, label) {
+async function runAction(action, label, extra = {}) {
   if (!state.project) return;
   if (state.busy || state.runToken) { toast('Another project action is still running.'); return; }
   const projectId = state.project;
@@ -283,7 +291,7 @@ async function runAction(action, label) {
     finally { polling = false; }
   },2500);
   try {
-    await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action})});
+    await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action,...extra})});
     const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/workspace`);
     if (state.runToken === token && state.view === 'project' && state.project === projectId) state.snapshot = snapshot;
     toast(action === 'pause' ? 'Production will pause at the next safe point.' : action === 'open_flow_sign_in' ? 'Flow sign-in opened.' : 'Project updated.');
@@ -498,7 +506,8 @@ async function showSettings() {
   const narratorMessage = state.settings.defaults.narrator_message || (installedVoices().length ? '' : 'No installed Kokoro narrators are available. Configure Kokoro before creating a video.');
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
   const flow = state.settings.flow_connection || {};
-  const flowDetails = `<section class="settings-section"><h2>Flow Connection</h2><p>One validated runtime connection is shared by new visual projects. It never stores browser cookies or account secrets.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(flow.status || 'NOT_CONFIGURED')}</dd></div><div class="summary-row"><dt>Project identity</dt><dd>${esc(flow.project_identity || 'Not configured')}</dd></div><div class="summary-row"><dt>Validated capabilities</dt><dd>${esc(Object.entries(flow.observed_capabilities || {}).filter(([,ok]) => ok).map(([name]) => name).join(', ') || 'None')}</dd></div></dl><div class="field"><label for="settingsFlowUrl">Project URL</label><input id="settingsFlowUrl" type="url" value="${esc(flow.project_url || '')}" placeholder="Paste the Story Auto Flow project URL"><small id="settingsFlowMessage">${esc(flow.message || 'Validate before saving a connection.')}</small></div><div class="button-row"><button id="validateSettingsFlow" type="button">Validate</button><button class="button-primary" id="updateSettingsFlow" type="button">Update</button></div></section>`;
+  const flowLabel = {CONNECTED:'Flow connected',NOT_CONFIGURED:'Connect Flow to continue',AUTH_REQUIRED:'Sign in to Flow to continue',STALE:'Flow connection needs confirmation',PROJECT_MISMATCH:'Open the correct Flow project to continue',CAPABILITY_MISSING:'This Flow project cannot create the required media'}[flow.status] || 'Connect Flow to continue';
+  const flowDetails = `<section class="settings-section"><h2>Flow connection</h2><p>One validated runtime connection is shared by new visual projects. It never stores browser cookies or account secrets.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(flowLabel)}</dd></div><div class="summary-row"><dt>Current project</dt><dd>${flow.project_identity ? 'Configured Flow project' : 'Not configured'}</dd></div><div class="summary-row"><dt>Validated capabilities</dt><dd>${esc(Object.entries(flow.observed_capabilities || {}).filter(([,ok]) => ok).map(([name]) => name).join(', ') || 'None')}</dd></div></dl><div class="field"><label for="settingsFlowUrl">Project URL</label><input id="settingsFlowUrl" type="url" value="${esc(flow.project_url || '')}" placeholder="Paste the Story Auto Flow project URL"><small id="settingsFlowMessage">${esc(flow.message || 'Validate before saving a connection.')}</small></div><div class="button-row"><button id="validateSettingsFlow" type="button">Validate</button><button class="button-primary" id="updateSettingsFlow" type="button">Update</button></div></section>`;
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
   $('#view').innerHTML = `<div class="settings-layout">
     <section class="settings-section"><p class="eyebrow">DEFAULT FOR NEW PROJECTS</p><h2>General defaults</h2><p>These durable defaults apply only when you create a new video. Existing projects keep their saved settings.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default output style</label><select id="defaultMode"><option value="hybrid_hook" ${defaults.render_mode === 'hybrid_hook' ? 'selected' : ''}>Cinematic opening</option><option value="full_video_ai" ${defaults.render_mode === 'full_video_ai' ? 'selected' : ''}>Full video animation</option><option value="ambient_story" ${defaults.render_mode === 'ambient_story' ? 'selected' : ''}>Ambient Story</option><option value="full_image" ${defaults.render_mode === 'full_image' ? 'selected' : ''}>Full Image</option></select></div><div class="field" id="defaultAmbientStyleField" ${defaults.render_mode === 'ambient_story' ? '' : 'hidden'}><label for="defaultAmbientStyle">Default Ambient Story style</label><select id="defaultAmbientStyle"><option value="quiet_verdict" ${defaults.ambient_style !== 'hidden_mastery' ? 'selected' : ''}>Quiet Verdict</option><option value="hidden_mastery" ${defaults.ambient_style === 'hidden_mastery' ? 'selected' : ''}>Hidden Mastery</option></select></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(selectedDefaultVoice)}</select>${narratorMessage ? `<small class="field-error">${esc(narratorMessage)}</small>` : ''}</div><div class="field"><label for="defaultQuality">Default Quality Review</label><select id="defaultQuality"><option value="AUTO_ACCEPT" ${state.settings.creation_defaults.qc_policy === 'AUTO_ACCEPT' ? 'selected' : ''}>Automatic</option><option value="MANUAL_REVIEW" ${state.settings.creation_defaults.qc_policy === 'MANUAL_REVIEW' ? 'selected' : ''}>Manual</option></select></div><label class="choice"><input id="defaultWaveform" type="checkbox" ${state.settings.creation_defaults.full_image?.audio_visualizer !== false ? 'checked' : ''}><strong>Waveform</strong><small>Show by default for Full Image projects.</small></label></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button" ${installedVoices().length ? '' : 'disabled'}>Save defaults</button></div></section>

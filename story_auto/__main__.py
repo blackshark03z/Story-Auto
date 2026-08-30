@@ -22,6 +22,20 @@ def main() -> int:
     for name in ("run", "resume"):
         command = commands.add_parser(name, help="Run the foundation pipeline" if name == "run" else "Resume the foundation pipeline")
         command.add_argument("project_id")
+    production_status = commands.add_parser("production-status", help="Show the compact canonical production state")
+    production_status.add_argument("project_id")
+    flow_status = commands.add_parser("flow-status", help="Show the compact product-facing Flow state")
+    flow_status.add_argument("project_id")
+    prepare_flow = commands.add_parser("prepare-flow-recovery", help="Show the next safe Flow recovery action")
+    prepare_flow.add_argument("project_id")
+    validate_flow = commands.add_parser("validate-flow-connection", help="Validate the Flow project already expected by this Story Auto project")
+    validate_flow.add_argument("project_id")
+    validate_flow.add_argument("--project-url", help="Only for first-time setup; does not rebind this project")
+    rebind_flow = commands.add_parser("rebind-flow-project", help="Explicitly use the validated runtime Flow project for future attempts")
+    rebind_flow.add_argument("project_id")
+    rebind_flow.add_argument("--explicit-owner-decision", action="store_true", required=True)
+    continue_production = commands.add_parser("continue-production", help="Resume the same canonical production run")
+    continue_production.add_argument("project_id")
     approve = commands.add_parser("approve-plan", help="Approve validated story timeline and continuity")
     approve.add_argument("project_id")
     visual = commands.add_parser("plan-visuals", help="Compile shot, media, and provider-independent generation plans")
@@ -77,6 +91,24 @@ def main() -> int:
             project_id = args.project_id or f"prj_{uuid.uuid4().hex}"
             app.create_project(project_id=project_id,render_mode=args.render_mode,ambient_style=args.ambient_style)
             print(f"CREATED {project_id}")
+            return 0
+        if args.command == "production-status":
+            print(json.dumps(app.production_query(args.project_id), sort_keys=True))
+            return 0
+        if args.command == "flow-status":
+            print(json.dumps(app.flow_status(args.project_id), sort_keys=True))
+            return 0
+        if args.command == "prepare-flow-recovery":
+            print(json.dumps(app.prepare_flow_recovery(args.project_id), sort_keys=True))
+            return 0
+        if args.command == "validate-flow-connection":
+            print(json.dumps(app.validate_flow_connection(args.project_id, args.project_url), sort_keys=True))
+            return 0
+        if args.command == "rebind-flow-project":
+            print(json.dumps(app.rebind_flow_project(args.project_id, explicit_owner_decision=args.explicit_owner_decision), sort_keys=True))
+            return 0
+        if args.command == "continue-production":
+            print(json.dumps(app.continue_production(args.project_id), sort_keys=True))
             return 0
         if args.command == "approve-plan":
             app.approve_planning(args.project_id)

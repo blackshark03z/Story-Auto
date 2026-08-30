@@ -1,0 +1,53 @@
+"""Compact, product-facing Flow status and recovery decisions.
+
+The runtime connection service owns browser/session evidence.  A project owns
+only its expected Flow reference.  This adapter deliberately returns neither
+CDP nor revision details, so UI, CLI, and Worker can share one safe contract.
+"""
+from __future__ import annotations
+
+from typing import Iterable
+
+from story_auto.core.project.execution import execution_mode
+
+
+_MESSAGES = {
+    "CONNECTED": "Flow connected",
+    "NOT_CONFIGURED": "Connect Flow to continue",
+    "AUTH_REQUIRED": "Sign in to Flow to continue",
+    "STALE": "Flow connection needs confirmation",
+    "PROJECT_MISMATCH": "Open the correct Flow project to continue",
+    "CAPABILITY_MISSING": "This Flow project cannot create the required media",
+}
+
+_ACTIONS = {
+    "CONNECTED": {"action": "continue_production", "label": "Continue production"},
+    "NOT_CONFIGURED": {"action": "settings", "label": "Connect Flow"},
+    "AUTH_REQUIRED": {"action": "open_flow_sign_in", "label": "Sign in to Flow"},
+    "STALE": {"action": "validate_flow_connection", "label": "Validate Flow connection"},
+    "PROJECT_MISMATCH": {"action": "open_flow_sign_in", "label": "Open expected Flow project"},
+    "CAPABILITY_MISSING": {"action": "settings", "label": "Review Flow project"},
+}
+
+
+def required_capabilities(config, request_media_types: Iterable[str] | None = None) -> list[str]:
+    if execution_mode(config.settings) == "RENDER_ONLY":
+        return []
+    kinds = {str(kind).upper() for kind in (request_media_types or [])}
+    if not kinds:
+        kinds = {"VIDEO"} if config.render_mode == "full_video_ai" else {"IMAGE"}
+    return sorted(kind for kind in kinds if kind in {"IMAGE", "VIDEO"})
+
+
+def product_flow_status(connections, project_id: str, config, *, request_media_types: Iterable[str] | None = None,
+                        auth_required: bool = False) -> dict:
+    required = required_capabilities(config, request_media_types)
+    if auth_required:
+        status = "AUTH_REQUIRED"
+    else:
+        _connection, detail = connections.connection_for_project(project_id, required_capabilities=required)
+        status = detail.get("status", "NOT_CONFIGURED")
+    if status not in _MESSAGES:
+        status = "AUTH_REQUIRED"
+    return {"status": status, "human_message": _MESSAGES[status], "recoverable": status != "CONNECTED",
+            "next_action": dict(_ACTIONS[status])}

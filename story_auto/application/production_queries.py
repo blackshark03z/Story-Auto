@@ -8,8 +8,9 @@ from story_auto.core.artifacts import atomic_write_json
 
 
 class ProductionQueries:
-    def __init__(self, runtime):
+    def __init__(self, runtime, flow_connections=None):
         self.runtime = runtime
+        self.flow_connections = flow_connections
         self.reconciler = ProductionStateReconciler()
 
     def production_query(self, project_id: str) -> dict:
@@ -31,10 +32,34 @@ class ProductionQueries:
             required = {"pipeline_status", "active_stage", "stages", "quality", "next_action", "final_output"}
             if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.0"
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint):
-                return existing
+                return self._with_flow_summary(project_id, config, existing)
         except Exception:
             pass
-        return self.reconciler.reconcile(paths, config).to_dict()
+        return self._with_flow_summary(project_id, config, self.reconciler.reconcile(paths, config).to_dict())
+
+    def _with_flow_summary(self, project_id: str, config, state: dict) -> dict:
+        """Attach the small product model without persisting browser evidence."""
+        result = dict(state)
+        if self.flow_connections is None:
+            return result
+        from story_auto.application.flow_product import product_flow_status, required_capabilities
+        needed = required_capabilities(config)
+        if not needed or result.get("pipeline_status") == "COMPLETE":
+            result["flow"] = {"status": "CONNECTED", "human_message": "Flow is not required for this operation.",
+                              "recoverable": False, "next_action": {"action": "continue_production", "label": "Continue production"},
+                              "required": False}
+            return result
+        flow = product_flow_status(self.flow_connections, project_id, config,
+                                   auth_required=result.get("pipeline_status") == "AUTH_REQUIRED")
+        flow["required"] = True
+        result["flow"] = flow
+        if flow["status"] != "CONNECTED" and result.get("active_stage") == "VISUALS" and result.get("pipeline_status") == "READY":
+            result["pipeline_status"] = flow["status"]
+            result["blocker"] = {"reason_code": flow["status"], "human_message": flow["human_message"],
+                                 "next_action": flow["next_action"]["label"], "recoverable": True,
+                                 "requires_owner_decision": flow["status"] == "PROJECT_MISMATCH", "stage": "VISUALS"}
+            result["next_action"] = dict(flow["next_action"])
+        return result
 
     @staticmethod
     def _signature(paths, relative: str) -> dict:

@@ -119,6 +119,12 @@ class ProjectConfig:
                     or not isinstance(binding["connection_id"], str) or not binding["connection_id"].startswith("flow_")
                     or not isinstance(binding["connection_revision"], int) or binding["connection_revision"] < 1):
                 raise ProjectValidationError("settings.flow_binding must reference a Flow connection revision")
+        project_binding = self.settings.get("flow_project_binding")
+        if project_binding is not None:
+            if (not isinstance(project_binding, dict) or set(project_binding) != {"project_identity", "project_url"}
+                    or not isinstance(project_binding["project_identity"], str) or not project_binding["project_identity"].strip()
+                    or not isinstance(project_binding["project_url"], str) or not project_binding["project_url"].strip()):
+                raise ProjectValidationError("settings.flow_project_binding must retain the expected Flow project")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "project_id": self.project_id,

@@ -155,7 +155,7 @@ class ProductionStateReconciler:
         elif stages["PLAN"]["status"] == "BLOCKED":
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
         elif any(status == "AUTH_REQUIRED" for status in statuses):
-            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
+            blocker = self._blocker("AUTH_REQUIRED", "Sign in to Flow to continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["VISUALS"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", "Visual generation needs reconciliation or provider recovery before another request is sent.", "Review recovery", True, False, "VISUALS")
         elif stages["QUALITY"]["status"] == "BLOCKED" and qc_policy == MANUAL_REVIEW:

@@ -19,7 +19,7 @@ from .session import FlowCapabilities, FlowRuntime, FlowSessionError, preflight
 
 
 CONNECTION_SCHEMA = "story-auto-flow-connection/1.0.0"
-VALID_STATUSES = frozenset({"CONNECTED", "NOT_CONFIGURED", "STALE", "ACCESS_ERROR", "PROJECT_MISMATCH", "CAPABILITY_MISSING"})
+VALID_STATUSES = frozenset({"CONNECTED", "NOT_CONFIGURED", "STALE", "AUTH_REQUIRED", "PROJECT_MISMATCH", "CAPABILITY_MISSING"})
 
 
 class FlowConnectionError(RuntimeError):
@@ -145,7 +145,7 @@ class FlowConnectionService:
         try:
             capabilities = preflight(runtime, inspector) if inspector is not None else preflight(runtime, __import__("story_auto.providers.flow.live", fromlist=["FlowInspector"]).FlowInspector(runtime))
             if not capabilities.authenticated:
-                return self._candidate_status("ACCESS_ERROR", "FLOW_AUTH_REQUIRED", capabilities.detail, normalized, identity, required, {})
+                return self._candidate_status("AUTH_REQUIRED", "FLOW_AUTH_REQUIRED", capabilities.detail, normalized, identity, required, {})
             if not capabilities.project_ok:
                 return self._candidate_status("PROJECT_MISMATCH", "FLOW_PROJECT_MISMATCH", capabilities.detail, normalized, identity, required, _capability_dict(capabilities))
             observed = _capability_dict(capabilities)
@@ -155,7 +155,7 @@ class FlowConnectionService:
             return self._candidate_status("CONNECTED", "FLOW_CONNECTED", "Flow profile, project, and required capabilities are confirmed.", normalized, identity, required, observed)
         except FlowSessionError as error:
             code = error.failure_class
-            status = "PROJECT_MISMATCH" if code == "FLOW_PROJECT_MISMATCH" else "ACCESS_ERROR"
+            status = "PROJECT_MISMATCH" if code == "FLOW_PROJECT_MISMATCH" else "AUTH_REQUIRED" if code == "FLOW_AUTH_REQUIRED" else "STALE"
             return self._candidate_status(status, code, str(error), normalized, identity, required, {})
 
     @staticmethod
@@ -179,13 +179,30 @@ class FlowConnectionService:
         atomic_write_json(self.runtime.flow_connection_file, connection.to_dict())
         return connection
 
+    @staticmethod
+    def _project_reference(config: ProjectConfig) -> dict[str, str] | None:
+        value = config.settings.get("flow_project_binding") if isinstance(config.settings, dict) else None
+        if not isinstance(value, dict):
+            return None
+        identity, url = value.get("project_identity"), value.get("project_url")
+        if not isinstance(identity, str) or not identity.strip() or not isinstance(url, str) or not url.strip():
+            return None
+        return {"project_identity": identity, "project_url": normalize_project_url(url)}
+
     def connection_for_project(self, project_id: str, *, required_capabilities: Iterable[str] | None = None) -> tuple[FlowConnection | None, dict[str, Any]]:
         paths, config = load_project(self.runtime, project_id)
         binding = config.settings.get("flow_binding") if isinstance(config.settings, dict) else None
+        expected = self._project_reference(config)
         current = self.get_current_connection()
         if isinstance(binding, dict):
-            if current is None or binding.get("connection_id") != current.connection_id or binding.get("connection_revision") != current.revision:
-                return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"STALE", "code":"FLOW_CONNECTION_STALE", "message":"This project is bound to an older Flow connection revision. Validate and update it before creating visuals."}
+            if current is None or binding.get("connection_id") != current.connection_id:
+                return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"STALE", "code":"FLOW_CONNECTION_STALE", "message":"Flow connection needs confirmation before this project can create media."}
+            if expected is not None:
+                if expected["project_identity"] != current.project_identity:
+                    return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"PROJECT_MISMATCH", "code":"FLOW_PROJECT_MISMATCH", "message":"Open the correct Flow project or explicitly rebind this Story Auto project.", "expected_project_identity": expected["project_identity"], "expected_project_url": expected["project_url"]}
+                return current, self.get_connection_status(required_capabilities=required_capabilities)
+            if binding.get("connection_revision") != current.revision:
+                return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"STALE", "code":"FLOW_CONNECTION_STALE", "message":"Flow connection needs confirmation before this project can create media."}
             return current, self.get_connection_status(required_capabilities=required_capabilities)
         legacy = config.settings.get("flow") if isinstance(config.settings, dict) else None
         if isinstance(legacy, dict) and (legacy.get("project_url") or legacy.get("project_identity")):
@@ -195,21 +212,26 @@ class FlowConnectionService:
             manifest = read_json(manifest_path)
             if isinstance(manifest, dict) and any(isinstance(item, dict) and item.get("attempts") for item in manifest.get("requests", [])):
                 return None, {"status":"STALE", "code":"FLOW_BINDING_MISSING_HISTORY_IMMUTABLE", "message":"This project has historical Flow attempts but no versioned connection binding. Historical provenance is preserved; reconcile before a new provider attempt.", "project_url":None, "project_identity":None, "connection_id":None, "connection_revision":None, "required_capabilities":_required(required_capabilities), "observed_capabilities":{}}
-        return (current, self.get_connection_status(required_capabilities=required_capabilities)) if current else (None, self.get_connection_status(required_capabilities=required_capabilities))
+        # A runtime connection is never an implicit project decision.  New
+        # projects snapshot it at creation; older unbound projects must use the
+        # explicit recovery/rebind surface before reaching a provider boundary.
+        return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"NOT_CONFIGURED",
+                      "code":"FLOW_PROJECT_BINDING_REQUIRED", "message":"Connect this Story Auto project to the intended Flow project before creating media."}
 
-    def bind_project(self, project_id: str, connection: FlowConnection | None = None) -> dict[str, int | str]:
+    def bind_project(self, project_id: str, connection: FlowConnection | None = None, *, explicit_owner_decision: bool = False) -> dict[str, int | str]:
         paths, config = load_project(self.runtime, project_id)
         connection = connection or self.get_current_connection()
         if connection is None or connection.validation_status != "CONNECTED":
             raise FlowConnectionError("FLOW_CONNECTION_NOT_VALIDATED")
         manifest_path = paths.artifact_path("output/generation_manifest.json")
-        if manifest_path.is_file():
+        if manifest_path.is_file() and not explicit_owner_decision:
             manifest = read_json(manifest_path)
             if isinstance(manifest, dict) and any(isinstance(item, dict) and item.get("attempts") for item in manifest.get("requests", [])):
                 raise FlowConnectionError("FLOW_REBIND_HISTORY_IMMUTABLE")
         settings = dict(config.settings)
         settings.pop("flow", None)  # legacy values were used only until this safe, pre-dispatch binding.
         settings["flow_binding"] = {"connection_id":connection.connection_id, "connection_revision":connection.revision}
+        settings["flow_project_binding"] = {"project_identity":connection.project_identity, "project_url":connection.project_url}
         updated = ProjectConfig(config.project_id, content_path=config.content_path, render_mode=config.render_mode, settings=settings, schema_version=config.schema_version)
         atomic_write_json(paths.project_file, updated.to_dict())
         return dict(settings["flow_binding"])

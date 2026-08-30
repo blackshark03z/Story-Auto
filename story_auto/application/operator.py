@@ -17,6 +17,7 @@ from story_auto.core.audio import parse_srt_bytes
 from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
 from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
+from story_auto.application.flow_product import product_flow_status, required_capabilities
 from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
@@ -236,7 +237,7 @@ class OperatorService:
     def __init__(self, runtime_root: Path | str):
         self.runtime=RuntimeLayout.from_root(runtime_root).ensure()
         self.flow_connections=FlowConnectionService(self.runtime)
-        self.production_queries=ProductionQueries(self.runtime)
+        self.production_queries=ProductionQueries(self.runtime, self.flow_connections)
         self.runtime_defaults=RuntimeDefaults(self.runtime, lambda voice_id: _creation_settings({}, voice_id))
 
     def list_projects(self) -> list[dict[str, Any]]:
@@ -275,7 +276,7 @@ class OperatorService:
                 "resolution":f"{render.get('width','Default')} × {render.get('height','Default')}",
             },
             "final_path":production["final_output"]["path"],
-            "flow_status":self.flow_connections.connection_for_project(project_id,required_capabilities=[])[1]["status"],
+            "flow":production.get("flow"),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -347,6 +348,7 @@ class OperatorService:
         connection=self.flow_connections.get_current_connection()
         if connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
             resolved_settings["flow_binding"]={"connection_id":connection.connection_id,"connection_revision":connection.revision}
+            resolved_settings["flow_project_binding"]={"project_identity":connection.project_identity,"project_url":connection.project_url}
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=effective_render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         if imported_audio is not None:
             try:
@@ -787,28 +789,72 @@ class OperatorService:
         return {"snapshot":self.snapshot(project_id),"planning":self.planning_review(project_id),"media":self.media_items(project_id)}
 
     def open_flow_sign_in(self, project_id: str) -> dict[str, str]:
-        connection,_=self.flow_connections.connection_for_project(project_id)
-        if connection is None: raise FlowConnectionError("FLOW_NOT_CONFIGURED")
-        launch_dedicated_session(self.flow_connections.runtime_for_connection(connection))
+        _paths, config = self._project(project_id)
+        reference = config.settings.get("flow_project_binding", {}) if isinstance(config.settings, dict) else {}
+        if isinstance(reference, dict) and isinstance(reference.get("project_url"), str) and isinstance(reference.get("project_identity"), str):
+            runtime = FlowRuntime(self.runtime.flow_profile, "http://127.0.0.1:9222", reference["project_url"], reference["project_identity"])
+        else:
+            connection,_=self.flow_connections.connection_for_project(project_id)
+            if connection is None: raise FlowConnectionError("FLOW_NOT_CONFIGURED")
+            runtime = self.flow_connections.runtime_for_connection(connection)
+        launch_dedicated_session(runtime)
         return {"status":"OPENED","message":"Complete Google sign-in in the Story Auto Flow window, then return and try again."}
+
+    def _flow_capabilities_for_project(self, project_id: str, request_ids: set[str] | None = None) -> list[str]:
+        paths, config = self._project(project_id)
+        media_types = []
+        requests = _safe_json(paths.artifact_path("output/generation_requests.json"), {"requests": []})
+        for request in requests.get("requests", []):
+            if request_ids is None or request.get("request_id") in request_ids:
+                media_types.append(request.get("media_type"))
+        return required_capabilities(config, media_types)
+
+    def flow_status(self, project_id: str) -> dict[str, Any]:
+        _paths, config = self._project(project_id)
+        production = self.production_query(project_id)
+        return product_flow_status(self.flow_connections, project_id, config,
+                                   auth_required=production.get("pipeline_status") == "AUTH_REQUIRED")
+
+    def prepare_flow_recovery(self, project_id: str) -> dict[str, Any]:
+        """Return the canonical next safe Flow recovery step; never dispatch media."""
+        return self.flow_status(project_id)
 
     def flow_connection_status(self, project_id: str | None = None) -> dict[str, Any]:
         if project_id:
-            _connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
-            return status
+            return self.flow_status(project_id)
         return self.flow_connections.get_connection_status(required_capabilities=["IMAGE"])
 
-    def validate_flow_connection(self, project_id: str, project_url: str) -> dict[str, Any]:
-        return self.flow_connections.validate_candidate(project_url,required_capabilities=["IMAGE"])
+    def validate_flow_connection(self, project_id: str, project_url: str | None = None) -> dict[str, Any]:
+        _paths, config = self._project(project_id)
+        reference = config.settings.get("flow_project_binding", {}) if isinstance(config.settings, dict) else {}
+        expected_url = reference.get("project_url") if isinstance(reference, dict) else None
+        target = project_url or expected_url
+        if not isinstance(target, str) or not target.strip():
+            raise FlowConnectionError("FLOW_NOT_CONFIGURED")
+        validation = self.flow_connections.validate_candidate(target, required_capabilities=self._flow_capabilities_for_project(project_id))
+        if validation["status"] == "CONNECTED":
+            connection = self.flow_connections.save_validated_candidate(validation)
+            return {**self.flow_status(project_id), "validated": True, "connection_id": connection.connection_id}
+        return {**product_flow_status(self.flow_connections, project_id, config), "validated": False}
 
-    def update_flow_connection(self, project_id: str, project_url: str) -> dict[str, Any]:
-        validation=self.validate_flow_connection(project_id,project_url)
+    def rebind_flow_project(self, project_id: str, *, explicit_owner_decision: bool) -> dict[str, Any]:
+        if explicit_owner_decision is not True:
+            raise FlowConnectionError("FLOW_REBIND_EXPLICIT_OWNER_DECISION_REQUIRED")
+        connection = self.flow_connections.get_current_connection()
+        if connection is None or connection.validation_status != "CONNECTED":
+            raise FlowConnectionError("FLOW_CONNECTION_NOT_VALIDATED")
+        binding = self.flow_connections.bind_project(project_id, connection, explicit_owner_decision=True)
+        return {**self.flow_status(project_id), "binding": binding}
+
+    def update_flow_connection(self, project_id: str, project_url: str, *, explicit_owner_decision: bool = False) -> dict[str, Any]:
+        validation=self.flow_connections.validate_candidate(project_url,required_capabilities=self._flow_capabilities_for_project(project_id))
         if validation["status"]!="CONNECTED":
             error=FlowConnectionError(validation["code"]); error.failure_class=validation["code"]
             raise error
         connection=self.flow_connections.save_validated_candidate(validation)
-        binding=self.flow_connections.bind_project(project_id,connection)
-        return {**validation,"connection_id":connection.connection_id,"connection_revision":connection.revision,"binding":binding}
+        if not explicit_owner_decision:
+            return {**self.flow_status(project_id),"connection_id":connection.connection_id,"rebind_required":True}
+        return self.rebind_flow_project(project_id, explicit_owner_decision=True)
 
     def update_runtime_flow_connection(self, project_url: str) -> dict[str, Any]:
         validation=self.flow_connections.validate_candidate(project_url,required_capabilities=["IMAGE"])
@@ -944,15 +990,8 @@ class OperatorService:
         _,config=self._project(project_id)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
         self.set_pause(project_id,False)
-        connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
-        if connection is None and status.get("code")=="FLOW_LEGACY_PROJECT_BINDING":
-            connection=self.flow_connections.get_current_connection()
-            if connection is not None: self.flow_connections.bind_project(project_id,connection)
-        elif connection is not None and not isinstance(config.settings.get("flow_binding"),dict):
-            # An unstarted pre-Goal54 project can safely adopt the one runtime
-            # connection before it reaches the provider boundary.
-            self.flow_connections.bind_project(project_id,connection)
-        connection,status=self.flow_connections.connection_for_project(project_id,required_capabilities=["IMAGE"])
+        connection,status=self.flow_connections.connection_for_project(
+            project_id, required_capabilities=self._flow_capabilities_for_project(project_id, request_ids))
         if connection is None or status.get("status")!="CONNECTED":
             error=FlowConnectionError(status.get("code","FLOW_NOT_CONFIGURED")); error.failure_class=status.get("code","FLOW_NOT_CONFIGURED")
             raise error
