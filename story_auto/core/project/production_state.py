@@ -17,7 +17,7 @@ from story_auto.core.project.execution import execution_mode, stage_policy
 from story_auto.core.project.quality_policy import AI_REVIEW, AUTO_ACCEPT, MANUAL_REVIEW, effective_qc_policy
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.1"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.2"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 
 
@@ -151,7 +151,10 @@ class ProductionStateReconciler:
         quality["status"] = quality_status
         stages["QUALITY"] = self._stage(quality_status, "RUN", quality["human_message"])
         stages["QUALITY"]["requires_owner_decision"] = quality["requires_owner_decision"]
-        final_present = present["output/final.mp4"]
+        # A planning failure invalidates all downstream artifacts.  A stale
+        # final.mp4 must never eclipse the durable fail-closed review state.
+        planning_invalidated = review.get("visual_planning", {}).get("status") == "NEEDS_REGENERATION" if isinstance(review, dict) else False
+        final_present = present["output/final.mp4"] and not planning_invalidated
         stages["RENDER"] = self._stage("COMPLETE" if final_present else ("BLOCKED" if policy["render"].action == "BLOCK" else "READY"), policy["render"].action, policy["render"].reason)
 
         blocker = None
