@@ -49,6 +49,22 @@ def _owner_shape_srt() -> bytes:
 
 
 class Goal53ImportReadinessTests(unittest.TestCase):
+    def test_readiness_rejects_any_srt_overrun_before_project_creation(self):
+        """A READY Audio+SRT pair must always be adoptable by the project boundary."""
+        late_srt = b"1\n00:00:00,000 --> 00:00:02,100\nLate cue.\n"
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            audio = _upload("narration.wav", _wav(2))
+            subtitles = _upload("timing.srt", late_srt)
+            readiness = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=subtitles)
+            self.assertEqual((readiness["status"], readiness["code"], readiness["timeline"]["direction"]),
+                             ("BLOCKED", "TIMELINE_MISMATCH", "SRT_AFTER_AUDIO"))
+            with self.assertRaisesRegex(OperatorServiceError, "TIMELINE_MISMATCH"):
+                app.create_project(project_id="prj_srt_overrun", render_mode="full_image",
+                                   settings={"execution": {"mode": "EXISTING_VOICE"}, "ui": {"input_source": "AUDIO_SRT"}},
+                                   imported_audio=audio, imported_srt=subtitles)
+            self.assertFalse((Path(root) / "projects" / "prj_srt_overrun").exists())
+
     def test_parser_normalizes_lf_crlf_mixed_and_empty_micro_cues(self):
         fixture = _owner_shape_srt()
         cues, _, stats = parse_srt_bytes(fixture)

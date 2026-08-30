@@ -37,7 +37,7 @@ class ProductionStateTests(unittest.TestCase):
             paths, _ = _project(root)
             state = ProductionStateReconciler().reconcile(paths, load_project(RuntimeLayout.from_root(root), paths.project_id)[1]).to_dict()
             self.assertEqual(state["project_id"], paths.project_id)
-            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.0")
+            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.1")
             self.assertTrue((paths.root / "output" / "production_state.json").is_file())
             self.assertNotIn("generation_manifest", str(state["stages"]))
 

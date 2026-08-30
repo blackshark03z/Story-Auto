@@ -75,10 +75,11 @@ class OperatorUiTests(unittest.TestCase):
         self.assertIn("if (wizard.creating) return;",script)
         self.assertIn("wizard.creating = true",script)
         self.assertIn("state.project = created.project_id",success)
-        self.assertIn("state.snapshot = created",success)
+        self.assertIn("state.snapshot = await api(`/api/projects/${encodeURIComponent(created.project_id)}/workspace`)",success)
         self.assertIn("renderProject()",success)
         self.assertLess(success.index("state.project = created.project_id"),success.index("closeWizard()"))
         self.assertNotIn("await loadProjects()",success)
+        self.assertIn("void runAction('run_to_final'",success)
         self.assertIn("wizard.creating = false; showWizardError",script)
 
     def test_new_video_browser_creation_transitions_while_home_refresh_is_slow(self):
@@ -92,6 +93,8 @@ class OperatorUiTests(unittest.TestCase):
             service=server.RequestHandlerClass.service
             original_list_projects=service.list_projects
             slow_home_refresh=False
+            coordinator_runs=[]
+            service.run_to_final=lambda project_id: coordinator_runs.append(project_id) or {"outcome":"SAFETY_BLOCKED"}
             def delayed_list_projects():
                 if slow_home_refresh: time.sleep(2)
                 return original_list_projects()
@@ -103,6 +106,8 @@ class OperatorUiTests(unittest.TestCase):
                     page=browser.new_page()
                     page.goto(f"http://127.0.0.1:{server.server_address[1]}")
                     page.get_by_role("button",name="New video").first.click()
+                    page.get_by_role("radio",name="Create from Story / Content").check()
+                    page.get_by_role("button",name="Continue",exact=True).click()
                     page.get_by_label("Content",exact=True).fill("# UI response\n\n## Narration\n\nA disposable browser regression test.")
                     page.get_by_role("button",name="Continue",exact=True).click()
                     page.get_by_role("button",name="Continue",exact=True).click()
@@ -110,6 +115,8 @@ class OperatorUiTests(unittest.TestCase):
                     page.get_by_role("button",name="Create video",exact=True).click()
                     self.assertIsNone(page.get_by_role("heading",name="UI response",exact=True).first.wait_for(timeout=750))
                     self.assertEqual(len(list((Path(root)/"projects").glob("prj_*"))),1)
+                    page.wait_for_timeout(100)
+                    self.assertEqual(len(coordinator_runs),1)
                     browser.close()
             finally:
                 server.shutdown();server.server_close();thread.join(5)

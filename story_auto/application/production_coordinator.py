@@ -28,6 +28,26 @@ class ProductionCoordinator:
             if state["pipeline_status"] == "COMPLETE":
                 return self._result(project_id, run_id, "FINAL_VIDEO_COMPLETE", invoked, state)
             if state["pipeline_status"] in {"OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
+                # Automatic quality is an explicit request to continue through
+                # validated planning.  There are two canonical plan approvals:
+                # the story plan, then the compiled shot/media plan.  Keep every
+                # other owner boundary intact, especially Manual review.
+                automatic_plan = (
+                    state["pipeline_status"] == "OWNER_DECISION_REQUIRED"
+                    and state.get("active_stage") == "PLAN"
+                    and state.get("quality", {}).get("policy") == "AUTO_ACCEPT"
+                )
+                if automatic_plan:
+                    evidence = {item.get("path"): item.get("present") for item in state.get("evidence", [])}
+                    approval = "approve_shots" if evidence.get("output/generation_requests.json") else "approve_plan"
+                    try:
+                        self.operations[approval](project_id)
+                        invoked.append(approval)
+                        continue
+                    except Exception as error:
+                        code = getattr(error, "failure_class", type(error).__name__)
+                        return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
+                                            error=str(error), reason_code=code)
                 return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
             flow = state.get("flow", {})
             if state.get("active_stage") == "VISUALS" and flow.get("required") and flow.get("status") != "CONNECTED":

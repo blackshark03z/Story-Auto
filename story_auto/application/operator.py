@@ -582,6 +582,8 @@ class OperatorService:
         return ProductionCommands(self.production_query, {
             "prepare": lambda project_id: self.start_or_resume(project_id),
             "plan": lambda project_id: self.plan_visuals(project_id),
+            "approve_plan": lambda project_id: self.approve_planning(project_id),
+            "approve_shots": lambda project_id: self.approve_planning(project_id, shots=True),
             "visuals": lambda project_id: self._run_visuals_for_production(project_id),
             "quality": lambda project_id: self.apply_qc_policy(project_id),
             "render": lambda project_id: self.render(project_id),

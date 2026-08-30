@@ -103,7 +103,7 @@ class Goal52DraftLifecycleTests(unittest.TestCase):
                     page.locator("#existingSrt").set_input_files({"name": "timing-b.srt", "mimeType": "text/plain", "buffer": second_srt})
                     page.wait_for_timeout(1800)
                     self.assertIn("timing-b.srt", page.locator("#wizardContent").inner_text())
-                    self.assertTrue(page.locator('input[name="inputSource"][value="AUDIO_SRT"]').is_checked())
+                    self.assertIn("Source: Audio + SRT", page.locator("#wizardContent").inner_text())
                     browser.close()
             finally:
                 server.shutdown(); server.server_close(); thread.join(5)

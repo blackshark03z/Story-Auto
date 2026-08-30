@@ -117,6 +117,34 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
         coordinator = ProductionCoordinator(lambda _: manual, {"quality": lambda _: self.fail("manual policy must not run automatically")})
         self.assertEqual(coordinator.run_until("prj_manual")["outcome"], "OWNER_DECISION_REQUIRED")
 
+    def test_coordinator_auto_approves_validated_plans_only_for_automatic_policy(self):
+        automatic = iter([
+            {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
+             "quality": {"policy": "AUTO_ACCEPT"},
+             "evidence": [{"path": "output/generation_requests.json", "present": False}]},
+            {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
+             "quality": {"policy": "AUTO_ACCEPT"},
+             "evidence": [{"path": "output/generation_requests.json", "present": True}]},
+            {"pipeline_status": "COMPLETE", "active_stage": "RENDER", "stages": {}},
+        ])
+        calls = []
+        coordinator = ProductionCoordinator(
+            lambda _: next(automatic),
+            {"approve_plan": lambda _: calls.append("approve_plan"),
+             "approve_shots": lambda _: calls.append("approve_shots")},
+        )
+        result = coordinator.run_until("prj_auto_plan")
+        self.assertEqual((result["outcome"], result["invoked_stages"], calls),
+                         ("FINAL_VIDEO_COMPLETE", ["approve_plan", "approve_shots"], ["approve_plan", "approve_shots"]))
+
+    def test_compiled_requests_without_shot_approval_remain_a_plan_blocker(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            _fixture(app, "prj_unapproved_compiled", "AUTO_ACCEPT", 1)
+            state = app.production_query("prj_unapproved_compiled")
+            self.assertEqual((state["pipeline_status"], state["active_stage"], state["stages"]["PLAN"]["status"]),
+                             ("OWNER_DECISION_REQUIRED", "PLAN", "BLOCKED"))
+
     def test_operator_coordinator_auto_accepts_then_continues_to_render_without_provider_dispatch(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root); paths = _fixture(app, "prj_auto_coordinator", "AUTO_ACCEPT", 2)

@@ -17,7 +17,7 @@ from story_auto.core.project.execution import execution_mode, stage_policy
 from story_auto.core.project.quality_policy import AI_REVIEW, AUTO_ACCEPT, MANUAL_REVIEW, effective_qc_policy
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.0"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.1"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 
 
@@ -123,8 +123,13 @@ class ProductionStateReconciler:
         timing_execution = policy["audio"].action
         stages["TIMING"] = self._stage("COMPLETE" if present["output/alignment.json"] else ("BLOCKED" if timing_execution == "BLOCK" else "READY"), timing_execution, policy["audio"].reason)
         plan_approved = isinstance(review, dict) and review.get("plan_approval", {}).get("status") == "APPROVED"
-        plan_ready = present["output/continuity_bible.json"]
-        stages["PLAN"] = self._stage("COMPLETE" if present["output/generation_requests.json"] else ("BLOCKED" if plan_ready and not plan_approved else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
+        # Compiled requests are not authority to submit provider work.  Their
+        # own shot/media approval is the second canonical planning boundary.
+        # Treat an unapproved request file as a blocked plan so the coordinator
+        # can apply AUTO_ACCEPT or preserve the Manual owner decision.
+        plan_ready = present["output/continuity_bible.json"] or present["output/generation_requests.json"]
+        plan_complete = present["output/generation_requests.json"] and plan_approved
+        stages["PLAN"] = self._stage("COMPLETE" if plan_complete else ("BLOCKED" if plan_ready else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
         visual_status = "COMPLETE" if generated_for_quality else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
         stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
         stages["VISUALS"]["completed_items"] = sum(1 for status in statuses if status in {"QC_PENDING", "SUCCEEDED"})

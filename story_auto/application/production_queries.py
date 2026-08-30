@@ -30,7 +30,7 @@ class ProductionQueries:
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
             required = {"pipeline_status", "active_stage", "stages", "quality", "next_action", "final_output"}
-            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.0"
+            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.1"
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint):
                 return self._with_flow_summary(project_id, config, existing)
         except Exception:

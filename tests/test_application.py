@@ -194,6 +194,7 @@ class OperatorApplicationTests(unittest.TestCase):
             missing=KokoroReadiness("VOICE_NOT_FOUND","The selected Kokoro voice is missing","KOKORO_VOICE_NOT_FOUND")
             with patch("story_auto.application.operator.available_voices",return_value=("bm_george",)), \
                  patch("story_auto.application.operator.KokoroLocalProvider.readiness",return_value=missing):
+                app.update_runtime_defaults({"narrator":{"voice_id":"am_michael"}})
                 create_project(RuntimeLayout.from_root(root),ProjectConfig("prj_stale_default",settings=settings),"# Old\n\n## Narration\n\nA stale narrator.\n")
                 overview=app.settings_overview()
                 self.assertFalse(overview["defaults"]["narrator_available"])
@@ -235,13 +236,13 @@ class OperatorApplicationTests(unittest.TestCase):
             }
             atomic_write_json(paths.project_file,project)
             defaults=app.settings_overview()["creation_defaults"]
-            self.assertEqual(set(defaults),{"llm","tts"})
+            self.assertEqual(set(defaults),{"llm","tts","qc_policy","ui","full_image","render"})
             self.assertNotIn("flow",defaults)
             self.assertNotIn("token",str(defaults).lower())
             self.assertNotIn("overrides",str(defaults).lower())
             self.assertNotIn("bgm_path",str(defaults).lower())
 
-    def test_paid_provider_settings_readiness_is_unchanged(self):
+    def test_paid_project_provider_does_not_change_runtime_default_readiness(self):
         for provider in ("elevenlabs","typecast"):
             with self.subTest(provider=provider), tempfile.TemporaryDirectory() as root:
                 app=OperatorService(root)
@@ -249,9 +250,11 @@ class OperatorApplicationTests(unittest.TestCase):
                                    settings={"tts":{"provider":provider,"allow_cross_provider_fallback":False,
                                                     provider:{"voice_id":"voice_fixture"}}})
                 with patch("story_auto.application.operator.KokoroLocalProvider.readiness",
-                           side_effect=AssertionError("Kokoro probe must not run")):
-                    voice=app.settings_overview()["providers"][0]
+                           return_value=KokoroReadiness("READY","Kokoro is ready",None)):
+                    overview=app.settings_overview()
+                    voice=overview["providers"][0]
                 self.assertEqual(voice["status"],"Ready")
+                self.assertEqual(overview["creation_defaults"]["tts"]["provider"],"kokoro_local")
 
     def test_scene_progress_and_review_keep_request_purposes_distinct(self):
         with tempfile.TemporaryDirectory() as root:

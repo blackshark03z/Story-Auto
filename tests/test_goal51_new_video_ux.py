@@ -66,6 +66,6 @@ class Goal51NewVideoUxTests(unittest.TestCase):
 
     def test_source_first_markup_has_required_choices_and_execution_summary(self):
         script = (Path(__file__).parents[1] / "story_auto/ui/static/app.js").read_text(encoding="utf-8")
-        for value in ("STORY_CONTENT", "EXISTING_AUDIO", "AUDIO_SRT", "INPUT SOURCE", "Execution summary", "TTS: SKIP", "Timing: ${source === 'AUDIO_SRT'", "Render Again"):
+        for value in ("STORY_CONTENT", "EXISTING_AUDIO", "AUDIO_SRT", "INPUT SOURCE", "Execution summary", "TTS: SKIP", "Timing: ${wizard.source === 'AUDIO_SRT'", "Render Again"):
             self.assertIn(value, script)
-        self.assertIn("const labels = ['Input source','Format & output','Review & Create']", script)
+        self.assertIn("const labels = ['Source','Input','Output & quality','Review']", script)
