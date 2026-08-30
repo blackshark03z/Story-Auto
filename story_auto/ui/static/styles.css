@@ -109,6 +109,8 @@ h1, h2, h3, p { overflow-wrap: anywhere; }
 .stage-list li { min-width: 0; padding-top: 10px; border-top: 3px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 650; }
 .stage-list li.is-done { border-color: var(--success); color: var(--success); }
 .stage-list li.is-current { border-color: var(--primary); color: var(--ink); }
+.stage-list li.is-blocked { border-color: var(--attention); color: var(--attention); }
+.stage-list li small { display: block; margin-top: 3px; font-weight: 700; }
 
 .attention-card { margin-top: 20px; padding: 22px; border: 1px solid #edcdb6; border-left: 5px solid var(--attention); border-radius: var(--radius); background: var(--attention-soft); display: grid; grid-template-columns: 1fr auto; gap: 14px 24px; align-items: center; }
 .attention-card h2 { margin: 0 0 4px; font-size: 18px; }
@@ -177,7 +179,7 @@ dialog::backdrop { background: rgba(15,28,24,.55); }
 .dialog-shell { display: flex; min-height: min(670px, calc(100vh - 42px)); flex-direction: column; background: var(--surface); }
 .dialog-head { padding: 24px 28px 17px; display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
 .dialog-head h2 { margin: 0; font-size: 25px; letter-spacing: -.03em; }
-.stepper { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin: 0; padding: 0 28px 17px; list-style: none; }
+.stepper { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin: 0; padding: 0 28px 17px; list-style: none; }
 .stepper li { padding-top: 9px; border-top: 3px solid var(--line); color: var(--muted); font-size: 11px; font-weight: 700; }
 .stepper li.is-current { border-color: var(--primary); color: var(--ink); }
 .stepper li.is-done { border-color: var(--success); color: var(--success); }

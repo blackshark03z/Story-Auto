@@ -127,6 +127,8 @@ class ProductionStateReconciler:
         stages["PLAN"] = self._stage("COMPLETE" if present["output/generation_requests.json"] else ("BLOCKED" if plan_ready and not plan_approved else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
         visual_status = "COMPLETE" if generated_for_quality else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
         stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
+        stages["VISUALS"]["completed_items"] = sum(1 for status in statuses if status in {"QC_PENDING", "SUCCEEDED"})
+        stages["VISUALS"]["total_items"] = len(request_ids)
         if not request_ids:
             quality_status = "NOT_STARTED"
         elif selected:
@@ -152,21 +154,22 @@ class ProductionStateReconciler:
             blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
         elif stages["PLAN"]["status"] == "BLOCKED":
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
+        elif any(status == "AUTH_REQUIRED" for status in statuses):
+            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["VISUALS"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", "Visual generation needs reconciliation or provider recovery before another request is sent.", "Review recovery", True, False, "VISUALS")
         elif stages["QUALITY"]["status"] == "BLOCKED" and qc_policy == MANUAL_REVIEW:
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Generated visuals need the existing quality decision before rendering.", "Review visuals", True, True, "QUALITY")
         elif stages["QUALITY"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", quality["human_message"] or "Quality cannot continue safely.", quality["next_action"] or "Review recovery", True, False, "QUALITY")
-        elif any(status == "AUTH_REQUIRED" for status in statuses):
-            blocker = self._blocker("AUTH_RECOVERY_REQUIRED", "Google Flow sign-in is required before visual creation can continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["TIMING"]["status"] == "BLOCKED":
             blocker = self._blocker("SAFETY_BLOCKED", stages["TIMING"]["human_message"] or "Narration audio is required.", "Review project", True, False, "TIMING")
 
         if final_present:
             pipeline_status, active_stage, next_action = "COMPLETE", "RENDER", {"action": "open_final", "label": "Open final video"}
         elif blocker:
-            pipeline_status, active_stage, next_action = blocker["reason_code"], blocker.get("stage") or self._first_incomplete(stages), {"action": blocker["next_action"].lower().replace(" ", "_"), "label": blocker["next_action"]}
+            canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
+            pipeline_status, active_stage, next_action = blocker["reason_code"], blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
         else:
             active_stage = self._first_incomplete(stages)
             pipeline_status, next_action = "READY", {"action": "run_to_final", "label": "Create video" if active_stage == "SOURCE" else "Continue production"}

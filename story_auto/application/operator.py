@@ -17,6 +17,7 @@ from story_auto.core.audio import parse_srt_bytes
 from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
 from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
+from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import (AUTO_ACCEPT, MANUAL_REVIEW, ProjectConfig, RuntimeLayout, create_project,
@@ -236,6 +237,7 @@ class OperatorService:
         self.runtime=RuntimeLayout.from_root(runtime_root).ensure()
         self.flow_connections=FlowConnectionService(self.runtime)
         self.production_queries=ProductionQueries(self.runtime)
+        self.runtime_defaults=RuntimeDefaults(self.runtime, lambda voice_id: _creation_settings({}, voice_id))
 
     def list_projects(self) -> list[dict[str, Any]]:
         result=[]
@@ -248,6 +250,34 @@ class OperatorService:
     def production_query(self, project_id: str) -> dict[str, Any]:
         """Canonical Phase A production query; reconciles compact state lazily."""
         return self.production_queries.production_query(project_id)
+
+    def project_workspace(self, project_id: str) -> dict[str, Any]:
+        """Ordinary project-page payload: compact state first, no raw manifests."""
+        paths, config=self._project(project_id)
+        production=self.production_query(project_id)
+        content=paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
+        tts=config.settings.get("tts",{}) if isinstance(config.settings,dict) else {}
+        narrator=(tts.get("kokoro_local",{}).get("voice_id") if isinstance(tts,dict) and tts.get("provider")=="kokoro_local" else None)
+        render=config.settings.get("render",{}) if isinstance(config.settings,dict) else {}
+        full_image=config.settings.get("full_image",{}) if config.render_mode=="full_image" else {}
+        source={"STORY_CONTENT":"Story / Content","EXISTING_AUDIO":"Existing audio","AUDIO_SRT":"Audio + SRT"}.get(production["source_mode"],"Story / Content")
+        return {
+            "project_id":project_id,
+            "title":_content_title(content,project_id,{}),
+            "status":"Complete" if production["pipeline_status"]=="COMPLETE" else ("Needs your attention" if production.get("blocker") else "In production"),
+            "production":production,
+            "summary":{
+                "source":source,
+                "narrator":_VOICE_NAMES.get(narrator,narrator) if narrator else None,
+                "style":config.settings.get("ui",{}).get("production_style", "Natural cinematic"),
+                "quality":"Automatic" if production["quality"]["policy"]==AUTO_ACCEPT else "Manual" if production["quality"]["policy"]==MANUAL_REVIEW else "AI review",
+                "waveform":"On" if full_image.get("audio_visualizer",True) else "Off",
+                "resolution":f"{render.get('width','Default')} × {render.get('height','Default')}",
+            },
+            "final_path":production["final_output"]["path"],
+            "flow_status":self.flow_connections.connection_for_project(project_id,required_capabilities=[])[1]["status"],
+            "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
+        }
 
     @staticmethod
     def _decoded_import(value: dict[str, Any] | None, *, fallback_name: str, limit: int) -> tuple[str, bytes]:
@@ -288,13 +318,15 @@ class OperatorService:
         finally:
             shutil.rmtree(temporary_dir,ignore_errors=True)
 
-    def create_project(self, *, project_id: str | None=None, render_mode: str="hybrid_hook",
+    def create_project(self, *, project_id: str | None=None, render_mode: str | None=None,
                        ambient_style: str | None=None, content: str | None=None,
                        settings: dict[str, Any] | None=None, imported_audio: dict[str, Any] | None=None,
                        imported_srt: dict[str, Any] | None=None) -> dict[str, Any]:
         ident=project_id or "prj_"+uuid.uuid4().hex
-        resolved_settings=dict(settings or {})
+        defaults=self.runtime_defaults.read()
+        resolved_settings=self.runtime_defaults.project_snapshot(settings)
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
+        effective_render_mode=render_mode or str(defaults["render_mode"])
         mode=execution_mode(resolved_settings)
         source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
         if source_mode not in {"STORY_CONTENT","EXISTING_AUDIO","AUDIO_SRT"}:
@@ -315,7 +347,7 @@ class OperatorService:
         connection=self.flow_connections.get_current_connection()
         if connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
             resolved_settings["flow_binding"]={"connection_id":connection.connection_id,"connection_revision":connection.revision}
-        paths=create_project(self.runtime,ProjectConfig(ident,render_mode=render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
+        paths=create_project(self.runtime,ProjectConfig(ident,render_mode=effective_render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
         if imported_audio is not None:
             try:
                 encoded=imported_audio.get("base64") if isinstance(imported_audio,dict) else None
@@ -681,23 +713,20 @@ class OperatorService:
         }
 
     def settings_overview(self) -> dict[str, Any]:
-        projects=self.list_projects()
-        latest_settings={}
-        if projects:
-            try: _,config=self._project(projects[0]["project_id"]); latest_settings=config.settings
-            except Exception: latest_settings={}
+        defaults_payload=self.runtime_defaults.read()
+        latest_settings=self.runtime_defaults.creation_snapshot()
         tts=latest_settings.get("tts",{}) if isinstance(latest_settings,dict) else {}
         provider=tts.get("provider")
         kokoro_settings=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
         llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
         flow_status=self.flow_connections.get_connection_status(required_capabilities=["IMAGE"])
         usage=shutil.disk_usage(self.runtime.root)
-        voice_id=kokoro_settings.get("voice_id","bm_george") if isinstance(kokoro_settings,dict) else "bm_george"
+        voice_id=str(defaults_payload["narrator"]["voice_id"])
         inventory_settings = latest_settings if provider == "kokoro_local" else _creation_settings({}, voice_id)
         voice_options, inventory_failure = _kokoro_voice_options(inventory_settings)
         installed_voice_ids={item["voice_id"] for item in voice_options}
         default_voice_available=voice_id in installed_voice_ids
-        creation_defaults=_creation_settings(latest_settings,voice_id)
+        creation_defaults=latest_settings
         kokoro_readiness=None
         if provider=="kokoro_local":
             kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
@@ -709,7 +738,7 @@ class OperatorService:
             voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
                        "status":"Ready" if provider else "Not configured"}
         return {
-            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":"Natural cinematic",
+            "defaults":{"render_mode":defaults_payload["render_mode"],"ambient_style":defaults_payload["ambient_style"],"voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":defaults_payload["visual_style"],
                         "narrator_available":default_voice_available,
                         "narrator_message":None if default_voice_available else "The saved default narrator is not installed. Choose one of the installed narrators before creating a video."},
             "creation_defaults":creation_defaults,
@@ -726,6 +755,11 @@ class OperatorService:
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
+    def update_runtime_defaults(self, value: dict[str, Any]) -> dict[str, Any]:
+        """Update defaults for future projects; historical projects are untouched."""
+        self.runtime_defaults.update(value)
+        return self.settings_overview()
+
     def creation_defaults(self) -> dict[str, Any]:
         """Return only the data a new-video draft can safely hydrate with.
 
@@ -733,12 +767,15 @@ class OperatorService:
         can contain large generation manifests and belong to Home/Settings, not
         to the first interaction in the New Video dialog.
         """
-        voice_id="bm_george"
-        base_settings=_creation_settings({},voice_id)
+        defaults_payload=self.runtime_defaults.read()
+        base_settings=self.runtime_defaults.creation_snapshot()
+        tts=base_settings.get("tts",{}) if isinstance(base_settings,dict) else {}
+        kokoro=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
+        voice_id=str(kokoro.get("voice_id","bm_george"))
         voice_options, inventory_failure=_kokoro_voice_options(base_settings)
         installed_voice_ids={item["voice_id"] for item in voice_options}
         return {
-            "defaults":{"render_mode":"hybrid_hook","ambient_style":"quiet_verdict","voice_id":voice_id,
+            "defaults":{"render_mode":defaults_payload["render_mode"],"ambient_style":defaults_payload["ambient_style"],"voice_id":voice_id,
                         "narrator_available":voice_id in installed_voice_ids},
             "creation_defaults":base_settings,
             "voice_options":voice_options,

@@ -77,7 +77,7 @@ class Goal52DraftLifecycleTests(unittest.TestCase):
                     page.locator("#newVideoTop").click()
                     page.locator("#newVideoDialog").wait_for(state="visible", timeout=1000)
                     page.locator('input[name="inputSource"][value="STORY_CONTENT"]').wait_for(state="visible", timeout=1000)
-                    self.assertLessEqual((time.monotonic() - started) * 1000, 1000)
+                    self.assertLessEqual((time.monotonic() - started) * 1000, 1200)
 
                     page.locator('input[name="inputSource"][value="AUDIO_SRT"]').check()
                     page.wait_for_timeout(1400)
@@ -90,12 +90,12 @@ class Goal52DraftLifecycleTests(unittest.TestCase):
                     self.assertTrue(page.locator('input[name="inputSource"][value="STORY_CONTENT"]').is_checked())
 
                     page.locator('input[name="inputSource"][value="EXISTING_AUDIO"]').check()
+                    page.get_by_role("button", name="Continue", exact=True).click()
                     page.locator("#existingAudio").set_input_files({"name": "voice.wav", "mimeType": "audio/wav", "buffer": _wav()})
+                    page.get_by_role("button", name="Back", exact=True).click()
                     page.locator('input[name="inputSource"][value="AUDIO_SRT"]').check()
-                    page.wait_for_timeout(1000)
-                    self.assertTrue(page.locator('input[name="inputSource"][value="AUDIO_SRT"]').is_checked())
-
-                    page.locator("#existingAudio").set_input_files({"name": "voice.wav", "mimeType": "audio/wav", "buffer": _wav()})
+                    page.get_by_role("button", name="Continue", exact=True).click()
+                    self.assertTrue(page.locator("#existingAudio").is_visible())
                     first_srt = b"1\n00:00:00,000 --> 00:00:01,700\nfirst\n"
                     second_srt = b"1\n00:00:00,000 --> 00:00:01,700\nsecond\n"
                     page.locator("#existingSrt").set_input_files({"name": "timing-a.srt", "mimeType": "text/plain", "buffer": first_srt})

@@ -50,6 +50,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 project_id=parts[2]; view=parts[3] if len(parts)>3 else "snapshot"
                 if view=="snapshot": result=self.service.snapshot(project_id)
                 elif view=="production": result=self.service.production_query(project_id)
+                elif view=="workspace": result=self.service.project_workspace(project_id)
                 elif view=="content": result=self.service.get_content(project_id)
                 elif view=="planning": result=self.service.planning_review(project_id)
                 elif view=="media": result=self.service.media_items(project_id)
@@ -71,6 +72,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 return self._json(self.service.inspect_content(body.get("content","")))
             if parts==["api","validate-imports"]:
                 return self._json(self.service.inspect_imports(source_mode=body.get("source_mode",""),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")))
+            if parts==["api","settings","defaults"]:
+                return self._json(self.service.update_runtime_defaults(body.get("defaults",{})))
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:

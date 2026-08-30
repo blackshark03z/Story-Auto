@@ -13,9 +13,35 @@ class ProductionQueries:
         self.reconciler = ProductionStateReconciler()
 
     def production_query(self, project_id: str) -> dict:
+        """Return the compact state when its artifact signatures are still current.
+
+        This is the ordinary UI path.  It deliberately avoids opening a large
+        generation manifest merely to paint a project page; reconciliation only
+        runs when the compact projection is absent or stale.
+        """
         from story_auto.core.project import load_project
+        from story_auto.core.artifacts import read_json
+        import hashlib
+        import json
         paths, config = load_project(self.runtime, project_id)
+        try:
+            existing=read_json(self.reconciler.state_path(paths))
+            evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
+            fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+            required = {"pipeline_status", "active_stage", "stages", "quality", "next_action", "final_output"}
+            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.0"
+                    and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint):
+                return existing
+        except Exception:
+            pass
         return self.reconciler.reconcile(paths, config).to_dict()
+
+    @staticmethod
+    def _signature(paths, relative: str) -> dict:
+        path=paths.artifact_path(relative)
+        if not path.is_file(): return {"path":relative,"present":False}
+        stat=path.stat()
+        return {"path":relative,"present":True,"bytes":stat.st_size,"mtime_ns":stat.st_mtime_ns}
 
     def record_run(self, project_id: str, run_id: str, status: str) -> None:
         """Persist only the current bounded run marker; evidence remains canonical."""
