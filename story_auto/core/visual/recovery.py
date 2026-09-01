@@ -80,6 +80,7 @@ class ReasonCode(str, Enum):
     RATE_LIMIT_BACKOFF_REQUIRED = "RATE_LIMIT_BACKOFF_REQUIRED"
     POLICY_PROMPT_REPAIR_REQUIRED = "POLICY_PROMPT_REPAIR_REQUIRED"
     AUTOMATIC_PROMPT_REMEDIATION_ELIGIBLE = "AUTOMATIC_PROMPT_REMEDIATION_ELIGIBLE"
+    PROMPT_REVISION_DISPATCH_ALLOWED = "PROMPT_REVISION_DISPATCH_ALLOWED"
     OWNER_PROMPT_APPROVAL_REQUIRED = "OWNER_PROMPT_APPROVAL_REQUIRED"
     AUTH_REQUIRED = "AUTH_REQUIRED"
     CREDIT_BLOCKED = "CREDIT_BLOCKED"
@@ -89,6 +90,7 @@ class ReasonCode(str, Enum):
     CREATIVE_RETRY_ALLOWED = "CREATIVE_RETRY_ALLOWED"
     CREATIVE_RETRY_BUDGET_EXHAUSTED = "CREATIVE_RETRY_BUDGET_EXHAUSTED"
     OWNER_AUTHORIZATION_REQUIRED = "OWNER_AUTHORIZATION_REQUIRED"
+    EVIDENCE_CONTRADICTION = "EVIDENCE_CONTRADICTION"
 
 
 @dataclass(frozen=True)
@@ -137,6 +139,7 @@ class RecoveryInput:
     provider_progress_active: bool = False
     provider_output_exists: bool = False
     prompt_remediation_non_material: bool = False
+    prompt_revision_ready: bool = False
     prompt_revision_authorized: bool = False
     semantic_remediation_material: bool = False
     owner_authorized: bool = False
@@ -198,6 +201,13 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
         return _decision(RecoveryAction.RECONCILE_FIRST, ReasonCode.DISPATCH_AMBIGUOUS, budgets,
                          reconciliation_required=True)
 
+    # Normalized evidence is authoritative only when its independent dimensions
+    # describe one possible attempt state.  Contradictions fail closed before a
+    # favorable family-specific branch can consider any budget or authorization.
+    if _has_evidence_contradiction(input):
+        return _decision(RecoveryAction.RECONCILE_FIRST, ReasonCode.EVIDENCE_CONTRADICTION, budgets,
+                         reconciliation_required=True)
+
     if (input.provider_progress_active
             or input.attempt_outcome in {AttemptOutcome.DISPATCHING, AttemptOutcome.GENERATING}
             or input.failure_family is FailureFamily.PROVIDER_IN_PROGRESS):
@@ -229,6 +239,26 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
         if not _has_confirmed_terminal_authority(input):
             return _decision(RecoveryAction.RECONCILE_FIRST, ReasonCode.TERMINAL_EVIDENCE_INSUFFICIENT, budgets,
                              reconciliation_required=True)
+        if input.prompt_revision_ready:
+            if input.semantic_remediation_material:
+                if not input.prompt_revision_authorized:
+                    return _decision(RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED, budgets,
+                                     prompt_revision_required=True, owner_decision_required=True)
+                if budgets.provider_attempts_remaining == 0:
+                    return _decision(RecoveryAction.NO_RETRY, ReasonCode.LIFETIME_ATTEMPT_LIMIT_REACHED, budgets,
+                                     owner_decision_required=True)
+                return _dispatch(RecoveryAction.AUTO_RETRY, ReasonCode.PROMPT_REVISION_DISPATCH_ALLOWED, budgets)
+            if (input.prompt_remediation_non_material
+                    and budgets.prompt_remediations_remaining > 0):
+                if budgets.provider_attempts_remaining == 0:
+                    return _decision(RecoveryAction.NO_RETRY, ReasonCode.LIFETIME_ATTEMPT_LIMIT_REACHED, budgets,
+                                     owner_decision_required=True)
+                return _dispatch(RecoveryAction.AUTO_RETRY, ReasonCode.PROMPT_REVISION_DISPATCH_ALLOWED, budgets)
+            if input.prompt_remediation_non_material:
+                return _decision(RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED, budgets,
+                                 prompt_revision_required=True, owner_decision_required=True)
+            return _decision(RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED, budgets,
+                             prompt_revision_required=True, owner_decision_required=True)
         if input.semantic_remediation_material:
             return _decision(RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED, budgets,
                              prompt_revision_required=True, owner_decision_required=True)
@@ -264,7 +294,7 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
     if input.failure_family is FailureFamily.PROVIDER_RATE_LIMIT:
         if not input.rate_limit_backoff_ready:
             return _decision(RecoveryAction.WAIT_AND_RETRY, ReasonCode.RATE_LIMIT_BACKOFF_REQUIRED, budgets)
-        if not _has_terminal_or_no_dispatch_authority(input):
+        if not (input.exact_attribution_confirmed and _has_terminal_or_no_dispatch_authority(input)):
             return _decision(RecoveryAction.RECONCILE_FIRST, ReasonCode.TERMINAL_EVIDENCE_INSUFFICIENT, budgets,
                              reconciliation_required=True)
         if budgets.transient_redispatches_remaining == 0:
@@ -288,7 +318,8 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
         if budgets.creative_corrections_remaining == 0:
             return _decision(RecoveryAction.NO_RETRY, ReasonCode.CREATIVE_RETRY_BUDGET_EXHAUSTED, budgets,
                              owner_decision_required=True)
-        if not _has_confirmed_terminal_authority(input):
+        if (not input.provider_output_exists
+                or not _has_resolved_terminal_authority(input)):
             return _decision(RecoveryAction.RECONCILE_FIRST, ReasonCode.TERMINAL_EVIDENCE_INSUFFICIENT, budgets,
                              reconciliation_required=True)
         return _dispatch(RecoveryAction.CREATIVE_REGENERATE, ReasonCode.CREATIVE_RETRY_ALLOWED, budgets)
@@ -333,6 +364,38 @@ def _has_resolved_terminal_authority(input: RecoveryInput) -> bool:
 
 def _has_terminal_or_no_dispatch_authority(input: RecoveryInput) -> bool:
     return _has_proven_no_dispatch(input) or _has_confirmed_terminal_authority(input)
+
+
+def _has_evidence_contradiction(input: RecoveryInput) -> bool:
+    """Return whether normalized evidence cannot describe one attempt state."""
+    if input.attempt_outcome is AttemptOutcome.NOT_STARTED and (
+            input.terminal_evidence_confirmed
+            or input.provider_progress_active
+            or input.provider_output_exists):
+        return True
+    if input.attempt_outcome in {AttemptOutcome.DISPATCHING, AttemptOutcome.GENERATING} and input.terminal_evidence_confirmed:
+        return True
+    if input.provider_progress_active and input.terminal_evidence_confirmed:
+        return True
+    if (input.canonical_no_dispatch_proof
+            and input.dispatch_certainty is not DispatchCertainty.NOT_DISPATCHED):
+        return True
+    if (input.terminal_evidence_confirmed
+            and input.dispatch_certainty is not DispatchCertainty.TERMINAL_CONFIRMED):
+        return True
+    if (input.dispatch_certainty is DispatchCertainty.TERMINAL_CONFIRMED
+            and not input.terminal_evidence_confirmed
+            and input.failure_family in {
+                FailureFamily.PROVIDER_TERMINAL_TRANSIENT,
+                FailureFamily.PROVIDER_POLICY_BLOCK,
+                FailureFamily.PROVIDER_RATE_LIMIT,
+                FailureFamily.QC_CREATIVE_REJECTION,
+                FailureFamily.MANUAL_REGENERATE,
+            }):
+        return True
+    if input.transient_redispatch_count > 0 and input.provider_attempt_count == 0:
+        return True
+    return input.creative_correction_count > input.provider_attempt_count
 
 
 def _dispatch(action: RecoveryAction, reason: ReasonCode, budgets: RecoveryBudgets) -> RecoveryDecision:
