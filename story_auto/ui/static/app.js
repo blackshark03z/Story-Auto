@@ -335,6 +335,7 @@ function friendlyError(error) {
     FLOW_CONNECTION_STALE: ['Flow connection needs validation','The project points to an older Flow connection. Open the project and validate or update it before creating visuals.','open_project','Open project'],
     FLOW_CAPABILITY_UNAVAILABLE: ['Flow image capability is unavailable','Validate the configured Flow project and confirm that IMAGE generation is available before creating visuals.','open_project','Open project'],
     FLOW_CAPABILITY_UNAVAILABLE: ['Visual setup needs attention','Review the Flow project and production mode in Settings before trying again.','settings','Open Settings'],
+    STAGE_NO_PROGRESS: ['Production did not advance','Story Auto stopped before repeating the same stage. Refresh the project to review the saved recovery state before trying again.','open_project','Refresh project'],
     TTS_PROVIDER_CREDITS_REQUIRED: ["Voice generation can't continue",'The selected paid voice provider does not have enough credits. Choose another voice or update the provider account.','settings','Open settings'],
     CREDENTIAL_MISSING: ['AI quality is not configured','Add the provider credential in the secure Story Auto configuration, then try again.','settings','Open settings'],
     GEMINI_CREDENTIAL_MISSING: ['AI quality is not configured','Add a Gemini credential in the secure Story Auto configuration, then try again.','settings','Open settings'],

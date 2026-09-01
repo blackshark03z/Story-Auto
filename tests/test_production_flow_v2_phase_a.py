@@ -95,6 +95,17 @@ class ProductionCoordinatorTests(unittest.TestCase):
         self.assertEqual(coordinator.run_until("prj_phasea")["outcome"], "FINAL_VIDEO_COMPLETE")
         self.assertEqual(calls, ["render"])
 
+    def test_stage_without_meaningful_state_change_stops_after_one_operation(self):
+        state = _state("VISUALS")
+        calls: list[str] = []
+        coordinator = ProductionCoordinator(
+            lambda _: state,
+            {"visuals": lambda _: calls.append("visuals")},
+        )
+        result = coordinator.run_until("prj_no_progress")
+        self.assertEqual((result["outcome"], result["reason_code"], result["stage"], result["operation"], calls),
+                         ("SAFETY_BLOCKED", "STAGE_NO_PROGRESS", "VISUALS", "visuals", ["visuals"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1835,7 +1835,25 @@ def _find_duplicate_selection(paths, manifest: dict, request: dict, metadata: di
             return other
     return None
 
-def _runnable(request, entries): return all(entries.get(dep, {}).get("status") == "SUCCEEDED" for dep in request.get("depends_on", []))
+def _runnable(request, entries, paths=None):
+    """Allow only a validated selected dependency to seed another request.
+
+    Production post-processing puts a confirmed selected asset into
+    ``QC_PENDING`` while its creative review remains open.  That review state
+    must not prevent a dependent shot from using the exact selected reference;
+    it also must not make a raw, missing, or ambiguous provider result runnable.
+    """
+    for dependency in request.get("depends_on", []):
+        entry = entries.get(dependency)
+        if not isinstance(entry, dict):
+            return False
+        if entry.get("status") not in {"SUCCEEDED", "QC_PENDING"}:
+            return False
+        if not isinstance(entry.get("selected_asset"), dict):
+            return False
+        if paths is not None and not _valid_selected(paths, entry):
+            return False
+    return True
 
 
 def reconcile_local_assets(runtime_root: Path | str, project_id: str) -> set[str]:
@@ -6015,7 +6033,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 # An unproven prior attempt cannot reach executor.run again.
                 blocked_request_id = request["request_id"]
                 break
-            if not _runnable(request, entries): continue
+            if not _runnable(request, entries, paths): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             # This check is deliberately after dependency resolution and
             # immediately before attempt creation: it validates the exact

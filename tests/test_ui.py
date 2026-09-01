@@ -171,6 +171,12 @@ class OperatorUiTests(unittest.TestCase):
                     self.assertIsNone(page.get_by_text("Google Flow is not open",exact=True).wait_for(timeout=1500))
                     self.assertEqual(page.get_by_text("Project updated.",exact=True).count(),0)
 
+                    scenario["result"]={"outcome":"SAFETY_BLOCKED","reason_code":"STAGE_NO_PROGRESS"}
+                    reload_project()
+                    continue_production()
+                    self.assertIsNone(page.get_by_text("Production did not advance",exact=True).wait_for(timeout=1500))
+                    self.assertIsNone(page.get_by_role("button",name="Refresh project",exact=True).wait_for(timeout=1500))
+
                     scenario["result"]={"outcome":"AUTH_REQUIRED","flow":{"status":"AUTH_REQUIRED","human_message":"Sign in to Flow to continue","next_action":{"action":"open_flow_sign_in","label":"Sign in to Flow"}}}
                     reload_project()
                     continue_production()

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from story_auto.application import OperatorService
 from story_auto.application.production_coordinator import ProductionCoordinator
@@ -29,6 +29,20 @@ def planned_project(app: OperatorService, project_id: str = "prj_phase_d"):
     atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [
         {"request_id": f"req_{index:02d}", "fingerprint": f"fixture-{index:02d}", "purpose": "SHOT", "shot_id": f"shot_{index:02d}", "media_type": "IMAGE", "prompt": "fixture", "depends_on": [], "provider": "google_flow"}
         for index in range(1, 43)
+    ]})
+    return paths
+
+
+def reference_then_shot_project(app: OperatorService, project_id: str = "prj_reference_then_shot"):
+    app.flow_connections.save_validated_candidate(validated())
+    app.create_project(project_id=project_id, render_mode="full_image", content="# Reference dependency\n\n## Narration\n\nFixture.")
+    paths, _config = app._project(project_id)
+    for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json"):
+        atomic_write_json(paths.artifact_path(f"output/{name}"), {"fixture": name})
+    atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval": {"status": "APPROVED"}})
+    atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [
+        {"request_id": "ref_01", "fingerprint": "reference-01", "purpose": "REFERENCE", "entity_id": "character_01", "media_type": "IMAGE", "prompt": "reference", "depends_on": [], "provider": "google_flow", "execution_tier": "STANDARD_PRODUCTION"},
+        {"request_id": "shot_01", "fingerprint": "shot-01", "purpose": "SHOT", "shot_id": "shot_01", "media_type": "IMAGE", "prompt": "shot", "depends_on": ["ref_01"], "provider": "google_flow", "execution_tier": "STANDARD_PRODUCTION"},
     ]})
     return paths
 
@@ -88,6 +102,42 @@ class PhaseDFlowProductTests(unittest.TestCase):
             app.create_project(project_id="prj_render_only", render_mode="full_image", settings={"execution": {"mode": "RENDER_ONLY"}}, content="# R\n\n## Narration\n\nFixture.")
             state = app.production_query("prj_render_only")
             self.assertFalse(state["flow"]["required"])
+
+    def test_qc_pending_reference_unblocks_its_dependent_shot_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            paths = reference_then_shot_project(app)
+            dispatched = []
+            def generate(request, _refs, target):
+                dispatched.append(request["request_id"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                image = Image.new("RGB", (1280, 720), "green")
+                if request["request_id"] == "shot_01":
+                    ImageDraw.Draw(image).rectangle((100, 100, 600, 500), fill="navy")
+                image.save(target, "PNG")
+                return target
+            executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), generate)
+            first = app.generate(paths.project_id, executor=executor)
+            second = app.generate(paths.project_id, executor=executor)
+            state = app.production_query(paths.project_id)
+            self.assertEqual((first["new_submissions"], dispatched, second["new_submissions"]),
+                             (2, ["ref_01", "shot_01"], 0))
+            self.assertEqual((state["stages"]["VISUALS"]["status"], state["stages"]["VISUALS"]["completed_items"]),
+                             ("COMPLETE", 1))
+
+    def test_ambiguous_attempt_remains_a_no_dispatch_barrier(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            paths = reference_then_shot_project(app)
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
+                "schema_version": "story-auto-generation-manifest/1.0.0", "project_id": paths.project_id,
+                "requests": [{"request_id": "ref_01", "request_identity_sha256": "reference-01", "status": "AMBIGUOUS",
+                              "attempts": [{"attempt": 1, "status": "SUBMITTED", "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}],
+            })
+            dispatched = []
+            executor = FlowExecutor(FlowCapabilities(True, True, True, True, True, True), lambda *_: dispatched.append("dispatch"))
+            result = app.generate(paths.project_id, executor=executor)
+            self.assertEqual((result["blocked"], result["new_submissions"], dispatched), (True, 0, []))
 
     def test_auth_recovery_reuses_confirmed_assets_and_only_dispatches_next_request(self):
         with tempfile.TemporaryDirectory() as root:
