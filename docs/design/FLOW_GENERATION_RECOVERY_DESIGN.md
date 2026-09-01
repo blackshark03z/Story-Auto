@@ -18,6 +18,8 @@ Current request status is a compatibility projection during migration, not retry
 
 Frozen invariant: no new Flow activation without an explicit evidence-based safe_to_dispatch=true decision bound to the exact logical request, prompt revision, Flow connection revision, and attempt cause.
 
+R3 authority amendment: request status never grants dispatch authority. Only a fresh RecoveryDecision with safe_to_dispatch=true may do so, and the executor must revalidate its relevant request, attempt, connection, queue, and evidence bindings immediately before it crosses the provider boundary.
+
 ## 2. Current architecture findings
 
 providers/flow/service.py owns the generation manifest, append-only attempts, local image/video repair, serial Flow queue barrier, reconciliation, and execution. It persists provider_execution_state=NOT_STARTED, then PROVIDER_BOUNDARY_ENTERED immediately before the provider-capable call. canonical_no_dispatch_proof accepts only durable pre-boundary evidence; _provider_generation_retry_authorized permits an initial attempt or that proof.
@@ -49,7 +51,7 @@ PROVIDER_VISIBLE_TERMINAL_FAILURE is a failure class, not a request status. Its 
 
 1. FAILED_RETRYABLE conflates provider, acquisition, validation, postprocess, attribution, creative-QC, and operator actions.
 2. Production state maps PENDING, NOT_DISPATCHED, and FAILED_RETRYABLE to VISUALS=RUNNING; it does not explicitly project GENERATING. Retryability is presented as activity.
-3. FAILURE_RECOVERY_V1.md and frozen product design say maximum automatic attempts is 2; Flow code defaults flow.max_attempts to 12. This is a material policy conflict.
+3. FAILURE_RECOVERY_V1.md and frozen product design say maximum automatic attempts is 2; Flow code defaults flow.max_attempts to 12. R3 resolves this: 2 is the maximum automatic transient redispatch budget, while 12 is an absolute lifetime provider-attempt stop-loss. The source must be aligned in a later implementation.
 4. The terminal-card parser stores no raw visible failure text, locale, terminal timestamp, complete card lineage, or provider job identity. It cannot safely classify terminal failure as transient, policy, credit, or auth.
 5. The generic retry utility has no manifest safety, causal lineage, recovery budget, or UI role. It cannot be recovery authority.
 6. Continue Production has a useful no-progress stop but no explicit recovery-plan/action result; it invokes a broad VISUALS operation.
@@ -107,6 +109,8 @@ RecoveryDecision is preferred over RetryDecision because it also handles reconci
 
 Inputs are immutable request/attempt history; request and prompt lineage; connection provenance; provider observations; local asset, validation, and QC evidence; clock; and configured budgets. Incomplete, contradictory, stale-connection, or unverified input yields RECONCILE_FIRST or OWNER_ACTION, never a guess.
 
+No model or LLM result can authorize redispatch. A decision that authorizes dispatch is valid only for its bound evidence revision; it expires when the request, prompt revision, connection revision, queue position, attempt record, or required dependency evidence changes.
+
 ## 7. Safe redispatch rules
 
 safe_to_dispatch=true additionally requires canonical current logical request, valid dependencies, bound current prompt revision and Flow connection revision, no earlier queue barrier, and unexhausted budget.
@@ -114,21 +118,21 @@ safe_to_dispatch=true additionally requires canonical current logical request, v
 | Case | Additional authorization |
 | --- | --- |
 | Proven pre-dispatch failure | Latest attempt has canonical no-dispatch proof; cause PRE_DISPATCH_RETRY |
-| Confirmed transient terminal | Exact bound terminal identity, confirmed classification, resolved output ownership, transient budget |
-| Rate limit | Durable rate-limit evidence and elapsed bounded retry-after |
+| Confirmed transient terminal | Exact bound terminal identity, confirmed classification, resolved output ownership, and transient redispatch budget |
+| Rate limit | Exact attribution plus NOT_DISPATCHED or positively terminal rejection, no ambiguity, elapsed bounded retry-after, and shared transient redispatch budget |
 | Policy block | Approved/revalidated prompt revision and remediation budget |
 | Creative regeneration | Explicit owner action or preapproved policy; new replacement epoch |
 | Manual regenerate | Explicit owner cost acknowledgement; distinct replacement lineage |
 
-Redispatch is categorically forbidden for unresolved ambiguity, active generation, output-acquisition failure, local postprocess/derivative failure with recoverable raw bytes, unknown terminal cause, stale connection, auth/credit blockers, and exhausted budget. FAILED_RETRYABLE alone is never a rule.
+Redispatch is categorically forbidden for unresolved ambiguity, active generation, output-acquisition failure, local postprocess/derivative failure with recoverable raw bytes, unknown terminal cause, stale connection, auth/credit blockers, and exhausted budget. FAILED_RETRYABLE alone is never a rule. A rate-limit decision additionally carries bounded wait-count, total elapsed-recovery-time, and redispatch-count limits; exhaustion is NEEDS_ATTENTION / RATE_LIMIT_BUDGET_EXHAUSTED with safe_to_dispatch=false.
 
 ## 8. Prompt remediation model
 
 A policy recovery is a new prompt revision, not transport retry or policy evasion. Keep immutable original_prompt, effective prompt hash, remediation record, and prompt_revision_id; never edit an old attempt.
 
-Automatic provider-only transformations are allowed only when they are deterministic and preserve a pre-approved semantic contract: locked entities, location/time, required action, visual anchor, continuity references, media type, and safety constraints. Examples can include removing unsupported non-story formatting or substituting neutral provider-supported camera wording.
+Automatic provider-only transformations are allowed only when they are deterministic and preserve a pre-approved structured semantic contract. The required slots are subject/identity, action, event, setting, time/context, relationship, emotional intent, and visual objective, together with continuity references, media type, and safety constraints. Examples can include removing unsupported non-story formatting or substituting neutral provider-supported camera wording.
 
-Any change to identity, setting, action/outcome, relationship, intended emotion, visual anchor, required media, or continuity reference is PROMPT_SEMANTIC_REPAIR_REQUIRED and requires Owner approval. Policy text is diagnostic only. A revised prompt gets new fingerprint plus PROMPT_REPAIR child/replacement lineage.
+Any material change to a semantic slot, required media, or continuity reference is PROMPT_SEMANTIC_REPAIR_REQUIRED and requires Owner approval. Policy text is diagnostic evidence, not sole authority: policy classification requires a positively terminal provider state, exact attempt/card attribution, and high-confidence mapping to the POLICY family. Unknown terminal reason is PROVIDER_TERMINAL_UNKNOWN with safe_to_dispatch=false and NEEDS_ATTENTION. Approval binds the exact prompt revision and becomes invalid if that prompt changes. A revised prompt gets new fingerprint plus PROMPT_REPAIR child/replacement lineage.
 
 ## 9. Retry budgets
 
@@ -136,22 +140,23 @@ Separate, persisted counters; proposed defaults pending approval:
 
 | Budget | Default | Provider attempt? |
 | --- | ---: | --- |
-| Initial + automatic transient per prompt revision | 2 total | Yes |
+| Initial provider attempt | 1; not a retry | Yes |
+| Automatic transient redispatches per logical visual request | 2; rate-limit redispatch shares this budget | Yes |
 | Reconciliation polls per unresolved attempt | 6 bounded observations | No |
-| Rate-limit waits | 2; provider retry-after wins within max wait | Yes when dispatched |
-| Provider-only prompt remediation revisions | 1 | Yes |
+| Rate-limit waits | 2; bounded exponential backoff with jitter, provider retry-after wins within max wait | No |
+| Automatic provider-only prompt remediation revisions per originating policy failure | 1 | Yes for the new revision |
 | Local acquisition retries | 3 | No |
 | Validation/postprocess retries | 3 each | No |
 | Creative correction epochs | Retain existing 3, owner-governed | Yes, replacement only |
-| Absolute lifetime provider attempts per logical lineage | 6 | Yes |
+| Absolute lifetime provider attempts per logical lineage | 12; includes owner manual regeneration | Yes |
 
-These values replace the unqualified default-12 ceiling after approval. Exhaustion creates deterministic NO_RETRY / RECOVERY_READY with the named exhausted budget, never an unexplained permanent state.
+Twelve is not the automatic retry budget. It is the absolute provider-attempt lifetime stop-loss. Reconciliation/polling, acquisition/download, validation, and postprocess work consume no provider attempt. Exhaustion creates deterministic NO_RETRY / NEEDS_ATTENTION with the named exhausted budget, never an unexplained permanent state.
 
 ## 10. Attempt lineage
 
-Every provider attempt records attempt_id, logical_visual_id, cause (INITIAL, PRE_DISPATCH_RETRY, TRANSIENT_RETRY, PROMPT_REPAIR, CREATIVE_REGENERATION, MANUAL_REGENERATE, RECOVERY_REPLAY), parent attempt where relevant, triggering decision/failure, prompt revision/hash, request fingerprint, connection provenance/revision, dispatch proof, job/card/asset identity, policy version, budget before/after, and owner authorization where required.
+Every provider attempt records attempt_id, logical_visual_id, cause (INITIAL, PRE_DISPATCH_RETRY, TRANSIENT_RETRY, PROMPT_REPAIR, CREATIVE_REGENERATION, MANUAL_REGENERATE, RECOVERY_REPLAY), parent attempt where relevant, triggering decision/failure, prompt revision/hash, request fingerprint, connection provenance/revision, dispatch proof, job/card/asset identity, policy version, budget before/after, and owner authorization where required. Owner authorization persists its exact request ID and prompt revision ID.
 
-RECOVERY_REPLAY is a distinct approved replacement, never a hidden retry. The parent remains immutable and visibly charged as potentially dispatched. Asset lineage binds raw bytes, derivative, selected asset, and QC records to the originating attempt.
+RECOVERY_REPLAY is a distinct approved replacement, never a hidden retry. The parent remains immutable and visibly charged as potentially dispatched. Manual regeneration after prior success is append-only and must not destroy or deselect the currently valid asset until its replacement is accepted. Asset lineage binds raw bytes, derivative, selected asset, and QC records to the originating attempt.
 
 ## 11. Local recovery rules
 
@@ -167,24 +172,28 @@ RECOVERY_REPLAY is a distinct approved replacement, never a hidden retry. The pa
 
 Raw bytes and completed assets are not deleted/replaced to make recovery look clean. Reacquisition does not consume generation budget.
 
+### Failure evidence retention
+
+Immutable causal evidence is retained for dispatch certainty, terminal classification, retry authorization/denial, and reconciliation. Bounded poll noise may be retained only up to its evidence and elapsed-time limit. A canonical terminal-evidence record includes request and attempt identity, provider/project connection revision, provider card/job identity, timestamp, structural provider state, raw provider-visible message, locale, classification, classification-rule version, attribution evidence, dispatch certainty, and evidence digest. A screenshot is optional diagnostic evidence, never mandatory canonical authority.
+
 ## 12. ProductionState semantics
 
 ProductionState remains a derived compact read model.
 
 | Product state | Definition | UI |
 | --- | --- | --- |
-| RUNNING | Live coordinator action or positively active provider attempt | Working, poll |
+| RUNNING | A confirmed existing attempt is actively progressing | Working, poll |
 | RECOVERING | Bounded reconciliation/acquisition/validation/postprocess executing | Recovering with item/action |
-| RECOVERY_READY | Safe action exists but is not executing | Ready to continue |
-| NEEDS_ATTENTION | Owner, semantic, auth, credit, or manual evidence required | One next action |
-| BLOCKED | Safety/dependency/ambiguity/UI-drift/unknown/exhausted budget | States no provider call |
-| COMPLETE | Required assets accepted and downstream completed | Complete |
+| RECOVERY_READY | Safe automatic recovery exists but no operation is active | Ready to continue |
+| NEEDS_ATTENTION | Owner/operator decision is required | One next action |
+| BLOCKED | Environment/provider prerequisite blocks progress | States no provider call |
+| COMPLETE | All required visual obligations are satisfied | Complete |
 
 Remove the current FAILED_RETRYABLE -> RUNNING projection and add explicit GENERATING handling. Client-side Working exists only while its actual action is in flight.
 
 ## 13. Continue Production semantics
 
-Continue Production means reconcile durable reality; execute all currently safe automatic actions in dependency order; stop at the first safety or Owner boundary. It never reruns VISUALS from scratch.
+Continue Production means: single-flight boundary; reread durable evidence; reconcile; issue a fresh RecoveryDecision; execute safe provider-free recovery; resume confirmed active work; perform only explicitly authorized provider dispatch; reproject state; then stop at the first safety or Owner boundary. It never reruns VISUALS from scratch.
 
 Accepted assets remain byte/hash stable. The earliest unresolved Flow barrier is reconciled; local-only recovery precedes any generation; independent later requests run only when queue/dependency rules permit; final render remains blocked while required media is unresolved. Keep the current no-progress fingerprint, but return the last RecoveryDecision rather than only STAGE_NO_PROGRESS.
 
@@ -194,13 +203,13 @@ Evolve the existing coordinator to call a narrow recovery-aware VISUALS operatio
 
 Use ordinary labels: Creating visuals, Checking existing Flow result, Repairing downloaded asset, Ready to continue, and Action needed. Diagnostics holds IDs, hashes, classifier evidence, and policy version.
 
-Retain one active UI action. Duplicate clicks join/read the current durable run/recovery result; they do not start a second dispatch. Polling is only for a known in-flight operation and ends with its response. A ready or blocked recovery must render promptly and never remain Working because something is retryable.
+Retain one active UI action. Duplicate clicks join/read the current durable run/recovery result; they do not start a second dispatch. Polling is only for a known in-flight operation and ends with its response. A ready or blocked recovery must render promptly and never remain Working because something is retryable. Required visual media may not silently skip to final render.
 
 ## 15. Concurrency and crash recovery
 
-Retain project lock, serial queue barrier, atomic writes, and durable pre-boundary marker. Add an operation lease/run ID bound to the decision so clients can observe one operation but cannot execute two dispatches. Hold the global dedicated Flow-profile lock for browser reconciliation and dispatch.
+Retain project lock, serial queue barrier, atomic writes, and durable pre-boundary marker. Add a mandatory backend single-flight/operation lease bound to the decision; the frontend runToken is insufficient. Concurrent callers can observe or join the current action but cannot create duplicate dispatches. Hold the global dedicated Flow-profile lock for browser reconciliation and dispatch.
 
-After restart, recompute from manifest/evidence. NOT_STARTED before the boundary may become proven no-dispatch; post-boundary state is DISPATCH_UNCERTAIN until reconciliation. A crash after output before persistence performs same-attempt reconciliation, never Generate. Changed card order is irrelevant: stored baseline/identity, not recency, controls attribution. Intentional same-prompt regeneration requires explicit Owner cause and fresh lineage.
+Immediately before provider dispatch, the backend verifies the decision is still current, its request/attempt/connection evidence still matches, and no other dispatch crossed the boundary. A second caller resolves as NOOP, already-active, or conflict, never dispatch. After restart, recompute from manifest/evidence. NOT_STARTED before the boundary may become proven no-dispatch; post-boundary state is DISPATCH_UNCERTAIN until reconciliation. A crash after output before persistence performs same-attempt reconciliation, never Generate. Changed card order is irrelevant: stored baseline/identity, not recency, controls attribution. Intentional same-prompt regeneration requires explicit Owner cause and fresh lineage.
 
 ## 16. Build OS boundary
 
@@ -221,7 +230,7 @@ All cases use fake/offline Flow fixtures and temporary runtimes. Delta A is prov
 | 5 | Bound asset, download fails | Reacquire; no; 0 | QC after recovery | Acquisition != generation |
 | 6 | Raw valid, postprocess fails | Reprocess; no; 0 | Local record appended | Local != provider failure |
 | 7 | Selected corrupt, raw valid | Reprocess; no; 0 | Selected hash repaired/QC | Reuse raw |
-| 8 | Rate limit + retry-after | Wait then dispatch; +1 | Recovery Ready before deadline | Bounded backoff |
+| 8 | Rate limit with exact attribution and retry-after | Bounded exponential backoff with jitter; dispatch only after fresh decision; +1 | Recovery Ready before deadline; NEEDS_ATTENTION / RATE_LIMIT_BUDGET_EXHAUSTED when any wait/time/transient budget is exhausted | Shared transient budget |
 | 9 | Credit exhausted | Owner action; no; 0 | Needs Attention | No automatic spend |
 | 10 | Auth expires | Owner action; no; 0 | Sign-in/revalidate action | Account repair separate |
 | 11 | UI boundary unidentifiable | Owner action; no; 0 | Blocked diagnostics | Fail closed |
@@ -229,7 +238,7 @@ All cases use fake/offline Flow fixtures and temporary runtimes. Delta A is prov
 | 13 | Policy block + safe transform | Prompt repair then dispatch; +1 | Both prompt revisions retained | No semantic drift |
 | 14 | Transform changes story meaning | Owner action; no; 0 | Semantic repair state | Owner owns semantics |
 | 15 | Creative QC rejection | Owner replacement; +1 only approved | Parent retained/child current | Not transport retry |
-| 16 | Continue twice | One joined action; Delta A <= 1 | Same result visible | Single-flight |
+| 16 | Two concurrent Continue callers at the dispatch boundary | One backend lease holder may dispatch; second is NOOP/already-active/conflict; Delta A <= 1 | Same durable result visible; pre-dispatch decision is revalidated | Backend single-flight |
 | 17 | Crash after boundary | Reconcile; no; 0 | Restart recovery state | Durable boundary |
 | 18 | Crash after output before write | Same-attempt reconcile; no; 0 | Original attempt owns asset | No duplicate cost |
 | 19 | Restart unresolved | Same rebuilt decision; no | Correct recovery/block | Restart safe |
@@ -240,6 +249,8 @@ All cases use fake/offline Flow fixtures and temporary runtimes. Delta A is prov
 | 24 | Owner regenerates success | Replacement; +1 | Old history preserved | Explicit intent |
 
 Every fixture asserts decision object, safe_to_dispatch, adapter call log, manifest deltas, rebuilt production state, UI outcome, and zero real provider calls. Include restart fixtures that reload only durable artifacts.
+
+The preserved live fixture req_c25fc3d16b0d3a621267 remains an explicit no-blind-dispatch acceptance fixture: GENERATING / SUBMITTED with the provider boundary entered and dispatch_confirmed=false. It is read-only evidence for the ambiguous-dispatch scenarios; this design and its future fault injection must not reconcile, supersede, cancel, or mutate it.
 
 ## 18. Future implementation impact map
 
@@ -253,7 +264,7 @@ Put the pure decision module beside the Flow service or in a provider-neutral ge
 
 ## 19. Migration and backward compatibility
 
-Read legacy manifests without ordinary-query rewrite. Missing dimensions are UNKNOWN; existing canonical_no_dispatch_proof remains the only compatibility route to safe retry. A controlled recovery write appends a versioned observation rather than normalizing historical fields.
+Read legacy manifests without ordinary-query rewrite. Missing dimensions are UNKNOWN; existing canonical_no_dispatch_proof remains the only compatibility route to safe retry. A controlled recovery write appends a versioned observation rather than normalizing historical fields. Existing owner/operator decision surfaces are extended with exact request/prompt-revision binding; no parallel workflow system is introduced.
 
 Rebuild old ProductionState as BLOCKED/Needs Attention for unknown attempts, not RUNNING. Preserve current validated replacement transactions. Introduce budget settings explicitly; do not silently count historic max_attempts=12 against the new policy.
 
@@ -265,13 +276,11 @@ Rebuild old ProductionState as BLOCKED/Needs Attention for unknown attempts, not
 - No Build OS lifecycle reconstruction or dual-ledger migration.
 - No stage-wide retry, unbounded polling, or automatic cost recovery after ambiguous dispatch.
 
-## 21. Open Tech Lead / Owner decisions
+## 21. R3 decisions and open blockers
 
-1. Approve the proposed budgets, especially automatic total 2 and lifetime stop-loss 6, resolving the current default-12 conflict.
-2. Approve owner authorization/audit UX for semantic repairs, creative replacements, and manual regeneration.
-3. Decide whether any bound Flow terminal failure can be automatically classified transient and which evidence/classifier versions qualify. Until then use PROVIDER_TERMINAL_UNKNOWN.
-4. Approve retention/redaction for raw visible failure text, locale, and sanitized screenshot/evidence hashes.
-5. Decide whether rate-limit retry is automatic after bounded wait or requires a new Continue click.
+All five previously open Tech Lead/Owner decisions are CLOSED by this R3 amendment: the automatic transient budget is two redispatches (not the initial attempt), the absolute provider-attempt lifetime stop-loss is 12, owner authorization binds exact request/prompt revision, unqualified terminal failures remain PROVIDER_TERMINAL_UNKNOWN, terminal evidence retention is frozen, and rate-limit retry is bounded automatic recovery under the shared transient budget.
+
+There are no new design blockers. Implementation remains blocked only on the required final Tech Lead approval, not on an unresolved architecture decision.
 
 ## Design validation basis
 
