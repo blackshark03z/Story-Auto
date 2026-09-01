@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
@@ -120,6 +121,89 @@ class OperatorUiTests(unittest.TestCase):
                     browser.close()
             finally:
                 server.shutdown();server.server_close();thread.join(5)
+
+    def test_production_action_outcomes_are_visible_without_provider_dispatch(self):
+        """A 200 response from the coordinator must retain its operator meaning."""
+        chrome=Path(os.environ.get("PROGRAMFILES(X86)",r"C:\\Program Files (x86)"))/"Google/Chrome/Application/chrome.exe"
+        if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the focused UI regression")
+        from playwright.sync_api import sync_playwright
+        project_id="prj_action_outcomes"
+        stages={name:{"status":"COMPLETE" if name in {"SOURCE","TIMING","PLAN"} else "READY"} for name in ("SOURCE","TIMING","PLAN","VISUALS","QUALITY","RENDER")}
+        stages["VISUALS"]={"status":"READY","completed_items":0,"total_items":7}
+        ready={
+            "project_id":project_id,"title":"Action outcomes","status":"Ready","final_path":None,"can_render_again":False,
+            "summary":{"source":"Audio + SRT","style":"Ambient Story","quality":"Automatic","waveform":"On","resolution":"1920 × 1080"},
+            "production":{"pipeline_status":"READY","active_stage":"VISUALS","stages":stages,"blocker":None,
+                          "next_action":{"action":"run_to_final","label":"Continue production"},
+                          "flow":{"required":True,"status":"CONNECTED","human_message":"Flow connected"}},
+        }
+        complete=deepcopy(ready); complete["status"]="Complete"; complete["final_path"]="output/final.mp4"
+        complete["production"].update({"pipeline_status":"COMPLETE","active_stage":"RENDER","next_action":{"action":"open_final","label":"Open final video"}})
+        with tempfile.TemporaryDirectory() as root:
+            server=create_server(root,port=0); service=server.RequestHandlerClass.service
+            service.create_project(project_id=project_id,render_mode="ambient_story",ambient_style="quiet_verdict",content="# Action outcomes\n\n## Narration\n\nDisposable UI fixture.")
+            scenario={"workspace":ready,"result":{"outcome":"SAFETY_BLOCKED","reason_code":"FLOW_CDP_UNAVAILABLE","error":"Flow browser session is unavailable"},"workspace_calls":0,"run_calls":0,"provider_dispatches":0,"delay":0}
+            def workspace(_project_id):
+                scenario["workspace_calls"]+=1
+                return deepcopy(scenario["workspace"])
+            def run(_project_id):
+                scenario["run_calls"]+=1
+                if scenario["delay"]: time.sleep(scenario["delay"])
+                return deepcopy(scenario["result"])
+            def generate(*_args,**_kwargs):
+                scenario["provider_dispatches"]+=1
+                raise AssertionError("result rendering must not dispatch media")
+            service.project_workspace=workspace; service.run_to_final=run; service.generate=generate
+            thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
+            try:
+                with sync_playwright() as playwright:
+                    browser=playwright.chromium.launch(headless=True,executable_path=str(chrome))
+                    page=browser.new_page(); page.goto(f"http://127.0.0.1:{server.server_address[1]}")
+                    page.get_by_role("button",name="View project",exact=True).click()
+                    def continue_production():
+                        page.get_by_role("button",name="Continue production",exact=True).first.click()
+                    def reload_project():
+                        page.reload()
+                        page.get_by_role("button",name="View project",exact=True).click()
+
+                    continue_production()
+                    self.assertIsNone(page.get_by_text("Production stopped safely",exact=True).wait_for(timeout=1500))
+                    self.assertIsNone(page.get_by_text("Google Flow is not open",exact=True).wait_for(timeout=1500))
+                    self.assertEqual(page.get_by_text("Project updated.",exact=True).count(),0)
+
+                    scenario["result"]={"outcome":"AUTH_REQUIRED","flow":{"status":"AUTH_REQUIRED","human_message":"Sign in to Flow to continue","next_action":{"action":"open_flow_sign_in","label":"Sign in to Flow"}}}
+                    reload_project()
+                    continue_production()
+                    self.assertIsNone(page.get_by_role("button",name="Sign in to Flow",exact=True).wait_for(timeout=1500))
+
+                    scenario["result"]={"outcome":"OWNER_DECISION_REQUIRED","production":{"blocker":{"human_message":"Review and approve the production plan before visuals are created.","next_action":"Review plan"},"next_action":{"action":"review_plan","label":"Review plan"}}}
+                    reload_project()
+                    continue_production()
+                    self.assertIsNone(page.get_by_role("button",name="Review plan",exact=True).wait_for(timeout=1500))
+
+                    running=deepcopy(ready); running["production"]["stages"]["VISUALS"]={"status":"RUNNING","completed_items":1,"total_items":7}
+                    scenario["workspace"]=running; scenario["result"]={"outcome":"PRODUCTION_PROGRESS"}
+                    reload_project()
+                    continue_production()
+                    self.assertIsNone(page.get_by_text("Production is continuing.",exact=True).wait_for(timeout=1500))
+                    self.assertIsNone(page.get_by_text("Creating visuals").first.wait_for(timeout=1500))
+
+                    scenario["delay"]=3; before_poll=scenario["workspace_calls"]
+                    continue_production()
+                    self.assertEqual(page.locator("#runtimeState").text_content(),"Working")
+                    page.wait_for_timeout(2600)
+                    self.assertGreater(scenario["workspace_calls"],before_poll)
+                    page.wait_for_timeout(900)
+                    self.assertEqual(page.locator("#runtimeState").text_content(),"Ready")
+                    scenario["delay"]=0
+
+                    scenario["workspace"]=complete; scenario["result"]={"outcome":"FINAL_VIDEO_COMPLETE","production":complete["production"]}
+                    continue_production()
+                    self.assertIsNone(page.get_by_role("heading",name="Your final video is ready.",exact=True).wait_for(timeout=1500))
+                    browser.close()
+            finally:
+                server.shutdown();server.server_close();thread.join(5)
+        self.assertEqual(scenario["provider_dispatches"],0)
 
     def test_primary_operator_flow_endpoints_and_advanced_boundary(self):
         with tempfile.TemporaryDirectory() as root:

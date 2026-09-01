@@ -1,6 +1,6 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
-  busy: false, busyLabel: '', error: null, lastAction: null, runToken: null,
+  busy: false, busyLabel: '', error: null, actionOutcome: null, lastAction: null, runToken: null,
   wizard: null, creationDefaults: null, nextDraftId: 0
 };
 
@@ -111,7 +111,7 @@ function bindProjectCards() {
 }
 
 async function showHome(announce = false) {
-  state.view = 'home'; state.project = null; state.snapshot = null; state.error = null;
+  state.view = 'home'; state.project = null; state.snapshot = null; state.error = null; state.actionOutcome = null;
   setNav('home');
   setHeader('YOUR VIDEOS','Home','<button class="button-primary" id="newVideoTop" type="button">＋ New video</button>');
   $('#newVideoTop').addEventListener('click', openWizard);
@@ -137,7 +137,7 @@ async function showHome(announce = false) {
 }
 
 async function openProject(projectId, moveFocus = true) {
-  state.view = 'project'; state.project = projectId; state.error = null;
+  state.view = 'project'; state.project = projectId; state.error = null; state.actionOutcome = null;
   setNav('home'); setBusy(true,'Opening project');
   try { state.snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/workspace`); setBusy(false); renderProject(); }
   catch (error) { setHeader('PROJECT','Could not open project'); $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
@@ -218,8 +218,10 @@ function renderProject() {
   projectHeader(workspace);
   if (production.pipeline_status === 'COMPLETE') { renderComplete(workspace); return; }
   const visual=production.stages.VISUALS || {}, activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
-  const primary=`<button class="button-primary" data-project-action="${esc(action.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(state.busy ? 'Working…' : action.label)}</button>`;
-  $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(action.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
+  const immediateAction = state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action;
+  const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(state.busy ? 'Working…' : immediateAction.label)}</button>`;
+  $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(immediateAction.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
+  ${state.actionOutcome ? actionOutcomeCard(state.actionOutcome) : ''}
   ${state.error ? errorCard(state.error) : ''}
   ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">Action needed</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${primary}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
@@ -278,7 +280,7 @@ async function runAction(action, label, extra = {}) {
   if (state.busy || state.runToken) { toast('Another project action is still running.'); return; }
   const projectId = state.project;
   const token = Symbol(action); state.runToken = token; state.lastAction = {action,label};
-  setBusy(true,label); state.error = null; renderProject();
+  setBusy(true,label); state.error = null; state.actionOutcome = null; renderProject();
   let polling = false;
   const poll = setInterval(async () => {
     if (state.runToken !== token || polling) return;
@@ -291,10 +293,14 @@ async function runAction(action, label, extra = {}) {
     finally { polling = false; }
   },2500);
   try {
-    await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action,...extra})});
+    const result = await api(`/api/projects/${encodeURIComponent(projectId)}/actions`,{method:'POST',body:JSON.stringify({action,...extra})});
     const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/workspace`);
-    if (state.runToken === token && state.view === 'project' && state.project === projectId) state.snapshot = snapshot;
-    toast(action === 'pause' ? 'Production will pause at the next safe point.' : action === 'open_flow_sign_in' ? 'Flow sign-in opened.' : 'Project updated.');
+    if (state.runToken === token && state.view === 'project' && state.project === projectId) {
+      state.snapshot = snapshot;
+      state.actionOutcome = actionOutcome(result, snapshot);
+    }
+    const outcome = result?.outcome;
+    toast(action === 'pause' ? 'Production will pause at the next safe point.' : action === 'open_flow_sign_in' ? 'Flow sign-in opened.' : outcome === 'FINAL_VIDEO_COMPLETE' ? 'Final video complete.' : outcome ? 'Production response received.' : 'Project updated.');
   } catch (error) {
     const friendly = friendlyError(error);
     if (state.runToken === token && state.view === 'project' && state.project === projectId) state.error = friendly;
@@ -350,6 +356,33 @@ function friendlyError(error) {
 
 function errorCard(error) {
   return `<section class="attention-card" role="alert"><div><h2>${esc(error.title)}</h2><p>${esc(error.message)}</p><p class="reassurance">Your completed work is saved.</p></div><button class="button-primary" data-error-action="${esc(error.action_id)}" type="button">${esc(error.action)}</button><details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(error.code)}\n${esc(error.raw)}</div></details></section>`;
+}
+
+function actionOutcome(result, snapshot) {
+  const outcome = result?.outcome;
+  if (!outcome) return null;
+  const production = result.production && typeof result.production === 'object' ? result.production : {};
+  const flow = result.flow && typeof result.flow === 'object' ? result.flow : (production.flow || {});
+  const blocker = production.blocker && typeof production.blocker === 'object' ? production.blocker : {};
+  const canonicalAction = flow.next_action || production.next_action || null;
+  const code = result.reason_code || blocker.reason_code || outcome;
+  if (outcome === 'FINAL_VIDEO_COMPLETE') return {kind:'success',title:'Final video complete',message:'Your final video is ready.',code,raw:''};
+  if (outcome === 'SAFETY_BLOCKED') {
+    const friendly = friendlyError({message:result.error || blocker.human_message || code,payload:{failure_class:code,error:result.error}});
+    return {kind:'blocker',title:'Production stopped safely',reason_title:friendly.title,message:friendly.message,code,raw:result.error || friendly.raw,action_id:friendly.action_id,action:friendly.action};
+  }
+  if (outcome === 'OWNER_DECISION_REQUIRED') {
+    return {kind:'blocker',title:'Your decision is needed',message:blocker.human_message || 'Review the saved production decision before Story Auto continues.',code,raw:'',action_id:canonicalAction?.action || 'review_project',action:canonicalAction?.label || blocker.next_action || 'Review project'};
+  }
+  if (['AUTH_REQUIRED','AUTH_RECOVERY_REQUIRED','NOT_CONFIGURED','STALE','PROJECT_MISMATCH','CAPABILITY_MISSING'].includes(outcome)) {
+    return {kind:'blocker',title:'Flow needs attention',message:flow.human_message || 'Complete the required Flow recovery before continuing.',code,raw:result.error || '',action_id:canonicalAction?.action || 'settings',action:canonicalAction?.label || 'Review Flow'};
+  }
+  return {kind:'progress',title:'Production is continuing.',message:production.human_message || 'Story Auto saved this progress and refreshed the current production state.',code,raw:''};
+}
+
+function actionOutcomeCard(outcome) {
+  const details = outcome.code ? `<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(outcome.code)}${outcome.raw ? `\n${esc(outcome.raw)}` : ''}</div></details>` : '';
+  return `<section class="attention-card action-outcome ${esc(outcome.kind)}" role="status"><div><h2>${esc(outcome.title)}</h2>${outcome.reason_title ? `<p><strong>${esc(outcome.reason_title)}</strong></p>` : ''}<p>${esc(outcome.message)}</p><p class="reassurance">Your completed work is saved.</p></div>${details}</section>`;
 }
 
 function bindErrorActions() {
