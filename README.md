@@ -70,8 +70,10 @@ artifacts and provider execution still flow exclusively through
 
 ## Canonical project knowledge
 
+- Operating map: `AGENTS.md`
+- Active intent: `TASK.md`
 - Product intent and requirements: `PROJECT_BRIEF.md`
-- Accepted state: `PROJECT_STATUS.md`
+- Historical project-status snapshot: `PROJECT_STATUS.md`
 - Architecture: `ARCHITECTURE.md`
 - Engineering contract: `ENGINEERING.md`
 - Roadmap: `ROADMAP.md`
@@ -83,7 +85,11 @@ artifacts and provider execution still flow exclusively through
 
 ## Build OS
 
-Build OS v1.22 is adopted **outside this repository**. The product repository contains only its tracked adoption policy/authority records after bootstrap; `.buildos/` remains local control state and is excluded from Git by the OS.
+Start with `AGENTS.md` for the operating map and `TASK.md` for active intent;
+`ARCHITECTURE.md` carries durable product architecture. Legacy Build OS adoption
+material is historical provenance, not current execution authority. When it is
+available and explicitly requested, Simplified Build OS guards consequential
+boundaries rather than normal development.
 
 ## Production CLI
 

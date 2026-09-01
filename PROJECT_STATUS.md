@@ -1,5 +1,9 @@
 # Project Status
 
+> Historical snapshot only — not current project-status authority. `TASK.md`
+> carries active intent; Git, source, and runtime artifacts provide current
+> implementation truth. The retained material below is historical context.
+
 ## Current accepted state
 
 **V1.0.0_STABLE / POST_RELEASE_GOALS_10_11_12_ACCEPTED / GOALS_13_14_15_16_17_LOCAL_CANDIDATES**

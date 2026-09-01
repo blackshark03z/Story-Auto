@@ -4,8 +4,10 @@ Stable release baseline: **Story Auto v1.0.0 Stable** at
 `6dc3188a16bd1ae4f84906f891083ec6c0651154` (`v1.0.0`). The accepted
 post-release development state includes Goal 10 UX/UI simplification, Goal 11
 Flow image mark postprocessing, Goal 12 state synchronization, and local
-Goals 13–17 corrective candidates; none is a new release version. Goal 17 is
-the current implementation anchor for Flow queue/reconciliation behavior.
+Goals 13–17 corrective candidates; none is a new release version. Goal 17 was
+a historical implementation anchor for Flow queue/reconciliation behavior.
+This roadmap is retained as product history; see `TASK.md` for active intent
+and Git/source/runtime evidence for current implementation truth.
 
 The next production action is not a normal new batch: resume preserved Trial A
 (`ambient_story + quiet_verdict`) only through the Goal 17 reconciliation and
@@ -14,11 +16,11 @@ Flow activation; unresolved/ambiguous attribution halts the queue. Trial B
 (`ambient_story + hidden_mastery`) remains unstarted and blocked behind that
 safe Trial A resolution.
 
-## Phase 0 — Design + Build OS baseline — ACCEPTED
+## Phase 0 — Design + Build OS baseline — HISTORICAL
 
 - Freeze product requirements and architecture.
 - Freeze artifact/failure/acceptance contracts.
-- Adopt external Build OS v1.22 Project Lifecycle Kit + Continuity.
+- Historical Build OS lifecycle adoption evidence retained as provenance.
 
 ## Phase 1 — Foundation
 
