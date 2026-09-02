@@ -193,6 +193,31 @@ class FlowRecoveryDecisionTests(unittest.TestCase):
                 self.assertEqual(decision.reason_code, ReasonCode.EVIDENCE_CONTRADICTION)
                 self.assertFalse(decision.safe_to_dispatch)
 
+    def test_succeeded_no_dispatch_contradictions_cannot_authorize_retry(self):
+        cases = [
+            RecoveryInput(
+                FailureFamily.PRE_DISPATCH_FAILURE,
+                AttemptOutcome.SUCCEEDED,
+                DispatchCertainty.NOT_DISPATCHED,
+                canonical_no_dispatch_proof=True,
+            ),
+            RecoveryInput(
+                FailureFamily.PROVIDER_RATE_LIMIT,
+                AttemptOutcome.SUCCEEDED,
+                DispatchCertainty.NOT_DISPATCHED,
+                canonical_no_dispatch_proof=True,
+                exact_attribution_confirmed=True,
+                rate_limit_backoff_ready=True,
+            ),
+        ]
+        for item in cases:
+            with self.subTest(family=item.failure_family):
+                decision = evaluate_recovery(item)
+                self.assertEqual((decision.action, decision.reason_code),
+                                 (RecoveryAction.RECONCILE_FIRST, ReasonCode.EVIDENCE_CONTRADICTION))
+                self.assertTrue(decision.reconciliation_required)
+                self.assertFalse(decision.safe_to_dispatch)
+
     def test_rate_limit_requires_backoff_exact_attribution_and_authority(self):
         missing_attribution = evaluate_recovery(pre_dispatch_evidence(
             FailureFamily.PROVIDER_RATE_LIMIT,
@@ -228,23 +253,46 @@ class FlowRecoveryDecisionTests(unittest.TestCase):
         self.assertTrue(decision.prompt_revision_required)
         self.assertFalse(decision.safe_to_dispatch)
 
-    def test_policy_revised_non_material_prompt_dispatches_once(self):
-        allowed = evaluate_recovery(terminal_failure_evidence(
+    def test_policy_automatic_prompt_remediation_lifecycle(self):
+        before_repair = evaluate_recovery(terminal_failure_evidence(
             FailureFamily.PROVIDER_POLICY_BLOCK,
-            prompt_revision_ready=True,
             prompt_remediation_non_material=True,
             prompt_remediation_count=0,
         ))
-        self.assertEqual(allowed.reason_code, ReasonCode.PROMPT_REVISION_DISPATCH_ALLOWED)
-        self.assert_dispatchable(allowed)
-        exhausted = evaluate_recovery(terminal_failure_evidence(
+        self.assertEqual((before_repair.action, before_repair.reason_code), (
+            RecoveryAction.PROMPT_REPAIR,
+            ReasonCode.AUTOMATIC_PROMPT_REMEDIATION_ELIGIBLE,
+        ))
+        self.assertFalse(before_repair.safe_to_dispatch)
+        first_revision = evaluate_recovery(terminal_failure_evidence(
             FailureFamily.PROVIDER_POLICY_BLOCK,
             prompt_revision_ready=True,
             prompt_remediation_non_material=True,
             prompt_remediation_count=1,
         ))
-        self.assertEqual((exhausted.action, exhausted.reason_code),
+        self.assertEqual(first_revision.reason_code, ReasonCode.PROMPT_REVISION_DISPATCH_ALLOWED)
+        self.assert_dispatchable(first_revision)
+        no_second_revision = evaluate_recovery(terminal_failure_evidence(
+            FailureFamily.PROVIDER_POLICY_BLOCK,
+            prompt_remediation_non_material=True,
+            prompt_remediation_count=1,
+        ))
+        self.assertEqual((no_second_revision.action, no_second_revision.reason_code),
                          (RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED))
+        over_limit = evaluate_recovery(terminal_failure_evidence(
+            FailureFamily.PROVIDER_POLICY_BLOCK,
+            prompt_remediation_non_material=True,
+            prompt_remediation_count=2,
+        ))
+        self.assertEqual((over_limit.action, over_limit.reason_code),
+                         (RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED))
+        invalid_over_limit_revision = evaluate_recovery(terminal_failure_evidence(
+            FailureFamily.PROVIDER_POLICY_BLOCK,
+            prompt_revision_ready=True,
+            prompt_remediation_non_material=True,
+            prompt_remediation_count=2,
+        ))
+        self.assertFalse(invalid_over_limit_revision.safe_to_dispatch)
 
     def test_policy_revised_material_prompt_requires_exact_owner_approval(self):
         unclassified = evaluate_recovery(terminal_failure_evidence(
@@ -272,6 +320,7 @@ class FlowRecoveryDecisionTests(unittest.TestCase):
             FailureFamily.PROVIDER_POLICY_BLOCK,
             prompt_revision_ready=True,
             prompt_remediation_non_material=True,
+            prompt_remediation_count=1,
             provider_attempt_count=12,
         ))
         self.assertEqual(decision.reason_code, ReasonCode.LIFETIME_ATTEMPT_LIMIT_REACHED)
@@ -372,7 +421,8 @@ class FlowRecoveryDecisionTests(unittest.TestCase):
                                   exact_attribution_confirmed=True),
             terminal_failure_evidence(FailureFamily.PROVIDER_RATE_LIMIT, rate_limit_backoff_ready=True),
             terminal_failure_evidence(FailureFamily.PROVIDER_POLICY_BLOCK, prompt_revision_ready=True,
-                                      prompt_remediation_non_material=True),
+                                      prompt_remediation_non_material=True,
+                                      prompt_remediation_count=1),
             terminal_failure_evidence(FailureFamily.PROVIDER_POLICY_BLOCK, prompt_revision_ready=True,
                                       semantic_remediation_material=True, prompt_revision_authorized=True),
             resolved_output_evidence(FailureFamily.QC_CREATIVE_REJECTION,
@@ -395,7 +445,8 @@ class FlowRecoveryDecisionTests(unittest.TestCase):
             terminal_failure_evidence(FailureFamily.PROVIDER_RATE_LIMIT, provider_attempt_count=12,
                                       rate_limit_backoff_ready=True),
             terminal_failure_evidence(FailureFamily.PROVIDER_POLICY_BLOCK, provider_attempt_count=12,
-                                      prompt_revision_ready=True, prompt_remediation_non_material=True),
+                                      prompt_revision_ready=True, prompt_remediation_non_material=True,
+                                      prompt_remediation_count=1),
             resolved_output_evidence(FailureFamily.QC_CREATIVE_REJECTION, provider_attempt_count=12,
                                      creative_rejection_confirmed=True,
                                      creative_regeneration_authorized=True),

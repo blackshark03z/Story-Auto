@@ -128,6 +128,11 @@ class RecoveryInput:
     ``legacy_request_status`` is deliberately diagnostic-only.  In particular,
     ``FAILED_RETRYABLE`` cannot change a decision unless the typed evidence
     independently satisfies a rule below.
+
+    ``prompt_remediation_count`` is the number of automatic non-material
+    prompt revisions already created for the originating policy failure.  A
+    count of one may dispatch that existing revision, but cannot create a
+    second automatic revision.
     """
 
     failure_family: FailureFamily
@@ -249,7 +254,7 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
                                      owner_decision_required=True)
                 return _dispatch(RecoveryAction.AUTO_RETRY, ReasonCode.PROMPT_REVISION_DISPATCH_ALLOWED, budgets)
             if (input.prompt_remediation_non_material
-                    and budgets.prompt_remediations_remaining > 0):
+                    and input.prompt_remediation_count == MAX_AUTOMATIC_PROMPT_REMEDIATIONS):
                 if budgets.provider_attempts_remaining == 0:
                     return _decision(RecoveryAction.NO_RETRY, ReasonCode.LIFETIME_ATTEMPT_LIMIT_REACHED, budgets,
                                      owner_decision_required=True)
@@ -267,6 +272,9 @@ def evaluate_recovery(input: RecoveryInput) -> RecoveryDecision:
             return _decision(RecoveryAction.PROMPT_REPAIR,
                              ReasonCode.AUTOMATIC_PROMPT_REMEDIATION_ELIGIBLE, budgets,
                              prompt_revision_required=True)
+        if input.prompt_remediation_non_material:
+            return _decision(RecoveryAction.OWNER_ACTION, ReasonCode.OWNER_PROMPT_APPROVAL_REQUIRED, budgets,
+                             prompt_revision_required=True, owner_decision_required=True)
         return _decision(RecoveryAction.PROMPT_REPAIR, ReasonCode.POLICY_PROMPT_REPAIR_REQUIRED, budgets,
                          prompt_revision_required=True, owner_decision_required=not input.prompt_revision_authorized)
 
@@ -372,6 +380,10 @@ def _has_evidence_contradiction(input: RecoveryInput) -> bool:
             input.terminal_evidence_confirmed
             or input.provider_progress_active
             or input.provider_output_exists):
+        return True
+    if input.attempt_outcome is AttemptOutcome.SUCCEEDED and (
+            input.dispatch_certainty is DispatchCertainty.NOT_DISPATCHED
+            or input.canonical_no_dispatch_proof):
         return True
     if input.attempt_outcome in {AttemptOutcome.DISPATCHING, AttemptOutcome.GENERATING} and input.terminal_evidence_confirmed:
         return True
