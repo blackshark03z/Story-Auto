@@ -36,10 +36,13 @@ from story_auto.core.visual.recovery import (
     DispatchCertainty,
     FailureFamily,
     RecoveryInput,
+    RecoveryAction,
+    evaluate_recovery,
 )
 from story_auto.core.visual.recovery_executor import (
-    AlreadyOwnedSingleFlight,
+    FlowSessionSingleFlight,
     RecoveryExecutionGate,
+    RecoveryRetryTiming,
 )
 from story_auto.core.render import MediaError, derive_trim_retime_video
 from story_auto.core.visual import (
@@ -589,7 +592,7 @@ def _provider_generation_retry_authorized(entry: dict | None) -> bool:
     return not attempts or canonical_no_dispatch_proof(attempts[-1])
 
 
-def _recovery_input_from_entry(entry: dict | None) -> RecoveryInput:
+def _recovery_input_from_entry(entry: dict | None, *, rate_limit_backoff_ready: bool = False) -> RecoveryInput:
     """Project current durable Flow evidence into the Slice 1 decision input.
 
     Status is intentionally not used as authority.  A retry is possible only
@@ -631,7 +634,8 @@ def _recovery_input_from_entry(entry: dict | None) -> RecoveryInput:
             family, AttemptOutcome.FAILED, DispatchCertainty.TERMINAL_CONFIRMED,
             terminal_evidence_confirmed=True,
             exact_attribution_confirmed=terminal.get("exact_attribution_confirmed") is True,
-            rate_limit_backoff_ready=False,
+            rate_limit_backoff_ready=(rate_limit_backoff_ready
+                                      and family is FailureFamily.PROVIDER_RATE_LIMIT),
             transient_redispatch_count=retry_count, provider_attempt_count=submissions,
             legacy_request_status=entry.get("status"),
         )
@@ -640,6 +644,19 @@ def _recovery_input_from_entry(entry: dict | None) -> RecoveryInput:
                          transient_redispatch_count=retry_count,
                          provider_attempt_count=submissions,
                          legacy_request_status=entry.get("status"))
+
+
+def _flow_session_identity(paths, config, executor: "FlowExecutor", override: str | None = None) -> str:
+    """Bind a lock to profile plus CDP endpoint, never Flow project identity."""
+    if isinstance(override, str) and override.strip():
+        return override.strip()
+    runtime = getattr(executor.generate, "runtime", None)
+    profile = getattr(runtime, "profile", paths.runtime.flow_profile)
+    cdp_url = getattr(runtime, "cdp_url", None)
+    if not isinstance(cdp_url, str) or not cdp_url.strip():
+        flow = config.settings.get("flow", {}) if isinstance(config.settings, dict) else {}
+        cdp_url = str(flow.get("cdp_url", "http://127.0.0.1:9222"))
+    return f"profile={Path(profile).resolve()}|cdp={cdp_url.strip().rstrip('/').casefold()}"
 
 
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
@@ -5691,6 +5708,13 @@ def _unresolved_flow_entry(entry: dict | None) -> bool:
         return False
     if entry.get("status") in {"SUCCEEDED", "QC_PENDING"}:
         return False
+    attempts = entry.get("attempts")
+    latest = attempts[-1] if isinstance(attempts, list) and attempts else None
+    terminal_log = latest.get("terminal_evidence") if isinstance(latest, dict) else None
+    if (isinstance(terminal_log, list) and terminal_log
+            and isinstance(terminal_log[-1], dict)
+            and terminal_log[-1].get("authoritative") is True):
+        return False
     # A previous provider attempt without canonical positive no-dispatch proof
     # is a serial barrier; FAILED_RETRYABLE is never resubmission authority.
     if entry.get("attempts") and not _provider_generation_retry_authorized(entry):
@@ -5903,6 +5927,11 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
     attempt = entry.get("attempts", [])[-1] if entry.get("attempts") else None
     if not isinstance(attempt, dict):
         return False, request["request_id"], 0
+    terminal_log = attempt.get("terminal_evidence")
+    if (isinstance(terminal_log, list) and terminal_log
+            and isinstance(terminal_log[-1], dict)
+            and terminal_log[-1].get("authoritative") is True):
+        return True, None, 0
 
     # A crash before the persisted provider boundary is the only restart case
     # proven locally.  Produce the same current-schema proof every downstream
@@ -6049,7 +6078,9 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
 
 def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False,
                        request_ids: set[str] | None = None, production_batch: bool = False,
-                       max_requests: int | None = None, flow_connection_provenance: dict | None = None) -> dict:
+                       max_requests: int | None = None, flow_connection_provenance: dict | None = None,
+                       recovery_timing: RecoveryRetryTiming | None = None,
+                       flow_session_identity: str | None = None) -> dict:
     """Run the bounded vertical slice while preserving every provider attempt."""
     if not execute: raise FlowError("EXECUTION_CONFIRMATION_REQUIRED", "pass explicit execute-generation permission")
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -6058,6 +6089,8 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     storage=config.settings.get("storage",{})
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
+    timing = recovery_timing or RecoveryRetryTiming()
+    session_identity = _flow_session_identity(paths, config, executor, flow_session_identity)
     with ProjectLock(paths.runtime, project_id), _transaction_read_scope():
         # Complete every prepared request-graph replacement before selecting
         # executable requests. A partially published old epoch is never run.
@@ -6157,6 +6190,25 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             # canonical state that the final gate must re-read.
             atomic_write_json(path, manifest)
             execution: dict[str, Any] = {}
+            rate_limit_ready = False
+            initial_decision = evaluate_recovery(initial_facts)
+            if initial_decision.action is RecoveryAction.AUTO_RETRY:
+                if not timing.wait(initial_facts.transient_redispatch_count):
+                    blocked_request_id = request["request_id"]
+                    break
+            elif (initial_decision.action is RecoveryAction.WAIT_AND_RETRY
+                  and initial_facts.failure_family is FailureFamily.PROVIDER_RATE_LIMIT):
+                if not timing.wait(initial_facts.transient_redispatch_count):
+                    blocked_request_id = request["request_id"]
+                    break
+                manifest = read_json(path)
+                entries = {item["request_id"]: item for item in manifest["requests"]}
+                entry = entries.get(request["request_id"])
+                if not isinstance(entry, dict):
+                    blocked_request_id = request["request_id"]
+                    break
+                rate_limit_ready = True
+                initial_facts = _recovery_input_from_entry(entry, rate_limit_backoff_ready=True)
 
             def fresh_recovery_facts() -> RecoveryInput:
                 """Re-read durable evidence after owning ProjectLock, never reuse a decision."""
@@ -6167,7 +6219,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 if not isinstance(entry, dict) or not _runnable(request, entries, paths):
                     return RecoveryInput(FailureFamily.DISPATCH_AMBIGUOUS, AttemptOutcome.FAILED,
                                          DispatchCertainty.DISPATCH_UNCERTAIN)
-                return _recovery_input_from_entry(entry)
+                return _recovery_input_from_entry(
+                    entry, rate_limit_backoff_ready=rate_limit_ready,
+                )
 
             def append_authorized_attempt(decision) -> dict:
                 """Append and persist one attempt before a provider boundary exists."""
@@ -6218,7 +6272,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 execution["temporary"] = temp
 
             try:
-                outcome = RecoveryExecutionGate(AlreadyOwnedSingleFlight()).execute(
+                outcome = RecoveryExecutionGate(
+                    FlowSessionSingleFlight(paths.runtime, session_identity),
+                ).execute(
                     initial_facts, load_fresh=fresh_recovery_facts,
                     append_attempt=append_authorized_attempt, dispatch=provider_boundary,
                 )

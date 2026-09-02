@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
+from story_auto.core.project.lock import ProjectLock, ProjectLockedError
 from story_auto.core.visual.recovery import RecoveryDecision, RecoveryInput, evaluate_recovery
 
 
@@ -44,6 +45,31 @@ class InMemorySingleFlight:
             if self.owned:
                 self._held.discard(self.key)
                 self.owned = False
+
+
+class FlowSessionSingleFlight:
+    """Cross-process exclusion for the actual shared Flow browser session."""
+    def __init__(self, runtime, session_identity: str) -> None:
+        if not isinstance(session_identity, str) or not session_identity.strip():
+            raise ValueError("Flow session identity is required")
+        import hashlib
+        digest = hashlib.sha256(session_identity.encode("utf-8")).hexdigest()
+        self.key = f"flow-session-{digest}"
+        self.lock = ProjectLock(runtime, self.key)
+        self.owned = False
+
+    def acquire(self) -> bool:
+        try:
+            self.lock.acquire()
+        except ProjectLockedError:
+            return False
+        self.owned = True
+        return True
+
+    def release(self) -> None:
+        if self.owned:
+            self.lock.release()
+            self.owned = False
 
 
 class AlreadyOwnedSingleFlight:

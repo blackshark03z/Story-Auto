@@ -6,6 +6,7 @@ import tempfile
 import unittest
 
 from story_auto.core.visual.recovery_executor import (
+    FlowSessionSingleFlight,
     InMemorySingleFlight,
     RecoveryExecutionGate,
     RecoveryRetryTiming,
@@ -20,6 +21,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.service import FlowExecutor, execute_generation
 from story_auto.providers.flow.session import FlowCapabilities
+import story_auto.providers.flow.service as flow_service
 
 
 def initial() -> RecoveryInput:
@@ -215,6 +217,78 @@ class RecoveryRetryTimingTests(unittest.TestCase):
 
 
 class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _timing(max_total_wait_seconds=10):
+        clock = [0.0]
+        slept = []
+        timing = RecoveryRetryTiming(
+            base_delay_seconds=1, max_delay_seconds=4,
+            max_total_wait_seconds=max_total_wait_seconds, jitter_seconds=0,
+            clock=lambda: clock[0],
+            sleep=lambda seconds: (slept.append(seconds), clock.__setitem__(0, clock[0] + seconds)),
+            random_fn=lambda: 0,
+        )
+        return timing, slept
+
+    @staticmethod
+    def _project(runtime, project_id, attempt=None):
+        paths = create_project(runtime, ProjectConfig(project_id))
+        atomic_write_json(paths.artifact_path("output/review_state.json"),
+                          {"plan_approval": {"status": "APPROVED"}})
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [{
+            "request_id": "req", "fingerprint": project_id, "purpose": "REFERENCE",
+            "media_type": "IMAGE", "prompt": "synthetic", "depends_on": [], "provider": "google_flow",
+        }]})
+        if attempt is not None:
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"requests": [{
+                "request_id": "req", "request_identity_sha256": project_id, "media_type": "IMAGE",
+                "status": "FAILED_RETRYABLE", "provider_submissions": 1, "attempts": [attempt],
+            }], "schema_version": flow_service.MANIFEST_VERSION, "project_id": project_id})
+        return paths
+
+    @staticmethod
+    def _provider(calls):
+        def provider(request, _references, destination):
+            from PIL import Image
+            calls.append(request["request_id"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+            return destination
+        return provider
+
+    @staticmethod
+    def _terminal(family):
+        return {
+            "attempt": 1, "status": "FAILED_RETRYABLE", "dispatch_confirmed": True,
+            "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED",
+            "terminal_evidence": [{"authoritative": True, "failure_family": family,
+                                   "exact_attribution_confirmed": True}],
+        }
+
+    def test_flow_session_lock_conflicts_across_projects_and_releases(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            first = FlowSessionSingleFlight(runtime, "profile-a|http://127.0.0.1:9222")
+            second = FlowSessionSingleFlight(runtime, "profile-a|http://127.0.0.1:9222")
+            self.assertTrue(first.acquire())
+            self.assertFalse(second.acquire())
+            first.release()
+            self.assertTrue(second.acquire())
+            second.release()
+
+    def test_flow_session_lock_releases_after_provider_exception(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            first = FlowSessionSingleFlight(runtime, "profile-a|http://127.0.0.1:9222")
+            second = FlowSessionSingleFlight(runtime, "profile-a|http://127.0.0.1:9222")
+            with self.assertRaisesRegex(RuntimeError, "provider"):
+                RecoveryExecutionGate(first).execute(
+                    retry(), load_fresh=retry, append_attempt=lambda _decision: {"attempt": 1},
+                    dispatch=lambda _attempt: (_ for _ in ()).throw(RuntimeError("provider")),
+                )
+            self.assertTrue(second.acquire())
+            second.release()
+
     def test_authorized_execution_appends_once_and_records_one_submission(self):
         with tempfile.TemporaryDirectory() as root:
             runtime = RuntimeLayout.from_root(root)
@@ -226,6 +300,7 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
                 "media_type": "IMAGE", "prompt": "synthetic", "depends_on": [], "provider": "google_flow",
             }]})
             calls = []
+            timing, slept = self._timing()
 
             def provider(request, _references, destination):
                 from PIL import Image
@@ -237,13 +312,94 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
             result = execute_generation(
                 runtime.root, "prj_slice3",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), provider),
-                execute=True,
+                execute=True, recovery_timing=timing,
             )
             entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((result["new_submissions"], calls, entry["provider_submissions"]),
                              (1, ["req_slice3"], 1))
             self.assertEqual((len(entry["attempts"]), entry["attempts"][0]["recovery_action"]),
                              (1, "DISPATCH_INITIAL"))
+            self.assertEqual(slept, [])
+
+    def test_terminal_transient_waits_once_then_dispatches(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            paths = self._project(runtime, "prj_terminal", self._terminal("PROVIDER_TERMINAL_TRANSIENT"))
+            timing, slept = self._timing()
+            calls = []
+            result = execute_generation(
+                runtime.root, "prj_terminal",
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
+                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((slept, result["new_submissions"], calls, entry["provider_submissions"]),
+                             ([1], 1, ["req"], 2))
+
+    def test_rate_limit_wait_transitions_to_fresh_authorized_retry(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            paths = self._project(runtime, "prj_rate", self._terminal("PROVIDER_RATE_LIMIT"))
+            timing, slept = self._timing()
+            calls = []
+            result = execute_generation(
+                runtime.root, "prj_rate",
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
+                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((slept, result["new_submissions"], calls, entry["provider_submissions"]),
+                             ([1], 1, ["req"], 2))
+
+    def test_rate_limit_timing_exhaustion_consumes_nothing(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            paths = self._project(runtime, "prj_rate_stop", self._terminal("PROVIDER_RATE_LIMIT"))
+            timing, slept = self._timing(max_total_wait_seconds=0)
+            calls = []
+            result = execute_generation(
+                runtime.root, "prj_rate_stop",
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
+                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+            )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((slept, result["new_submissions"], calls, len(entry["attempts"]), entry["provider_submissions"]),
+                             ([], 0, [], 1, 1))
+
+    def test_cross_project_shared_session_allows_one_boundary_owner(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            first_paths = self._project(runtime, "prj_first")
+            second_paths = self._project(runtime, "prj_second")
+            entered = threading.Event()
+            release = threading.Event()
+            calls = []
+
+            def slow_provider(request, _references, destination):
+                from PIL import Image
+                calls.append(request["request_id"])
+                entered.set(); release.wait(2)
+                Image.new("RGB", (1280, 720), "navy").save(destination, "PNG")
+                return destination
+
+            first_result = []
+            worker = threading.Thread(target=lambda: first_result.append(execute_generation(
+                runtime.root, "prj_first",
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), slow_provider),
+                execute=True, flow_session_identity="shared-session",
+            )))
+            worker.start(); self.assertTrue(entered.wait(2))
+            second_calls = []
+            second = execute_generation(
+                runtime.root, "prj_second",
+                executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(second_calls)),
+                execute=True, flow_session_identity="shared-session",
+            )
+            release.set(); worker.join(2)
+            second_entry = read_json(second_paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((first_result[0]["new_submissions"], second["new_submissions"], calls, second_calls),
+                             (1, 0, ["req"], []))
+            self.assertEqual((second_entry["attempts"], second_entry.get("provider_submissions", 0)), ([], 0))
 
 
 if __name__ == "__main__":
