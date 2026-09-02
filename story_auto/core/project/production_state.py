@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project.execution import execution_mode, stage_policy
 from story_auto.core.project.quality_policy import AI_REVIEW, AUTO_ACCEPT, MANUAL_REVIEW, effective_qc_policy
 from story_auto.core.visual.recovery import (
@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.2"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.4"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 
 
@@ -145,14 +145,39 @@ class ProductionStateReconciler:
         stages["SOURCE"] = self._stage("COMPLETE" if present["output/content_manifest.json"] else "READY", "RUN")
         timing_execution = policy["audio"].action
         stages["TIMING"] = self._stage("COMPLETE" if present["output/alignment.json"] else ("BLOCKED" if timing_execution == "BLOCK" else "READY"), timing_execution, policy["audio"].reason)
-        plan_approved = isinstance(review, dict) and review.get("plan_approval", {}).get("status") == "APPROVED"
+        approval = review.get("plan_approval", {}) if isinstance(review, dict) else {}
+        bound_hashes = approval.get("bound_hashes", {}) if isinstance(approval, dict) else {}
+        current_hashes = {
+            name: sha256_file(paths.artifact_path(f"output/{filename}"))
+            for name, filename in (
+                ("timeline", "story_timeline.json"),
+                ("continuity", "continuity_bible.json"),
+                ("shot_plan", "shot_plan.json"),
+                ("media_plan", "media_plan.json"),
+            )
+            if paths.artifact_path(f"output/{filename}").is_file()
+        }
+        approved = approval.get("status") == "APPROVED"
+        # The two planning approvals bind different canonical artifacts.  The
+        # coordinator needs this read-only distinction to know whether it must
+        # approve the story, compile visuals, or approve the compiled plan.
+        story_plan_approved = (approved
+                               and all(name in current_hashes and bound_hashes.get(name) == current_hashes[name]
+                                       for name in ("timeline", "continuity")))
+        visual_plan_approved = (story_plan_approved
+                                and all(name in current_hashes and bound_hashes.get(name) == current_hashes[name]
+                                        for name in ("shot_plan", "media_plan")))
+        planning = {
+            "story_plan_approved": story_plan_approved,
+            "visual_plan_approved": visual_plan_approved,
+        }
         # Compiled requests are not authority to submit provider work.  Their
         # own shot/media approval is the second canonical planning boundary.
         # Treat an unapproved request file as a blocked plan so the coordinator
         # can apply AUTO_ACCEPT or preserve the Manual owner decision.
         plan_ready = present["output/continuity_bible.json"] or present["output/generation_requests.json"]
-        plan_complete = present["output/generation_requests.json"] and plan_approved
-        stages["PLAN"] = self._stage("COMPLETE" if plan_complete else ("BLOCKED" if plan_ready else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
+        plan_complete = present["output/generation_requests.json"] and visual_plan_approved
+        stages["PLAN"] = self._stage("COMPLETE" if plan_complete else ("BLOCKED" if plan_ready else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not visual_plan_approved else policy["planning"].reason)
         visual_status = "COMPLETE" if generated_for_quality else recovery["status"]
         stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
         stages["VISUALS"]["reason_code"] = recovery["reason_code"]
@@ -187,7 +212,7 @@ class ProductionStateReconciler:
         blocker = None
         if control.get("pause_requested") is True:
             blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
-        elif stages["PLAN"]["status"] == "BLOCKED":
+        elif stages["PLAN"]["status"] == "BLOCKED" and qc_policy != AUTO_ACCEPT:
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
         elif recovery["status"] == "BLOCKED":
             blocker = self._blocker(recovery["reason_code"], recovery["human_message"], recovery["next_action"], True,
@@ -227,7 +252,7 @@ class ProductionStateReconciler:
             "schema_version": PRODUCTION_STATE_SCHEMA_VERSION, "project_id": paths.project_id, "state_revision": revision,
             "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
             "pipeline_status": pipeline_status, "active_stage": active_stage,
-            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality,
+            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality, "planning": planning,
             "recovery": recovery, "blocker": blocker, "next_action": next_action,
             "visual_asset_evidence": [item for item in evidence if item["path"].startswith("assets/")],
             "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},

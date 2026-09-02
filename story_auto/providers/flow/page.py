@@ -11,7 +11,9 @@ class FlowComposer:
         if len(values) != 1: raise FlowSessionError("FLOW_UI_CHANGED", f"expected exactly one {name}, found {len(values)}")
         return values[0]
 
-    def submit(self, prompt: str, *, references: list[str], media_type: str, before_dispatch=None, mode_already_configured: bool = False) -> dict:
+    def submit(self, prompt: str, *, references: list[str], media_type: str,
+               before_dispatch=None, before_generate=None,
+               mode_already_configured: bool = False) -> dict:
         choose = getattr(self.dom, "choose_mode", None)
         if choose and not mode_already_configured: choose(media_type)
         editors = self.dom.active_prompt_editors()
@@ -36,6 +38,10 @@ class FlowComposer:
         # Reference attachment itself changes Flow's UI.  The caller may take
         # its dispatch baseline only after that benign transition is complete.
         if before_dispatch: before_dispatch()
+        # The caller records its durable provider boundary only after all
+        # reversible composer work is complete and immediately before the one
+        # Generate activation below.
+        if before_generate: before_generate()
         activation = control.click()
         return {"composer_ready_state": composer_ready_state, "activation": activation}
 

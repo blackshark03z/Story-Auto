@@ -29,8 +29,8 @@ class ProductionQueries:
             existing=read_json(self.reconciler.state_path(paths))
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
-            required = {"pipeline_status", "active_stage", "stages", "quality", "recovery", "visual_asset_evidence", "next_action", "final_output"}
-            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.2"
+            required = {"pipeline_status", "active_stage", "stages", "quality", "planning", "recovery", "visual_asset_evidence", "next_action", "final_output"}
+            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.4"
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint
                     and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
                 return self._with_flow_summary(project_id, config, existing)
@@ -98,20 +98,30 @@ class ProductionQueries:
         """Return a compact card without opening any generation manifest."""
         from story_auto.core.project import load_project
         from story_auto.core.artifacts import read_json
+        from story_auto.application.flow_product import render_mode_availability
         paths, config = load_project(self.runtime, project_id)
+        availability = render_mode_availability(config.render_mode)
         state_path = paths.artifact_path("output/production_state.json")
-        try:
-            state = read_json(state_path)
-        except Exception:
-            # Legacy projects are reconciled only when opened/commanded; cards remain cheap.
-            state = {"pipeline_status": "RECONCILE_REQUIRED", "active_stage": "SOURCE", "next_action": {"action": "run_to_final", "label": "Continue production"}, "final_output": {"present": (paths.root / "output" / "final.mp4").is_file()}}
+        if not availability["available"]:
+            # A card is a read-only surface. Never rewrite an older Full Video
+            # project merely to apply the current release policy.
+            state = {"pipeline_status": availability["reason_code"], "active_stage": "SOURCE",
+                     "next_action": {"action": "review_project", "label": "Full Video unavailable"},
+                     "final_output": {"present": (paths.root / "output" / "final.mp4").is_file()},
+                     "human_message": availability["human_message"]}
+        else:
+            try:
+                state = read_json(state_path)
+            except Exception:
+                # Legacy projects are reconciled only when opened/commanded; cards remain cheap.
+                state = {"pipeline_status": "RECONCILE_REQUIRED", "active_stage": "SOURCE", "next_action": {"action": "run_to_final", "label": "Continue production"}, "final_output": {"present": (paths.root / "output" / "final.mp4").is_file()}}
         content = paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
         title = next((line[2:].strip() for line in content.splitlines() if line.startswith("# ") and line[2:].strip()), project_id)
         updated = max((path.stat().st_mtime for path in (paths.project_file, paths.content_file, state_path) if path.is_file()), default=paths.root.stat().st_mtime)
         next_action = state.get("next_action", {"action": "run_to_final", "label": "Continue production"})
         stage_positions = {"SOURCE": 8, "TIMING": 24, "PLAN": 42, "VISUALS": 62, "QUALITY": 82, "RENDER": 94}
         return {"project_id": project_id, "title": title, "render_mode": config.render_mode, "production": state,
-                "user_status": "Complete" if state.get("final_output", {}).get("present") else state.get("pipeline_status", "RECONCILE_REQUIRED").replace("_", " ").title(),
+                "user_status": "Unavailable" if not availability["available"] else ("Complete" if state.get("final_output", {}).get("present") else state.get("pipeline_status", "RECONCILE_REQUIRED").replace("_", " ").title()),
                 "primary_action": {"action": next_action.get("label", "Continue production"), "action_id": next_action.get("action", "run_to_final")},
                 "final_path": state.get("final_output", {}).get("path"), "current_activity": next_action.get("label", "Continue production"),
                 "progress": 100 if state.get("final_output", {}).get("present") else stage_positions.get(state.get("active_stage"), 0),

@@ -37,6 +37,14 @@ def _terminal(family: str) -> dict:
     }
 
 
+def _approved_review(paths) -> dict:
+    return {"plan_approval": {"status": "APPROVED", "bound_hashes": {
+        name: sha256_file(paths.artifact_path(f"output/{filename}"))
+        for name, filename in (("timeline", "story_timeline.json"), ("continuity", "continuity_bible.json"),
+                               ("shot_plan", "shot_plan.json"), ("media_plan", "media_plan.json"))
+    }}}
+
+
 class Slice4Fixture:
     @staticmethod
     def project(root: str, entry: dict | None = None, *, final: bool = False):
@@ -44,7 +52,7 @@ class Slice4Fixture:
         paths = create_project(runtime, ProjectConfig("prj_slice4"), "# Slice 4\n\n## Narration\n\nFixture.")
         for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json"):
             atomic_write_json(paths.artifact_path(f"output/{name}"), {"fixture": name})
-        atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval": {"status": "APPROVED"}})
+        atomic_write_json(paths.artifact_path("output/review_state.json"), _approved_review(paths))
         atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [_request()]})
         if entry is not None:
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
@@ -75,7 +83,7 @@ class Slice4Fixture:
         paths, _config = app._project("prj_slice4")
         for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json"):
             atomic_write_json(paths.artifact_path(f"output/{name}"), {"fixture": name})
-        atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval": {"status": "APPROVED"}})
+        atomic_write_json(paths.artifact_path("output/review_state.json"), _approved_review(paths))
         atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [_request()]})
         if entry is not None:
             atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {

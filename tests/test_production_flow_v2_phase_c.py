@@ -5,7 +5,7 @@ import unittest
 from PIL import Image
 
 from story_auto.application import OperatorService
-from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 
 
 def _project(app: OperatorService, project_id: str, *, policy: str = "AUTO_ACCEPT", mode: str = "FULL"):
@@ -15,7 +15,11 @@ def _project(app: OperatorService, project_id: str, *, policy: str = "AUTO_ACCEP
     output = paths.root / "output"
     for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json"):
         atomic_write_json(output / name, {"fixture": name})
-    atomic_write_json(output / "review_state.json", {"plan_approval": {"status": "APPROVED"}})
+    atomic_write_json(output / "review_state.json", {"plan_approval": {"status": "APPROVED", "bound_hashes": {
+        name: sha256_file(output / filename)
+        for name, filename in (("timeline", "story_timeline.json"), ("continuity", "continuity_bible.json"),
+                               ("shot_plan", "shot_plan.json"), ("media_plan", "media_plan.json"))
+    }}})
     atomic_write_json(output / "generation_requests.json", {"requests": [{"request_id": "scene_01", "purpose": "SHOT", "shot_id": "sh_0001"}]})
     return paths
 

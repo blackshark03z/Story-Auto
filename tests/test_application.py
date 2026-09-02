@@ -110,8 +110,10 @@ class OperatorApplicationTests(unittest.TestCase):
 
     def test_full_video_image_override_is_rejected_before_state_change(self):
         with tempfile.TemporaryDirectory() as root:
-            app=OperatorService(root); app.create_project(project_id="prj_operator03",render_mode="full_video_ai",content="# Story\n\n## Narration\n\nTest.\n")
-            with self.assertRaises(OperatorServiceError): app.set_media_override("prj_operator03","sh_0001","IMAGE")
+            runtime=RuntimeLayout.from_root(root)
+            create_project(runtime,ProjectConfig("prj_operator03",render_mode="full_video_ai"),"# Story\n\n## Narration\n\nTest.\n")
+            app=OperatorService(root)
+            with self.assertRaisesRegex(OperatorServiceError,"Full Video is not available"): app.set_media_override("prj_operator03","sh_0001","IMAGE")
             paths,_=app._project("prj_operator03")
             self.assertNotIn("media",read_json(paths.project_file)["settings"])
 

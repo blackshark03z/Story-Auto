@@ -9,7 +9,7 @@ from PIL import Image
 
 from story_auto.application import OperatorService
 from story_auto.application.production_coordinator import ProductionCoordinator
-from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
 
 
@@ -121,12 +121,15 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
         automatic = iter([
             {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
              "quality": {"policy": "AUTO_ACCEPT"},
+             "stages": {"PLAN": {"status": "BLOCKED"}},
              "evidence": [{"path": "output/generation_requests.json", "present": False}]},
             {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
              "quality": {"policy": "AUTO_ACCEPT"},
+             "stages": {"PLAN": {"status": "BLOCKED"}},
              "evidence": [{"path": "output/generation_requests.json", "present": False}, {"path": "output/review_state.json", "present": True}]},
             {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
              "quality": {"policy": "AUTO_ACCEPT"},
+             "stages": {"PLAN": {"status": "BLOCKED"}},
              "evidence": [{"path": "output/generation_requests.json", "present": True}]},
             {"pipeline_status": "COMPLETE", "active_stage": "RENDER", "stages": {}},
         ])
@@ -141,20 +144,59 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
         self.assertEqual((result["outcome"], result["invoked_stages"], calls),
                          ("FINAL_VIDEO_COMPLETE", ["approve_plan", "plan", "approve_shots"], ["approve_plan", "plan", "approve_shots"]))
 
-    def test_compiled_requests_without_shot_approval_remain_a_plan_blocker(self):
+    def test_coordinator_compiles_directly_when_story_plan_is_already_approved(self):
+        automatic = iter([
+            {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
+             "quality": {"policy": "AUTO_ACCEPT"},
+             "stages": {"PLAN": {"status": "BLOCKED"}},
+             "planning": {"story_plan_approved": True, "visual_plan_approved": False},
+             "evidence": [{"path": "output/generation_requests.json", "present": False}]},
+            {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
+             "quality": {"policy": "AUTO_ACCEPT"},
+             "stages": {"PLAN": {"status": "BLOCKED"}},
+             "planning": {"story_plan_approved": False, "visual_plan_approved": False},
+             "evidence": [{"path": "output/generation_requests.json", "present": True}]},
+            {"pipeline_status": "COMPLETE", "active_stage": "RENDER", "stages": {}},
+        ])
+        calls = []
+        coordinator = ProductionCoordinator(
+            lambda _: next(automatic),
+            {"approve_plan": lambda _: self.fail("approved story plan must not be approved again"),
+             "plan": lambda _: calls.append("plan"),
+             "approve_shots": lambda _: calls.append("approve_shots")},
+        )
+        result = coordinator.run_until("prj_auto_approved_story")
+        self.assertEqual((result["outcome"], result["invoked_stages"], calls),
+                         ("FINAL_VIDEO_COMPLETE", ["plan", "approve_shots"], ["plan", "approve_shots"]))
+
+    def test_auto_accept_compiled_requests_continue_without_an_owner_plan_stop(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
             _fixture(app, "prj_unapproved_compiled", "AUTO_ACCEPT", 1)
             state = app.production_query("prj_unapproved_compiled")
+            self.assertEqual((state["pipeline_status"], state["stages"]["PLAN"]["status"]),
+                             ("READY", "BLOCKED"))
+
+    def test_manual_review_compiled_requests_remain_an_owner_plan_stop(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            _fixture(app, "prj_manual_unapproved_compiled", "MANUAL_REVIEW", 1)
+            state = app.production_query("prj_manual_unapproved_compiled")
             self.assertEqual((state["pipeline_status"], state["active_stage"], state["stages"]["PLAN"]["status"]),
                              ("OWNER_DECISION_REQUIRED", "PLAN", "BLOCKED"))
 
     def test_operator_coordinator_auto_accepts_then_continues_to_render_without_provider_dispatch(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root); paths = _fixture(app, "prj_auto_coordinator", "AUTO_ACCEPT", 2)
-            for name in ("content_manifest.json", "alignment.json", "continuity_bible.json", "shot_plan.json", "media_plan.json", "render_plan.json"):
+            for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json", "render_plan.json"):
                 atomic_write_json(paths.artifact_path(f"output/{name}"), {"fixture": name})
-            atomic_write_json(paths.artifact_path("output/review_state.json"), {"plan_approval": {"status": "APPROVED"}})
+            atomic_write_json(paths.artifact_path("output/review_state.json"), {
+                "plan_approval": {"status": "APPROVED", "bound_hashes": {
+                    name: sha256_file(paths.artifact_path(f"output/{filename}"))
+                    for name, filename in (("timeline", "story_timeline.json"), ("continuity", "continuity_bible.json"),
+                                           ("shot_plan", "shot_plan.json"), ("media_plan", "media_plan.json"))
+                }}
+            })
             renders = []
             def render(_project_id):
                 renders.append(_project_id)

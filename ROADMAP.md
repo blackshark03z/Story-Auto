@@ -94,11 +94,19 @@ Only after Phase 7 pipeline is stable.
 
 UI must use existing application services.
 
-## Phase 9 — Full-video V1 — IMPLEMENTED
+## Phase 9 — Full Video — DEFERRED
 
-The V1 implementation, continuity/resume hardening, and explicit cost
-confirmation are complete. Do not schedule speculative follow-on work here;
-use defect-driven corrective goals after normal production trials.
+`FULL_VIDEO` is deferred from the two-mode production release.
+
+- **Known blocker:** Google Flow may virtualize or re-render historical video
+  result tiles after generation, making unique output attribution ambiguous.
+- **Safety requirement:** never choose the newest, first, or last result
+  heuristically.
+- **Future completion:** requires causal or otherwise uniquely proven
+  provider-result attribution.
+- **Historical E2E evidence:** `prj_b580604811c741b28af4c570d2e75112` and
+  `prj_b8b57ff1215f4e1485615ea7037c7b72` remain preserved evidence; do not
+  access or mutate them for this deferred work.
 
 ## Phase 10 — Ambient Story foundation — LOCAL CANDIDATE
 

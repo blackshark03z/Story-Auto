@@ -52,48 +52,59 @@ class ProductionCoordinator:
                 state = self.query(project_id)
             if state["pipeline_status"] == "COMPLETE":
                 return self._result(project_id, run_id, "FINAL_VIDEO_COMPLETE", invoked, state)
+            # AUTO_ACCEPT treats the two durable planning approvals as normal
+            # one-click production work.  Manual review retains its owner
+            # boundary below.  Handle this before generic READY-stage routing:
+            # the ordinary PLAN operation is compilation only and must never
+            # bypass an approval that is still absent.
+            automatic_plan = (
+                state.get("active_stage") == "PLAN"
+                and state.get("quality", {}).get("policy") == "AUTO_ACCEPT"
+                and state.get("stages", {}).get("PLAN", {}).get("status") == "BLOCKED"
+            )
+            if automatic_plan:
+                evidence = {item.get("path"): item.get("present") for item in state.get("evidence", [])}
+                compiled = bool(evidence.get("output/generation_requests.json"))
+                planning = state.get("planning", {})
+                if not compiled:
+                    # Story approval is durable evidence, not an action to
+                    # replay.  Once it is current, compilation is the
+                    # expected mutation; a repeated approval is correctly
+                    # idempotent and must not cause a false no-progress
+                    # safety stop.
+                    approval = "plan" if planning.get("story_plan_approved") else "approve_plan"
+                else:
+                    approval = "approve_shots"
+                try:
+                    self.operations[approval](project_id)
+                    invoked.append(approval)
+                    after = self.query(project_id)
+                    if self._progress_fingerprint(state) == self._progress_fingerprint(after):
+                        return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, after,
+                                            reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation=approval)
+                    # The first approval authorizes compilation; it does
+                    # not itself create a shot/media/generation plan. Run
+                    # that provider-free planning operation once before
+                    # evaluating the distinct compiled-plan approval.
+                    if approval == "approve_plan":
+                        self.operations["plan"](project_id)
+                        invoked.append("plan")
+                        planned = self.query(project_id)
+                        if self._progress_fingerprint(after) == self._progress_fingerprint(planned):
+                            return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, planned,
+                                                reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation="plan")
+                        state = planned
+                        continue
+                    state = after
+                    continue
+                except Exception as error:
+                    code = getattr(error, "failure_class", type(error).__name__)
+                    return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
+                                        error=str(error), reason_code=code)
             if state["pipeline_status"] in {"RUNNING", "RECOVERING", "RECOVERY_READY", "NEEDS_ATTENTION", "BLOCKED",
                                             "OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
                 if state["pipeline_status"] in {"RUNNING", "RECOVERING", "NEEDS_ATTENTION", "BLOCKED"}:
                     return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
-                # Automatic quality is an explicit request to continue through
-                # validated planning.  There are two canonical plan approvals:
-                # the story plan, then the compiled shot/media plan.  Keep every
-                # other owner boundary intact, especially Manual review.
-                automatic_plan = (
-                    state["pipeline_status"] == "OWNER_DECISION_REQUIRED"
-                    and state.get("active_stage") == "PLAN"
-                    and state.get("quality", {}).get("policy") == "AUTO_ACCEPT"
-                )
-                if automatic_plan:
-                    evidence = {item.get("path"): item.get("present") for item in state.get("evidence", [])}
-                    approval = "approve_shots" if evidence.get("output/generation_requests.json") else "approve_plan"
-                    try:
-                        self.operations[approval](project_id)
-                        invoked.append(approval)
-                        after = self.query(project_id)
-                        if self._progress_fingerprint(state) == self._progress_fingerprint(after):
-                            return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, after,
-                                                reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation=approval)
-                        # The first approval authorizes compilation; it does
-                        # not itself create a shot/media/generation plan. Run
-                        # that provider-free planning operation once before
-                        # evaluating the distinct compiled-plan approval.
-                        if approval == "approve_plan":
-                            self.operations["plan"](project_id)
-                            invoked.append("plan")
-                            planned = self.query(project_id)
-                            if self._progress_fingerprint(after) == self._progress_fingerprint(planned):
-                                return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, planned,
-                                                    reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation="plan")
-                            state = planned
-                            continue
-                        state = after
-                        continue
-                    except Exception as error:
-                        code = getattr(error, "failure_class", type(error).__name__)
-                        return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
-                                            error=str(error), reason_code=code)
                 if state["pipeline_status"] != "RECOVERY_READY":
                     return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
             flow = state.get("flow", {})

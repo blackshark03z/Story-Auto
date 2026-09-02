@@ -6009,9 +6009,18 @@ class FlowExecutor:
     capabilities: Any
     generate: Any
 
-    def run(self, request, refs, temporary: Path):
+    def run(self, request, refs, temporary: Path, *, before_provider_boundary=None):
         self.capabilities.require(request["media_type"], bool(refs))
-        return self.generate(request, refs, temporary)
+        setter = getattr(self.generate, "set_before_provider_boundary", None)
+        if not callable(setter):
+            if before_provider_boundary is not None:
+                before_provider_boundary()
+            return self.generate(request, refs, temporary)
+        setter(before_provider_boundary)
+        try:
+            return self.generate(request, refs, temporary)
+        finally:
+            setter(None)
 
     def reconcile_attempt(self, request, attempt, temporary: Path):
         reconcile = getattr(self.generate, "reconcile", None)
@@ -6266,14 +6275,21 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt_number,
                 )
                 request_context["_flow_reference_paths"] = list(refs)
-                # Persist the boundary marker and accounting immediately before
-                # the sole call which can activate Flow.
-                attempt["provider_execution_state"] = "PROVIDER_BOUNDARY_ENTERED"
-                attempt["provider_boundary_entered_at"] = _now()
-                attempt["provider_submission_recorded"] = True
-                entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
-                atomic_write_json(path, manifest)
-                execution["result"] = executor.run(request_context, refs, temp)
+                def mark_provider_boundary() -> None:
+                    # The live adapter calls this only after reference
+                    # attachment, Generate readiness, and the final baseline
+                    # are all complete, immediately before its one activation.
+                    if attempt.get("provider_execution_state") != "NOT_STARTED":
+                        raise FlowError("FLOW_PROVIDER_BOUNDARY_REENTERED")
+                    attempt["provider_execution_state"] = "PROVIDER_BOUNDARY_ENTERED"
+                    attempt["provider_boundary_entered_at"] = _now()
+                    attempt["provider_submission_recorded"] = True
+                    entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
+                    atomic_write_json(path, manifest)
+                execution["result"] = executor.run(
+                    request_context, refs, temp,
+                    before_provider_boundary=mark_provider_boundary,
+                )
                 execution["temporary"] = temp
 
             try:
@@ -6304,7 +6320,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 _append_terminal_observations(request, attempt, executor.generate)
                 safe_pre_dispatch_candidate = error.failure_class in {
                     "FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED",
-                    "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                    "OUTPUT_ATTRIBUTION_NOT_QUIESCENT", "FLOW_REFERENCE_UPLOAD_FAILED",
                 }
                 if safe_pre_dispatch_candidate and canonical_no_dispatch_proof(attempt):
                     state = "NOT_DISPATCHED"

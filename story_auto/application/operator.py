@@ -17,7 +17,7 @@ from story_auto.core.audio import parse_srt_bytes
 from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
 from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
-from story_auto.application.flow_product import product_flow_status, required_capabilities
+from story_auto.application.flow_product import product_flow_status, required_capabilities, render_mode_availability
 from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
@@ -42,6 +42,13 @@ from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available
 
 class OperatorServiceError(RuntimeError):
     pass
+
+
+class FeatureNotAvailableError(OperatorServiceError):
+    failure_class = "FEATURE_NOT_AVAILABLE"
+
+    def __init__(self, message: str = "Full Video is not available in this release."):
+        super().__init__(message)
 
 
 _ATTENTION = {
@@ -250,7 +257,35 @@ class OperatorService:
 
     def production_query(self, project_id: str) -> dict[str, Any]:
         """Canonical Phase A production query; reconciles compact state lazily."""
+        _paths, config = self._project(project_id)
+        unavailable = render_mode_availability(config.render_mode)
+        if not unavailable["available"]:
+            # Do not reconcile or rewrite a historical Full Video project just
+            # to apply this release's availability policy.
+            stages = {name: {"status": "NOT_STARTED"} for name in ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")}
+            return {"pipeline_status": unavailable["reason_code"], "active_stage": "SOURCE", "stages": stages,
+                    "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
+                    "quality": {}, "planning": {}, "recovery": {"status": unavailable["reason_code"],
+                    "reason_code": unavailable["reason_code"], "human_message": unavailable["human_message"],
+                    "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
+                    "requires_owner_decision": False, "next_action": None}, "blocker": {"reason_code": unavailable["reason_code"],
+                    "human_message": unavailable["human_message"], "retryable": False},
+                    "next_action": None, "provider_dispatches": 0}
         return self.production_queries.production_query(project_id)
+
+    def _require_available_render_mode(self, config) -> None:
+        availability = render_mode_availability(config.render_mode)
+        if not availability["available"]:
+            raise FeatureNotAvailableError(availability["human_message"])
+
+    def _deferred_feature_result(self, project_id: str) -> dict[str, Any] | None:
+        _paths, config = self._project(project_id)
+        availability = render_mode_availability(config.render_mode)
+        if availability["available"]:
+            return None
+        return {"project_id": project_id, "outcome": availability["reason_code"],
+                "reason_code": availability["reason_code"], "human_message": availability["human_message"],
+                "provider_dispatches": 0, "retryable": False, "next_action": None, "invoked_stages": []}
 
     def project_workspace(self, project_id: str) -> dict[str, Any]:
         """Ordinary project-page payload: compact state first, no raw manifests."""
@@ -328,6 +363,9 @@ class OperatorService:
         resolved_settings=self.runtime_defaults.project_snapshot(settings)
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
         effective_render_mode=render_mode or str(defaults["render_mode"])
+        availability = render_mode_availability(effective_render_mode)
+        if not availability["available"]:
+            raise FeatureNotAvailableError(availability["human_message"])
         mode=execution_mode(resolved_settings)
         source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
         if source_mode not in {"STORY_CONTENT","EXISTING_AUDIO","AUDIO_SRT"}:
@@ -508,7 +546,7 @@ class OperatorService:
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
         ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
         result={"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
-                "format_label":{"hybrid_hook":"Cinematic opening","full_video_ai":"Full video animation","ambient_story":"Ambient Story","full_image":"Full Image"}[config.render_mode],
+                "format_label":{"hybrid_hook":"Intro Video + Images","full_video_ai":"Full Video (unavailable)","ambient_story":"Ambient Story","full_image":"Full Image"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
                 "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
@@ -536,7 +574,11 @@ class OperatorService:
                 "flow_binding":config.settings.get("flow_binding"),"production":production}
         # The compact reconciled state owns the primary production command.  The
         # existing detailed snapshot remains available for advanced compatibility.
-        if production["pipeline_status"] == "COMPLETE":
+        if production["pipeline_status"] == "FEATURE_NOT_AVAILABLE":
+            result.update({"user_status":"Unavailable","current_stage":"Unavailable",
+                           "current_activity":production["recovery"]["human_message"],
+                           "primary_action":{"action":"Full Video unavailable","action_id":"review_project"}})
+        elif production["pipeline_status"] == "COMPLETE":
             result.update({"user_status":"Complete","current_stage":"Finish","current_activity":"Final video is ready.","progress":100,
                            "primary_action":{"action":"Open final video","action_id":"open_final"}})
         elif production["pipeline_status"] == "READY" and not blocked:
@@ -565,7 +607,7 @@ class OperatorService:
         return self.get_content(project_id)
 
     def start_or_resume(self, project_id: str, *, planning_provider=None, audio_adapter=None) -> dict[str, Any]:
-        paths,config=self._project(project_id); actions={"content":run_content_stage(self.runtime.root,project_id)}
+        paths,config=self._project(project_id); self._require_available_render_mode(config); actions={"content":run_content_stage(self.runtime.root,project_id)}
         mode=execution_mode(config.settings)
         if "tts" in config.settings or mode != "FULL":
             actions["tts"],actions["alignment"]=run_audio_stages(self.runtime.root,project_id,adapter=audio_adapter)
@@ -598,9 +640,15 @@ class OperatorService:
         return self.generate(project_id)
 
     def run_to_final(self, project_id: str) -> dict[str, Any]:
+        unavailable = self._deferred_feature_result(project_id)
+        if unavailable is not None:
+            return unavailable
         return self._production_commands().run_to_final(project_id)
 
     def continue_production(self, project_id: str) -> dict[str, Any]:
+        unavailable = self._deferred_feature_result(project_id)
+        if unavailable is not None:
+            return unavailable
         return self._production_commands().continue_production(project_id)
 
     def planning_review(self, project_id: str) -> dict[str, Any]:
@@ -609,6 +657,7 @@ class OperatorService:
 
     def plan_visuals(self, project_id: str, *, provider=None) -> dict[str, Any]:
         _,config=self._project(project_id)
+        self._require_available_render_mode(config)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY reuses accepted visual assets and cannot create a visual plan.")
         run_visual_planning_stages(self.runtime.root,project_id,provider=provider); return self.planning_review(project_id)
 
@@ -978,6 +1027,7 @@ class OperatorService:
 
     def set_media_override(self, project_id: str, shot_id: str, media_type: str, requirement: str="REQUIRED", *, provider=None) -> dict[str, Any]:
         paths,config=self._project(project_id); media_type=media_type.upper(); requirement=requirement.upper()
+        self._require_available_render_mode(config)
         if config.render_mode=="full_video_ai" and (media_type,requirement)!=("VIDEO","REQUIRED"): raise OperatorServiceError("full_video_ai requires VIDEO / REQUIRED")
         if config.render_mode=="ambient_story" and (media_type,requirement)!=("IMAGE","REQUIRED"): raise OperatorServiceError("ambient_story requires IMAGE / REQUIRED")
         if config.render_mode=="full_image" and (media_type,requirement)!=("IMAGE","REQUIRED"): raise OperatorServiceError("full_image requires IMAGE / REQUIRED")
@@ -990,6 +1040,7 @@ class OperatorService:
 
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None, max_requests: int | None=None) -> dict[str, Any]:
         _,config=self._project(project_id)
+        self._require_available_render_mode(config)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
         self.set_pause(project_id,False)
         connection,status=self.flow_connections.connection_for_project(
@@ -1004,11 +1055,13 @@ class OperatorService:
 
     def build_render_plan(self, project_id: str) -> dict[str, Any]:
         paths,config=self._project(project_id); load=lambda name:read_json(paths.artifact_path(f"output/{name}.json"))
+        self._require_available_render_mode(config)
         settings,_=resolve_render_settings(config)
         plan=resolve_render_plan(project_id=project_id,project_root=paths.root,render_mode=config.render_mode,alignment=load("alignment"),shot_plan=load("shot_plan"),media_plan=load("media_plan"),generation_requests=load("generation_requests"),generation_manifest=load("generation_manifest"),settings=settings)
         atomic_write_json(paths.artifact_path("output/render_plan.json"),plan); return plan
 
     def render(self, project_id: str, *, force_final: bool = False) -> dict[str, Any]:
+        _paths, config = self._project(project_id); self._require_available_render_mode(config)
         return run_render_stages(self.runtime.root, project_id, force_final=force_final)
 
     def publishing(self, project_id: str, action: str, *, provider=None) -> Any:

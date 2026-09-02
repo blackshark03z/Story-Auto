@@ -30,6 +30,24 @@ _ACTIONS = {
 }
 
 
+# Provider capability and product availability are separate facts. Flow may
+# create video while this release still defers the Full Video product mode.
+# Legacy project configuration remains readable; this only guards new or
+# attempted Full Video production work.
+FULL_VIDEO_UNAVAILABLE = {
+    "available": False,
+    "reason_code": "FEATURE_NOT_AVAILABLE",
+    "human_message": "Full Video is not available in this release.",
+    "retryable": False,
+}
+
+
+def render_mode_availability(render_mode: str) -> dict:
+    if render_mode == "full_video_ai":
+        return dict(FULL_VIDEO_UNAVAILABLE)
+    return {"available": True, "reason_code": None, "human_message": None, "retryable": False}
+
+
 def required_capabilities(config, request_media_types: Iterable[str] | None = None) -> list[str]:
     if execution_mode(config.settings) == "RENDER_ONLY":
         return []

@@ -723,8 +723,17 @@ class FlowBrowserDom:
                     if (int(candidate_hash,16)^int(target_hash,16)).bit_count()<=4: matched_url=url; matched_alt=record.get("alt",""); break
             if matched_url is None: time.sleep(.5)
         if matched_url is None: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "uploaded reference bytes were not identifiable in Flow")
-        selected=self.page.evaluate("""(()=>{const alt=%s,d=document.querySelector('[role=dialog]');if(!d)return false;const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512&&(e.alt||'')===alt),image=images[images.length-1];if(!image)return false;image.click();return true})()""" % __import__('json').dumps(matched_alt))
-        if not selected: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be selected")
+        # Flow replaces its upload tile as it finishes decoding.  Select the
+        # semantic option, not a transient thumbnail node, and wait until the
+        # option reports selected before exposing the Add control.
+        deadline=time.monotonic()+10; selected=False
+        while time.monotonic()<deadline:
+            state=self.page.evaluate("""(()=>{const url=%s,alt=%s,d=document.querySelector('[role=dialog]');if(!d)return {state:'DIALOG_MISSING'};const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512);const image=images.find(e=>(e.currentSrc||e.src)===url)||images.find(e=>(e.alt||'')===alt);if(!image)return {state:'WAITING_FOR_OPTION'};const option=image.closest('[role=option]');if(!option)return {state:'WAITING_FOR_OPTION'};if(option.getAttribute('aria-selected')!=='true'){(%s)(option);return {state:'SELECTING'}};return {state:'SELECTED'}})()""" % (__import__('json').dumps(matched_url), __import__('json').dumps(matched_alt), _ACTIVATE))
+            if isinstance(state,dict) and state.get("state")=="SELECTED":
+                selected=True; break
+            if isinstance(state,dict) and state.get("state")=="DIALOG_MISSING": break
+            time.sleep(.2)
+        if not selected: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference did not become selectable")
         deadline=time.monotonic()+5; attached=False
         while time.monotonic()<deadline:
             attached=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).reverse().find(e=>!e.querySelector('i')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
@@ -807,6 +816,11 @@ class LiveFlowGenerator:
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
         self._poll_timeline = ProviderPollEvidenceTimeline()
         self._pre_dispatch_asset_records: list[dict] = []
+        self._before_provider_boundary: Callable[[], None] | None = None
+
+    def set_before_provider_boundary(self, callback: Callable[[], None] | None) -> None:
+        """Install the service-owned marker invoked immediately before Generate."""
+        self._before_provider_boundary = callback
 
     @staticmethod
     def _fetch_bytes(page, url: str) -> bytes:
@@ -1296,6 +1310,7 @@ class LiveFlowGenerator:
                     submit = FlowComposer(dom).submit(
                         request["prompt"], references=staged_references,
                         media_type=request["media_type"], before_dispatch=baseline,
+                        before_generate=self._before_provider_boundary,
                         mode_already_configured=True,
                     )
                 except (FlowError, FlowSessionError) as error:

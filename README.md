@@ -14,11 +14,14 @@ independent R3 approval before any runtime recovery, and Trial B has not started
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
-## Product modes
+## Production modes in this release
 
-- **`hybrid_hook`** — AI video for the opening hook (default ~55 seconds), generated still imagery with restrained motion for the body, and optional AI-video motion spikes.
-- **`full_video_ai`** — every final visual segment is video; still images may be used as references/keyframes but may not silently replace required final video.
-- **`ambient_story`** — narration-led long-form production using a small set of semantic visual chapters, Flow images only, and deterministic local presentation. Initial styles are **Quiet Verdict** and **Hidden Mastery**.
+- **Intro Video + Images (`hybrid_hook`)** — AI video for the opening hook,
+  generated still imagery with restrained motion for the story body.
+- **Full Image (`full_image`)** — images only, deterministic local motion, and
+  optional waveform presentation.
+- **Full Video (`full_video_ai`)** — **deferred / coming soon**. It is not
+  available to create or run in this release.
 
 ## V1 provider choices
 
@@ -185,6 +188,7 @@ it cannot resolve the request safely, it makes no new Flow activation. For the
 preserved Trial A project, use this path only—never a replacement project,
 blind re-submit, or gallery-item guess.
 
-Long `full_video_ai` shots are partitioned into stable provider-duration request
-parts and every part must resolve to video before rendering. `NATURAL_SOFT` is an
-optional restrained finishing profile with no blur or artificial sharpening.
+Future `full_video_ai` work requires causal or otherwise uniquely proven
+provider-result attribution; newest-card, first-card, last-card, and timestamp
+heuristics are forbidden. `NATURAL_SOFT` is an optional restrained finishing
+profile with no blur or artificial sharpening.

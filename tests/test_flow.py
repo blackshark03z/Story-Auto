@@ -320,6 +320,22 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(events,["references","baseline"])
         self.assertTrue(dom.controls[0].clicked)
 
+    def test_composer_marks_provider_boundary_only_after_reference_readiness_and_baseline(self):
+        events=[]
+        class OrderedDom(DOM):
+            def add_references(self, _):
+                events.append("references")
+                return {"expected":1,"committed":True}
+            def generate_controls(self, *_):
+                events.append("generate_ready")
+                return super().generate_controls(*_)
+        dom=OrderedDom()
+        FlowComposer(dom).submit("p", references=["reference.png"], media_type="VIDEO",
+                                 before_dispatch=lambda: events.append("baseline"),
+                                 before_generate=lambda: events.append("provider_boundary"))
+        self.assertEqual(events,["references","generate_ready","baseline","provider_boundary"])
+        self.assertTrue(dom.controls[0].clicked)
+
     def test_reference_readiness_is_committed_before_generate_resolution(self):
         events=[]
         class ReferenceDom(DOM):
@@ -407,6 +423,28 @@ class FlowTests(unittest.TestCase):
             execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
             self.assertEqual((len(calls), result["blocked"]), (1, True))
+
+    def test_reference_attachment_failure_before_generate_is_not_dispatched(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            class ReferenceAttachmentFails:
+                dispatch_confirmed = False
+                last_settings = {"activation": {"input_dispatched": False,
+                                  "proof": "PRE_DISPATCH_COMPOSER_FAILURE"},
+                                 "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                 "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                def set_before_provider_boundary(self, callback): self.callback = callback
+                def __call__(self, *_):
+                    calls.append(1)
+                    raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),ReferenceAttachmentFails())
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,request_ids={"ref"})
+            entry=read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            attempt=entry["attempts"][-1]
+            self.assertEqual(calls,[1])
+            self.assertEqual(result["new_submissions"],0)
+            self.assertEqual((entry["status"],entry.get("provider_submissions",0)),("NOT_DISPATCHED",0))
+            self.assertEqual((attempt["provider_execution_state"],attempt.get("provider_submission_recorded")),("NOT_STARTED",None))
 
     def test_interrupted_pre_dispatch_attempt_can_be_safely_reopened(self):
         with tempfile.TemporaryDirectory() as root:
