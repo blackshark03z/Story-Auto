@@ -4,7 +4,9 @@ from __future__ import annotations
 import threading
 import tempfile
 import unittest
+import socket
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image
 
@@ -13,6 +15,7 @@ from story_auto.application.production_coordinator import ProductionCoordinator
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
 from story_auto.core.project.production_state import ProductionStateReconciler
+from story_auto.core.project import lock as lock_module
 from story_auto.providers.flow.service import execute_generation, FlowExecutor
 from story_auto.providers.flow.session import FlowCapabilities
 
@@ -101,12 +104,73 @@ class _FakeFlow:
 
 
 class ProductionRecoveryProjectionTests(unittest.TestCase):
+    def test_live_continue_holding_project_lock_projects_running(self):
+        with tempfile.TemporaryDirectory() as root:
+            app, paths = Slice4Fixture.operator(root)
+            entered, release = threading.Event(), threading.Event()
+            provider = _FakeFlow(entered=entered, release=release)
+            original_generate = app.generate
+            app.generate = lambda project_id: original_generate(
+                project_id, executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), provider),
+                max_requests=1,
+            )
+            worker = threading.Thread(target=lambda: app.continue_production(paths.project_id))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                self.assertEqual(app.production_query(paths.project_id)["pipeline_status"], "RUNNING")
+            finally:
+                release.set(); worker.join(3)
+
+    def test_stale_generating_and_running_marker_without_live_lock_is_not_running(self):
+        entry = {"request_id": "shot_01", "status": "GENERATING", "provider_submissions": 1,
+                 "attempts": [{"attempt": 1, "status": "GENERATING", "dispatch_confirmed": True,
+                               "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths = Slice4Fixture.project(root, entry)
+            state = Slice4Fixture.state(runtime, paths)
+            state["run"] = {"run_id": "run_stale", "status": "RUNNING"}
+            atomic_write_json(paths.artifact_path("output/production_state.json"), state)
+            state = Slice4Fixture.state(runtime, paths)
+            self.assertNotEqual(state["pipeline_status"], "RUNNING")
+
+    def test_dead_stale_lock_is_not_live_work_evidence(self):
+        entry = {"request_id": "shot_01", "status": "GENERATING", "provider_submissions": 1,
+                 "attempts": [{"attempt": 1, "status": "GENERATING", "dispatch_confirmed": True,
+                               "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths = Slice4Fixture.project(root, entry)
+            state = Slice4Fixture.state(runtime, paths)
+            state["run"] = {"run_id": "run_stale", "status": "RUNNING"}
+            atomic_write_json(paths.artifact_path("output/production_state.json"), state)
+            atomic_write_json(runtime.locks / f"{paths.project_id}.lock", {
+                "project_id": paths.project_id, "pid": 999999, "hostname": socket.gethostname(), "created_at": 0,
+            })
+            with patch.object(lock_module, "_process_liveness", return_value=False):
+                state = Slice4Fixture.state(runtime, paths)
+            self.assertNotEqual(state["pipeline_status"], "RUNNING")
+
+    def test_legacy_selected_asset_requires_real_bytes(self):
+        entry = {"request_id": "shot_01", "status": "QC_PENDING", "attempts": [],
+                 "selected_asset": {"path": "assets/legacy.png"}}
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths = Slice4Fixture.project(root, entry)
+            asset = paths.artifact_path("assets/legacy.png")
+            asset.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (1280, 720), "green").save(asset, "PNG")
+            self.assertEqual(Slice4Fixture.state(runtime, paths)["recovery"]["status"], "COMPLETE")
+            asset.unlink()
+            state = Slice4Fixture.state(runtime, paths)
+            self.assertNotEqual(state["recovery"]["status"], "COMPLETE")
+            self.assertEqual(state["pipeline_status"], "NEEDS_ATTENTION")
+            self.assertEqual((state["quality"]["technical_passed"], state["quality"]["pending_review"]), (0, 0))
+
     def test_recovery_matrix_projects_durable_evidence_without_status_only_running(self):
         cases = {
-            "active": ({"request_id": "shot_01", "status": "GENERATING", "provider_submissions": 1,
+            "synthetic_active_field": ({"request_id": "shot_01", "status": "GENERATING", "provider_submissions": 1,
                         "attempts": [{"attempt": 1, "status": "GENERATING", "dispatch_confirmed": True,
                                       "provider_progress_active": True,
-                                      "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}, "RUNNING", False, 0),
+                                      "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}, "NEEDS_ATTENTION", True, 0),
             "stale_generating": ({"request_id": "shot_01", "status": "GENERATING", "provider_submissions": 1,
                                   "attempts": [{"attempt": 1, "status": "GENERATING", "dispatch_confirmed": True,
                                                 "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]}, "NEEDS_ATTENTION", True, 0),

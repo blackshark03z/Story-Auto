@@ -187,24 +187,41 @@ class OperatorUiTests(unittest.TestCase):
                     continue_production()
                     self.assertIsNone(page.get_by_role("button",name="Review plan",exact=True).wait_for(timeout=1500))
 
-                    running=deepcopy(ready); running["production"]["stages"]["VISUALS"]={"status":"RUNNING","completed_items":1,"total_items":7}
+                    running=deepcopy(ready); running["production"]["pipeline_status"]="RUNNING"; running["production"]["stages"]["VISUALS"]={"status":"RUNNING","completed_items":1,"total_items":7}
                     scenario["workspace"]=running; scenario["result"]={"outcome":"PRODUCTION_PROGRESS"}
                     reload_project()
-                    continue_production()
-                    self.assertIsNone(page.get_by_text("Production is continuing.",exact=True).wait_for(timeout=1500))
+                    self.assertEqual(page.locator("#runtimeState").text_content(),"Working")
                     self.assertIsNone(page.get_by_text("Creating visuals").first.wait_for(timeout=1500))
 
-                    scenario["delay"]=3; before_poll=scenario["workspace_calls"]
+                    scenario["workspace"]=ready; scenario["delay"]=3; before_poll=scenario["workspace_calls"]
+                    reload_project()
                     continue_production()
-                    self.assertEqual(page.locator("#runtimeState").text_content(),"Working")
+                    self.assertEqual(page.locator("#runtimeState").text_content(),"Ready")
                     page.wait_for_timeout(2600)
                     self.assertGreater(scenario["workspace_calls"],before_poll)
                     page.wait_for_timeout(900)
                     self.assertEqual(page.locator("#runtimeState").text_content(),"Ready")
                     scenario["delay"]=0
 
+                    # A client-owned request may still be in flight, but a
+                    # fresh terminal/recovery snapshot must immediately win
+                    # the user-visible activity label and primary copy.
+                    for recovery_state in ("RECOVERY_READY", "NEEDS_ATTENTION", "BLOCKED", "COMPLETE"):
+                        stopped=deepcopy(complete if recovery_state == "COMPLETE" else ready)
+                        stopped["production"].update({"pipeline_status":recovery_state,
+                                                        "recovery":{"status":recovery_state,
+                                                                    "human_message":"Synthetic safe stop"}})
+                        stopped["production"]["stages"]["VISUALS"]={"status":recovery_state,"completed_items":1,"total_items":7}
+                        scenario["workspace"]=ready; scenario["result"]={"outcome":recovery_state}; scenario["delay"]=3
+                        reload_project(); continue_production(); scenario["workspace"]=stopped
+                        page.wait_for_timeout(2600)
+                        self.assertEqual(page.locator("#runtimeState").text_content(),"Ready")
+                        self.assertEqual(page.get_by_role("button",name="Working…",exact=True).count(),0)
+                        page.wait_for_timeout(900)
+                    scenario["delay"]=0
+
                     scenario["workspace"]=complete; scenario["result"]={"outcome":"FINAL_VIDEO_COMPLETE","production":complete["production"]}
-                    continue_production()
+                    reload_project()
                     self.assertIsNone(page.get_by_role("heading",name="Your final video is ready.",exact=True).wait_for(timeout=1500))
                     browser.close()
             finally:

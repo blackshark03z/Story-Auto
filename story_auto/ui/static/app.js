@@ -35,15 +35,25 @@ function backendProductionWorking(production) {
   return !terminalOrIdle.includes(production?.pipeline_status) && ['RUNNING','RECOVERING'].includes(production?.pipeline_status);
 }
 
+function visibleProductionWorking() {
+  const production = state.snapshot?.production;
+  return production?.pipeline_status ? backendProductionWorking(production) : state.busy;
+}
+
+function syncActivityPresentation() {
+  const working = visibleProductionWorking();
+  $('#view').setAttribute('aria-busy', String(working));
+  document.querySelector('.loading-line')?.remove();
+  document.querySelector('#busyReason')?.remove();
+  if (working) document.body.insertAdjacentHTML('beforeend', '<div class="loading-line" aria-hidden="true"></div>');
+  if (working && state.busyLabel) document.body.insertAdjacentHTML('beforeend', `<span id="busyReason" class="sr-only" role="status">${esc(state.busyLabel)}</span>`);
+  $('#runtimeState').textContent = working ? 'Working' : 'Ready';
+}
+
 function setBusy(value, label = '') {
   state.busy = value;
   state.busyLabel = label;
-  $('#view').setAttribute('aria-busy', String(value));
-  document.querySelector('.loading-line')?.remove();
-  document.querySelector('#busyReason')?.remove();
-  if (value) document.body.insertAdjacentHTML('beforeend', '<div class="loading-line" aria-hidden="true"></div>');
-  if (value && label) document.body.insertAdjacentHTML('beforeend', `<span id="busyReason" class="sr-only" role="status">${esc(label)}</span>`);
-  $('#runtimeState').textContent = value || backendProductionWorking(state.snapshot?.production) ? 'Working' : 'Ready';
+  syncActivityPresentation();
 }
 
 function setHeader(eyebrow, title, actions = '') {
@@ -221,12 +231,12 @@ function projectHeader(snapshot) {
 function renderProject() {
   const workspace=state.snapshot, production=workspace.production, blocker=production.blocker, action=production.next_action, flow=production.flow;
   projectHeader(workspace);
-  if (production.pipeline_status === 'COMPLETE') { renderComplete(workspace); return; }
+  if (production.pipeline_status === 'COMPLETE') { syncActivityPresentation(); renderComplete(workspace); return; }
   const visual=production.stages.VISUALS || {}, recovery=production.recovery || {};
   const activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (recovery.human_message || blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
-  if (!state.busy) $('#runtimeState').textContent = backendProductionWorking(production) ? 'Working' : 'Ready';
+  syncActivityPresentation();
   const immediateAction = state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action;
-  const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(state.busy ? 'Working…' : immediateAction.label)}</button>`;
+  const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(backendProductionWorking(production) ? 'Working…' : immediateAction.label)}</button>`;
   $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(immediateAction.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
   ${state.actionOutcome ? actionOutcomeCard(state.actionOutcome) : ''}
   ${state.error ? errorCard(state.error) : ''}

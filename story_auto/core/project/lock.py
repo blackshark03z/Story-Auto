@@ -103,6 +103,61 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
+def _windows_process_liveness(pid: int, *, probe=None) -> bool | None:
+    """Return True only for a provably live owner; None is intentionally unknown."""
+    if pid <= 0:
+        return False
+    try:
+        native = probe or _WindowsProcessProbe()
+        handle = native.open_process(pid)
+        if not handle:
+            error = native.last_error()
+            return False if error == _ERROR_INVALID_PARAMETER else None
+        try:
+            code = native.exit_code(handle)
+            return None if code is None else code == _STILL_ACTIVE
+        finally:
+            native.close_handle(handle)
+    except Exception:
+        return None
+
+
+def _process_liveness(pid: int) -> bool | None:
+    """Read-only activity proof, stricter than stale-lock acquisition safety."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        return _windows_process_liveness(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+    except OSError:
+        return None
+    return True
+
+
+def project_lock_owned_by_live_process(runtime: RuntimeLayout, project_id: str) -> bool:
+    """Prove a local project lock is owned by a live process without mutating it.
+
+    Unknown ownership or liveness is not operational activity evidence.  This
+    deliberately differs from lock acquisition, where uncertainty protects a
+    potentially live owner from being stolen.
+    """
+    path = runtime.locks / f"{project_id}.lock"
+    try:
+        metadata = read_json(path)
+    except Exception:
+        return False
+    if (not isinstance(metadata, dict) or metadata.get("project_id") != project_id
+            or metadata.get("hostname") != socket.gethostname()
+            or not isinstance(metadata.get("pid"), int)):
+        return False
+    return _process_liveness(metadata["pid"]) is True
+
+
 class ProjectLock:
     def __init__(self, runtime: RuntimeLayout, project_id: str, *, stale_after_seconds: float = 300.0, clock=time.time) -> None:
         self.runtime, self.project_id, self.stale_after_seconds, self.clock = runtime.ensure(), project_id, stale_after_seconds, clock

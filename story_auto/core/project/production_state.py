@@ -105,6 +105,10 @@ class ProductionStateReconciler:
         requests = _read(paths.artifact_path("output/generation_requests.json"), {"requests": []})
         manifest = _read(paths.artifact_path("output/generation_manifest.json"), {"requests": []})
         control = _read(paths.artifact_path("output/execution_control.json"), {})
+        old_run = existing.get("run", {}) if isinstance(existing, dict) and isinstance(existing.get("run"), dict) else {}
+        from story_auto.core.project.lock import project_lock_owned_by_live_process
+        active_project_operation = (old_run.get("status") == "RUNNING"
+                                    and project_lock_owned_by_live_process(paths.runtime, paths.project_id))
         request_ids = {item.get("request_id") for item in requests.get("requests", []) if item.get("purpose") == "SHOT" and item.get("request_id")}
         entries = {item.get("request_id"): item for item in manifest.get("requests", []) if item.get("request_id")}
         statuses = [str(entries[item].get("status", "NOT_STARTED")) for item in request_ids if item in entries]
@@ -121,13 +125,18 @@ class ProductionStateReconciler:
             and self._selected_asset_usable(paths, entry)
             for entry in required_entries
         )
-        recovery = self._visual_recovery(paths, requests, entries, request_ids, generated_for_quality)
+        recovery = self._visual_recovery(paths, requests, entries, request_ids, generated_for_quality,
+                                         active_project_operation=active_project_operation)
         qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
         quality = {
             "status": "NOT_STARTED", "policy": qc_policy, "policy_explicit": qc_policy_explicit,
-            "technical_passed": sum(1 for entry in required_entries if entry.get("status") in {"QC_PENDING", "SUCCEEDED"} and isinstance(entry.get("selected_asset"), dict)),
-            "pending_review": sum(1 for entry in required_entries if entry.get("status") == "QC_PENDING"),
-            "accepted": sum(1 for entry in required_entries if entry.get("status") == "SUCCEEDED" and isinstance(entry.get("selected_asset"), dict) and entry["selected_asset"].get("production_qc") in accepted_markers),
+            "technical_passed": sum(1 for entry in required_entries if entry.get("status") in {"QC_PENDING", "SUCCEEDED"}
+                                    and self._selected_asset_usable(paths, entry)),
+            "pending_review": sum(1 for entry in required_entries if entry.get("status") == "QC_PENDING"
+                                  and self._selected_asset_usable(paths, entry)),
+            "accepted": sum(1 for entry in required_entries if entry.get("status") == "SUCCEEDED"
+                            and self._selected_asset_usable(paths, entry)
+                            and entry["selected_asset"].get("production_qc") in accepted_markers),
             "rejected": sum(1 for entry in required_entries if entry.get("status") in {"AMBIGUOUS", "FAILED_RETRYABLE", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"}),
             "requires_owner_decision": False, "human_message": None, "next_action": None,
         }
@@ -214,7 +223,6 @@ class ProductionStateReconciler:
         revision = int(existing.get("state_revision", 0)) + 1 if isinstance(existing, dict) else 1
         if isinstance(existing, dict) and existing.get("evidence_fingerprint") == fingerprint:
             revision = int(existing.get("state_revision", 1))
-        old_run = existing.get("run", {}) if isinstance(existing, dict) and isinstance(existing.get("run"), dict) else {}
         return {
             "schema_version": PRODUCTION_STATE_SCHEMA_VERSION, "project_id": paths.project_id, "state_revision": revision,
             "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
@@ -256,21 +264,14 @@ class ProductionStateReconciler:
 
     @classmethod
     def _selected_asset_usable(cls, paths, entry: dict[str, Any]) -> bool:
-        """Verify real provider selections while retaining legacy fixture projections."""
+        """A selected asset is usable only when its local bytes still exist."""
         selected = entry.get("selected_asset") if isinstance(entry, dict) else None
         if not isinstance(selected, dict):
             return False
-        provenance_bound = isinstance(selected.get("source_provider_attempt"), int) or any(
-            isinstance(attempt, dict) and (
-                attempt.get("production_image_postprocess_required") is True
-                or attempt.get("production_video_postprocess_required") is True
-            )
-            for attempt in entry.get("attempts", [])
-        )
-        return cls._selected_asset_present(paths, entry) if provenance_bound else True
+        return cls._selected_asset_present(paths, entry)
 
     def _visual_recovery(self, paths, requests: dict[str, Any], entries: dict[str, dict[str, Any]],
-                         request_ids: set[str], generated_for_quality: bool) -> dict[str, Any]:
+                         request_ids: set[str], generated_for_quality: bool, *, active_project_operation: bool) -> dict[str, Any]:
         """Project Slice 1-3 evidence without creating a second dispatch path."""
         base = {
             "status": "READY", "reason_code": "NO_VISUAL_RECOVERY_REQUIRED", "human_message": None,
@@ -283,6 +284,22 @@ class ProductionStateReconciler:
         if generated_for_quality:
             return {**base, "status": "COMPLETE", "reason_code": "VISUALS_COMPLETE",
                     "human_message": "Required visuals are valid and ready for quality.", "next_action": "Continue production"}
+
+        # ProjectLock ownership plus the current bounded run marker is durable
+        # live-work evidence only while it agrees with a persisted, boundary-
+        # entered GENERATING attempt.  Status or a stale run marker alone is
+        # never enough to paint production as active.
+        if active_project_operation:
+            for request_id in request_ids:
+                entry = entries.get(request_id)
+                attempts = entry.get("attempts") if isinstance(entry, dict) else None
+                latest = attempts[-1] if isinstance(attempts, list) and attempts else None
+                if (isinstance(entry, dict) and entry.get("status") == "GENERATING"
+                        and isinstance(latest, dict)
+                        and latest.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"):
+                    return {**base, "status": "RUNNING", "reason_code": "LIVE_PROJECT_OPERATION",
+                            "human_message": "A confirmed Flow generation is currently executing.",
+                            "affected_request_id": request_id, "next_action": "Continue production"}
 
         # These deterministic environment outcomes never authorize a Flow
         # call, regardless of a stale attempt status elsewhere in the manifest.

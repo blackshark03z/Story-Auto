@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from PIL import Image
 
 from story_auto.application import OperatorService
 from story_auto.core.artifacts import atomic_write_json, read_json
@@ -43,6 +44,8 @@ class PhaseCDefaultsAndWorkspaceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
             manual = _project(app, "prj_manual_state", policy="MANUAL_REVIEW")
+            asset = manual.artifact_path("assets/scene.png"); asset.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (1280, 720), "navy").save(asset, "PNG")
             atomic_write_json(manual.artifact_path("output/generation_manifest.json"), {"requests": [{"request_id": "scene_01", "status": "QC_PENDING", "selected_asset": {"path": "assets/scene.png"}}]})
             manual_view = app.project_workspace("prj_manual_state")
             self.assertEqual((manual_view["production"]["next_action"]["action"], manual_view["production"]["next_action"]["label"]), ("review_visuals", "Review visuals"))
