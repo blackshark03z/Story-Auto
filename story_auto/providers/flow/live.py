@@ -891,7 +891,7 @@ class LiveFlowGenerator:
         baseline_ids = {item["identity"] for item in baseline_projection}
         delta = [item for item in current_projection if item["identity"] not in baseline_ids]
         candidates = observation.candidate_identities if observation is not None else delta
-        terminal_observations = [
+        raw_terminal_observations = [
             {
                 "card_id": record.get("card_id"),
                 "provider_job_id": record.get("provider_job_id"),
@@ -904,6 +904,26 @@ class LiveFlowGenerator:
             for record in current
             if record.get("failure_class") == "PROVIDER_VISIBLE_TERMINAL_FAILURE"
         ]
+        terminal_observations = raw_terminal_observations
+        if phase == "POST_DISPATCH":
+            historical_card_ids = {
+                str(record.get("card_id"))
+                for record in self._pre_dispatch_asset_records
+                if record.get("card_id")
+            }
+            historical_job_ids = {
+                str(record.get("provider_job_id"))
+                for record in self._pre_dispatch_asset_records
+                if record.get("provider_job_id")
+            }
+            terminal_observations = [
+                item for item in raw_terminal_observations
+                if (
+                    (item.get("card_id") or item.get("provider_job_id"))
+                    and str(item.get("card_id") or "") not in historical_card_ids
+                    and str(item.get("provider_job_id") or "") not in historical_job_ids
+                )
+            ]
         lineage_card_id = observation.lineage_card_id if observation is not None else None
         durable_job_identity = (
             f"card:{lineage_card_id}" if isinstance(lineage_card_id, str) and lineage_card_id else None
@@ -944,7 +964,9 @@ class LiveFlowGenerator:
             "input_dispatched": bool((activation or {}).get("input_dispatched")),
             "activation_verified": bool((activation or {}).get("activation_verified")),
             "provider_acceptance_transition": bool((activation or {}).get("provider_acceptance_transition")),
-            "terminal_observations": terminal_observations,
+            # Raw audit evidence retains every terminal tile visible in this
+            # poll, including historical pre-dispatch cards.
+            "terminal_observations": raw_terminal_observations,
         }
         persisted = self._poll_timeline.append(value)
         # A dispatch transition may use this poll only after the exact persisted

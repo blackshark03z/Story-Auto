@@ -184,6 +184,138 @@ class FlowTerminalEvidenceTests(unittest.TestCase):
             {item["card_id"] for item in generator.last_settings["terminal_observations"]},
         )
 
+    def test_historical_terminal_still_visible_post_dispatch_is_not_current_failure(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[old], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+
+        self.assertEqual(generator.last_settings["terminal_observations"], [])
+        self.assertEqual(generator.last_settings["terminal_observation_sources"], [])
+        self.assertFalse(generator.last_settings.get("terminal_observations"))
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(
+            generator.last_settings["provider_poll_evidence"],
+        )
+        self.assertEqual(
+            [poll["terminal_observations"][0]["card_id"] for poll in verified["observations"]],
+            ["old-tile", "old-tile"],
+        )
+
+    def test_old_and_new_post_dispatch_terminals_expose_only_new_candidate(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        new = terminal(
+            "This request was blocked by policy due to current events.",
+            card_id="new-tile", provider_job_id="new-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        post_source = generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[old], current=[old, new], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+
+        self.assertEqual(
+            [item["card_id"] for item in generator.last_settings["terminal_observations"]],
+            ["new-tile"],
+        )
+        self.assertEqual(generator.last_settings["terminal_observation_sources"], [{
+            "source_poll_sequence": post_source["poll_sequence"],
+            "source_observation_sha256": post_source["observation_sha256"],
+            "terminal_observation": new,
+        }])
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(
+            generator.last_settings["provider_poll_evidence"],
+        )
+        self.assertEqual(
+            {item["card_id"] for item in verified["observations"][1]["terminal_observations"]},
+            {"old-tile", "new-tile"},
+        )
+
+    def test_old_terminal_is_ignored_until_later_new_terminal_appears(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        new = terminal(
+            "This request was blocked by policy due to current events.",
+            card_id="new-tile", provider_job_id="new-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[old], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        self.assertEqual(generator.last_settings["terminal_observations"], [])
+
+        later_source = generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[old], current=[old, new], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        self.assertEqual(
+            [item["card_id"] for item in generator.last_settings["terminal_observations"]],
+            ["new-tile"],
+        )
+        self.assertEqual(
+            generator.last_settings["terminal_observation_sources"][0]["source_poll_sequence"],
+            later_source["poll_sequence"],
+        )
+
+    def test_historical_card_with_changed_job_without_lineage_proof_fails_closed(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        transitioned = terminal(
+            "This request was blocked by policy due to current events.",
+            card_id="old-tile", provider_job_id="new-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[old], current=[transitioned], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+
+        self.assertEqual(generator.last_settings["terminal_observations"], [])
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(
+            generator.last_settings["provider_poll_evidence"],
+        )
+        self.assertEqual(
+            verified["observations"][1]["terminal_observations"][0]["provider_job_id"],
+            "new-job",
+        )
+
     def test_historical_terminal_poll_remains_in_verified_raw_timeline_after_clear(self):
         generator = LiveFlowGenerator(None)
         old = terminal(
