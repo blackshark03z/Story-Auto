@@ -429,6 +429,15 @@ class ProviderPollEvidenceTimeline:
                           if isinstance(item, str))
         identities.update(f"asset:{item}" for item in observation.get("output_asset_identities_observed", [])
                           if isinstance(item, str))
+        for terminal in observation.get("terminal_observations", []):
+            if not isinstance(terminal, dict):
+                continue
+            card_id = terminal.get("card_id")
+            provider_job_id = terminal.get("provider_job_id")
+            if isinstance(card_id, str) and card_id:
+                identities.add(f"card:{card_id}")
+            if isinstance(provider_job_id, str) and provider_job_id:
+                identities.add(f"job:{provider_job_id}")
         if isinstance(observation.get("durable_dispatch_identity"), str):
             identities.add(observation["durable_dispatch_identity"])
         return identities
@@ -986,6 +995,14 @@ class LiveFlowGenerator:
         self._sync_poll_evidence()
         if terminal_observations:
             self.last_settings["terminal_observations"] = terminal_observations
+            self.last_settings["terminal_observation_sources"] = [
+                {
+                    "source_poll_sequence": persisted["poll_sequence"],
+                    "source_observation_sha256": persisted["observation_sha256"],
+                    "terminal_observation": dict(item),
+                }
+                for item in terminal_observations
+            ]
         if binding is not None:
             self._sync_bound_decision(binding)
         return persisted

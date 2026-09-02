@@ -1113,22 +1113,44 @@ def _media_paths_in(value: Any) -> set[str]:
 def _append_terminal_observations(request: dict, attempt: dict, generator: Any) -> list[dict]:
     """Append classified terminal observations without changing dispatch authority."""
     settings = getattr(generator, "last_settings", None)
-    observations = settings.get("terminal_observations") if isinstance(settings, dict) else None
+    persisted_settings = attempt.get("provider_settings")
+    if not isinstance(persisted_settings, dict):
+        persisted_settings = settings if isinstance(settings, dict) else {}
+    observations = persisted_settings.get("terminal_observations")
+    provider_poll_evidence = persisted_settings.get("provider_poll_evidence")
+    source_hints = persisted_settings.get("terminal_observation_sources")
     if not isinstance(observations, list):
         return []
     appended = []
     evidence_log = attempt.setdefault("terminal_evidence", [])
     if not isinstance(evidence_log, list):
         raise FlowError("FLOW_TERMINAL_EVIDENCE_INVALID")
-    for observation in observations:
+    for index, observation in enumerate(observations):
         if not isinstance(observation, dict):
             continue
+        source_hint = (
+            source_hints[index]
+            if isinstance(source_hints, list) and index < len(source_hints)
+            and isinstance(source_hints[index], dict)
+            else {}
+        )
         evidence = build_terminal_evidence(
             request_id=request["request_id"],
             attempt=attempt,
             observation=observation,
             observed_at=_now(),
+            provider_poll_evidence=(
+                provider_poll_evidence if isinstance(provider_poll_evidence, dict) else None
+            ),
+            source_poll_sequence=source_hint.get("source_poll_sequence"),
+            source_observation_sha256=source_hint.get("source_observation_sha256"),
         )
+        source_identity = evidence.get("canonical_source_identity_sha256")
+        if source_identity and any(
+            item.get("canonical_source_identity_sha256") == source_identity
+            for item in evidence_log if isinstance(item, dict)
+        ):
+            continue
         if any(item.get("evidence_digest_sha256") == evidence["evidence_digest_sha256"]
                for item in evidence_log if isinstance(item, dict)):
             continue
