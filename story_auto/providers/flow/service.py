@@ -12,6 +12,7 @@ import gzip
 import io
 import json
 import copy
+import os
 import re
 import shutil
 import uuid
@@ -646,17 +647,17 @@ def _recovery_input_from_entry(entry: dict | None, *, rate_limit_backoff_ready: 
                          legacy_request_status=entry.get("status"))
 
 
-def _flow_session_identity(paths, config, executor: "FlowExecutor", override: str | None = None) -> str:
-    """Bind a lock to profile plus CDP endpoint, never Flow project identity."""
-    if isinstance(override, str) and override.strip():
-        return override.strip()
+def _flow_session_identity(paths, config, executor: "FlowExecutor") -> str:
+    """Bind a lock to the resolved browser profile plus CDP endpoint only."""
     runtime = getattr(executor.generate, "runtime", None)
     profile = getattr(runtime, "profile", paths.runtime.flow_profile)
     cdp_url = getattr(runtime, "cdp_url", None)
     if not isinstance(cdp_url, str) or not cdp_url.strip():
         flow = config.settings.get("flow", {}) if isinstance(config.settings, dict) else {}
         cdp_url = str(flow.get("cdp_url", "http://127.0.0.1:9222"))
-    return f"profile={Path(profile).resolve()}|cdp={cdp_url.strip().rstrip('/').casefold()}"
+    normalized_profile = os.path.normcase(str(Path(profile).expanduser().resolve()))
+    normalized_cdp = cdp_url.strip().rstrip("/").casefold()
+    return f"profile={normalized_profile}|cdp={normalized_cdp}"
 
 
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
@@ -6079,8 +6080,7 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
 def execute_generation(runtime_root: Path | str, project_id: str, *, executor: FlowExecutor, execute: bool = False,
                        request_ids: set[str] | None = None, production_batch: bool = False,
                        max_requests: int | None = None, flow_connection_provenance: dict | None = None,
-                       recovery_timing: RecoveryRetryTiming | None = None,
-                       flow_session_identity: str | None = None) -> dict:
+                       recovery_timing: RecoveryRetryTiming | None = None) -> dict:
     """Run the bounded vertical slice while preserving every provider attempt."""
     if not execute: raise FlowError("EXECUTION_CONFIRMATION_REQUIRED", "pass explicit execute-generation permission")
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
@@ -6090,7 +6090,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
     if not isinstance(storage,dict): raise FlowError("STORAGE_SETTINGS_INVALID")
     ensure_free_space(paths.runtime.temp,minimum_free_bytes=int(storage.get("minimum_free_bytes",64*1024*1024)))
     timing = recovery_timing or RecoveryRetryTiming()
-    session_identity = _flow_session_identity(paths, config, executor, flow_session_identity)
+    session_identity = _flow_session_identity(paths, config, executor)
     with ProjectLock(paths.runtime, project_id), _transaction_read_scope():
         # Complete every prepared request-graph replacement before selecting
         # executable requests. A partially published old epoch is never run.
@@ -6209,6 +6209,11 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     break
                 rate_limit_ready = True
                 initial_facts = _recovery_input_from_entry(entry, rate_limit_backoff_ready=True)
+
+            # The capability object is immutable local evidence.  It must be
+            # accepted before a recovery attempt can claim that the provider
+            # boundary was entered or consume provider-submission accounting.
+            executor.capabilities.require(request["media_type"], bool(refs))
 
             def fresh_recovery_facts() -> RecoveryInput:
                 """Re-read durable evidence after owning ProjectLock, never reuse a decision."""

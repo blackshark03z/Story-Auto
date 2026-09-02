@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 import tempfile
 import unittest
+import inspect
 
 from story_auto.core.visual.recovery_executor import (
     FlowSessionSingleFlight,
@@ -20,7 +21,7 @@ from story_auto.core.visual.recovery import (
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.service import FlowExecutor, execute_generation
-from story_auto.providers.flow.session import FlowCapabilities
+from story_auto.providers.flow.session import FlowCapabilities, FlowSessionError
 import story_auto.providers.flow.service as flow_service
 
 
@@ -330,7 +331,7 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
             result = execute_generation(
                 runtime.root, "prj_terminal",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
-                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+                execute=True, recovery_timing=timing,
             )
             entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((slept, result["new_submissions"], calls, entry["provider_submissions"]),
@@ -345,7 +346,7 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
             result = execute_generation(
                 runtime.root, "prj_rate",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
-                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+                execute=True, recovery_timing=timing,
             )
             entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((slept, result["new_submissions"], calls, entry["provider_submissions"]),
@@ -360,7 +361,7 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
             result = execute_generation(
                 runtime.root, "prj_rate_stop",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(calls)),
-                execute=True, recovery_timing=timing, flow_session_identity="shared-session",
+                execute=True, recovery_timing=timing,
             )
             entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((slept, result["new_submissions"], calls, len(entry["attempts"]), entry["provider_submissions"]),
@@ -386,20 +387,54 @@ class FlowRecoveryServiceBoundaryTests(unittest.TestCase):
             worker = threading.Thread(target=lambda: first_result.append(execute_generation(
                 runtime.root, "prj_first",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), slow_provider),
-                execute=True, flow_session_identity="shared-session",
+                execute=True,
             )))
             worker.start(); self.assertTrue(entered.wait(2))
             second_calls = []
             second = execute_generation(
                 runtime.root, "prj_second",
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), self._provider(second_calls)),
-                execute=True, flow_session_identity="shared-session",
+                execute=True,
             )
             release.set(); worker.join(2)
             second_entry = read_json(second_paths.artifact_path("output/generation_manifest.json"))["requests"][0]
             self.assertEqual((first_result[0]["new_submissions"], second["new_submissions"], calls, second_calls),
                              (1, 0, ["req"], []))
             self.assertEqual((second_entry["attempts"], second_entry.get("provider_submissions", 0)), ([], 0))
+
+    def test_session_identity_is_derived_not_caller_overridable(self):
+        self.assertNotIn("flow_session_identity", inspect.signature(execute_generation).parameters)
+        self.assertNotIn("override", inspect.signature(flow_service._flow_session_identity).parameters)
+
+    def _assert_capability_failure_is_pre_dispatch(self, capabilities, failure_class):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            paths = self._project(runtime, "prj_capability")
+            calls = []
+            with self.assertRaises(FlowSessionError) as caught:
+                execute_generation(
+                    runtime.root, "prj_capability",
+                    executor=FlowExecutor(capabilities, self._provider(calls)), execute=True,
+                )
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual(caught.exception.failure_class, failure_class)
+            self.assertEqual((calls, entry["attempts"], entry.get("provider_submissions", 0)), ([], [], 0))
+            self.assertNotEqual(entry.get("provider_execution_state"), "PROVIDER_BOUNDARY_ENTERED")
+
+    def test_auth_capability_failure_is_pre_dispatch(self):
+        self._assert_capability_failure_is_pre_dispatch(
+            FlowCapabilities(False, True, True, True, True, True), "FLOW_AUTH_REQUIRED",
+        )
+
+    def test_project_capability_failure_is_pre_dispatch(self):
+        self._assert_capability_failure_is_pre_dispatch(
+            FlowCapabilities(True, False, True, True, True, True), "FLOW_PROJECT_MISMATCH",
+        )
+
+    def test_unavailable_capability_failure_is_pre_dispatch(self):
+        self._assert_capability_failure_is_pre_dispatch(
+            FlowCapabilities(True, True, False, True, True, True), "FLOW_CAPABILITY_UNAVAILABLE",
+        )
 
 
 if __name__ == "__main__":
