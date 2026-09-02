@@ -124,6 +124,9 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
              "evidence": [{"path": "output/generation_requests.json", "present": False}]},
             {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
              "quality": {"policy": "AUTO_ACCEPT"},
+             "evidence": [{"path": "output/generation_requests.json", "present": False}, {"path": "output/review_state.json", "present": True}]},
+            {"pipeline_status": "OWNER_DECISION_REQUIRED", "active_stage": "PLAN",
+             "quality": {"policy": "AUTO_ACCEPT"},
              "evidence": [{"path": "output/generation_requests.json", "present": True}]},
             {"pipeline_status": "COMPLETE", "active_stage": "RENDER", "stages": {}},
         ])
@@ -131,11 +134,12 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
         coordinator = ProductionCoordinator(
             lambda _: next(automatic),
             {"approve_plan": lambda _: calls.append("approve_plan"),
+             "plan": lambda _: calls.append("plan"),
              "approve_shots": lambda _: calls.append("approve_shots")},
         )
         result = coordinator.run_until("prj_auto_plan")
         self.assertEqual((result["outcome"], result["invoked_stages"], calls),
-                         ("FINAL_VIDEO_COMPLETE", ["approve_plan", "approve_shots"], ["approve_plan", "approve_shots"]))
+                         ("FINAL_VIDEO_COMPLETE", ["approve_plan", "plan", "approve_shots"], ["approve_plan", "plan", "approve_shots"]))
 
     def test_compiled_requests_without_shot_approval_remain_a_plan_blocker(self):
         with tempfile.TemporaryDirectory() as root:

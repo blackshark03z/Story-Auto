@@ -142,18 +142,30 @@ class OperatorUiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             server=create_server(root,port=0); service=server.RequestHandlerClass.service
             service.create_project(project_id=project_id,render_mode="ambient_story",ambient_style="quiet_verdict",content="# Action outcomes\n\n## Narration\n\nDisposable UI fixture.")
-            scenario={"workspace":ready,"result":{"outcome":"SAFETY_BLOCKED","reason_code":"FLOW_CDP_UNAVAILABLE","error":"Flow browser session is unavailable"},"workspace_calls":0,"run_calls":0,"provider_dispatches":0,"delay":0}
+            scenario={"workspace":ready,"result":{"outcome":"SAFETY_BLOCKED","reason_code":"FLOW_CDP_UNAVAILABLE","error":"Flow browser session is unavailable"},"next_workspace":None,"workspace_calls":0,"run_calls":0,"provider_dispatches":0,"delay":0}
             def workspace(_project_id):
                 scenario["workspace_calls"]+=1
                 return deepcopy(scenario["workspace"])
             def run(_project_id):
                 scenario["run_calls"]+=1
                 if scenario["delay"]: time.sleep(scenario["delay"])
+                if scenario["next_workspace"] is not None:
+                    scenario["workspace"]=deepcopy(scenario["next_workspace"])
+                    scenario["next_workspace"]=None
                 return deepcopy(scenario["result"])
             def generate(*_args,**_kwargs):
                 scenario["provider_dispatches"]+=1
                 raise AssertionError("result rendering must not dispatch media")
             service.project_workspace=workspace; service.run_to_final=run; service.generate=generate
+            plan_actions=[]
+            def approve_plan(_project_id):
+                plan_actions.append("approve_plan")
+                return {"plan_approval":"APPROVED"}
+            def plan_visuals(_project_id):
+                plan_actions.append("plan_visuals")
+                scenario["workspace"]=deepcopy(ready)
+                return {"generation_requests":"prepared"}
+            service.approve_planning=approve_plan; service.plan_visuals=plan_visuals
             thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
             try:
                 with sync_playwright() as playwright:
@@ -186,6 +198,41 @@ class OperatorUiTests(unittest.TestCase):
                     reload_project()
                     continue_production()
                     self.assertIsNone(page.get_by_role("button",name="Review plan",exact=True).wait_for(timeout=1500))
+
+                    # A generic outcome from the preceding action must not
+                    # replace a fresh canonical plan decision in the project
+                    # workspace.  Review Plan must retain the existing review
+                    # route, and approval must advance the temporary project
+                    # without generating provider work.
+                    plan_blocked=deepcopy(ready); plan_blocked["status"]="Action needed"
+                    plan_blocked["production"].update({
+                        "pipeline_status":"OWNER_DECISION_REQUIRED", "active_stage":"PLAN",
+                        "blocker":{"reason_code":"OWNER_DECISION_REQUIRED", "human_message":"Review and approve the production plan before visuals are created.", "next_action":"Review plan"},
+                        "next_action":{"action":"review_plan", "label":"Review plan"},
+                    })
+                    plan_blocked["production"]["stages"]["PLAN"]={"status":"BLOCKED"}
+                    scenario["workspace"]=ready; scenario["next_workspace"]=plan_blocked; scenario["result"]={"outcome":"SAFETY_BLOCKED","reason_code":"STAGE_NO_PROGRESS"}
+                    reload_project(); continue_production()
+                    self.assertIsNone(page.get_by_role("button",name="Review plan",exact=True).wait_for(timeout=1500))
+                    self.assertEqual(page.get_by_role("button",name="Try again",exact=True).count(),0)
+                    self.assertEqual(page.get_by_text("Production stopped safely",exact=True).count(),0)
+                    page.get_by_role("button",name="Review plan",exact=True).click()
+                    self.assertIsNone(page.get_by_role("heading",name="Review the story plan",exact=True).wait_for(timeout=1500))
+                    page.get_by_role("button",name="Approve story plan",exact=True).click()
+                    self.assertIsNone(page.get_by_role("button",name="Continue production",exact=True).wait_for(timeout=1500))
+                    self.assertEqual(plan_actions,["approve_plan","plan_visuals"])
+
+                    for durable_state, action_id, label in (("NEEDS_ATTENTION","review_recovery","Review recovery"), ("BLOCKED","open_flow_sign_in","Open Flow sign-in")):
+                        specific=deepcopy(ready)
+                        specific["production"].update({
+                            "pipeline_status":durable_state, "active_stage":"VISUALS",
+                            "blocker":{"reason_code":"POLICY_PROMPT_REPAIR_REQUIRED" if action_id == "review_recovery" else "AUTH_REQUIRED", "human_message":"Synthetic durable recovery action.", "next_action":label},
+                            "next_action":{"action":action_id,"label":label},
+                        })
+                        scenario["workspace"]=ready; scenario["next_workspace"]=specific; scenario["result"]={"outcome":"SAFETY_BLOCKED","reason_code":"STAGE_NO_PROGRESS"}
+                        reload_project(); continue_production()
+                        self.assertIsNone(page.get_by_role("button",name=label,exact=True).wait_for(timeout=1500))
+                        self.assertEqual(page.get_by_role("button",name="Try again",exact=True).count(),0)
 
                     running=deepcopy(ready); running["production"]["pipeline_status"]="RUNNING"; running["production"]["stages"]["VISUALS"]={"status":"RUNNING","completed_items":1,"total_items":7}
                     scenario["workspace"]=running; scenario["result"]={"outcome":"PRODUCTION_PROGRESS"}

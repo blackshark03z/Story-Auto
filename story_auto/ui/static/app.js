@@ -235,10 +235,12 @@ function renderProject() {
   const visual=production.stages.VISUALS || {}, recovery=production.recovery || {};
   const activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (recovery.human_message || blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
   syncActivityPresentation();
-  const immediateAction = state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action;
+  const durableAction = canonicalBlockerAction(production);
+  const immediateAction = durableAction || (state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action);
+  const showActionOutcome = state.actionOutcome && !redundantSafetyOutcome(state.actionOutcome, production);
   const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(backendProductionWorking(production) ? 'Working…' : immediateAction.label)}</button>`;
   $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(immediateAction.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
-  ${state.actionOutcome ? actionOutcomeCard(state.actionOutcome) : ''}
+  ${showActionOutcome ? actionOutcomeCard(state.actionOutcome) : ''}
   ${state.error ? errorCard(state.error) : ''}
   ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">Action needed</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${primary}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
@@ -255,6 +257,19 @@ function renderProject() {
   $('#renderAgain')?.addEventListener('click', () => runAction('render_again','Rendering the final video again…'));
   bindErrorActions();
   bindDiagnosticsDisclosure();
+}
+
+function canonicalBlockerAction(production) {
+  const action = production?.next_action;
+  return production?.blocker && typeof action?.action === 'string' && typeof action?.label === 'string' ? action : null;
+}
+
+function redundantSafetyOutcome(outcome, production) {
+  const blocker = production?.blocker;
+  return outcome?.outcome === 'SAFETY_BLOCKED'
+    && Boolean(canonicalBlockerAction(production))
+    && typeof blocker?.reason_code === 'string'
+    && blocker.reason_code !== 'SAFETY_BLOCKED';
 }
 
 function renderComplete(snapshot) {
@@ -387,7 +402,7 @@ function actionOutcome(result, snapshot) {
   if (outcome === 'FINAL_VIDEO_COMPLETE') return {kind:'success',title:'Final video complete',message:'Your final video is ready.',code,raw:''};
   if (outcome === 'SAFETY_BLOCKED') {
     const friendly = friendlyError({message:result.error || blocker.human_message || code,payload:{failure_class:code,error:result.error}});
-    return {kind:'blocker',title:'Production stopped safely',reason_title:friendly.title,message:friendly.message,code,raw:result.error || friendly.raw,action_id:friendly.action_id,action:friendly.action};
+    return {kind:'blocker',outcome,title:'Production stopped safely',reason_title:friendly.title,message:friendly.message,code,raw:result.error || friendly.raw,action_id:friendly.action_id,action:friendly.action};
   }
   if (outcome === 'OWNER_DECISION_REQUIRED') {
     return {kind:'blocker',title:'Your decision is needed',message:blocker.human_message || 'Review the saved production decision before Story Auto continues.',code,raw:'',action_id:canonicalAction?.action || 'review_project',action:canonicalAction?.label || blocker.next_action || 'Review project'};

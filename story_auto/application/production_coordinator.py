@@ -75,6 +75,19 @@ class ProductionCoordinator:
                         if self._progress_fingerprint(state) == self._progress_fingerprint(after):
                             return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, after,
                                                 reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation=approval)
+                        # The first approval authorizes compilation; it does
+                        # not itself create a shot/media/generation plan. Run
+                        # that provider-free planning operation once before
+                        # evaluating the distinct compiled-plan approval.
+                        if approval == "approve_plan":
+                            self.operations["plan"](project_id)
+                            invoked.append("plan")
+                            planned = self.query(project_id)
+                            if self._progress_fingerprint(after) == self._progress_fingerprint(planned):
+                                return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, planned,
+                                                    reason_code="STAGE_NO_PROGRESS", stage="PLAN", operation="plan")
+                            state = planned
+                            continue
                         state = after
                         continue
                     except Exception as error:
