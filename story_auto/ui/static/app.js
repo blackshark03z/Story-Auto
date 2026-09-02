@@ -30,6 +30,11 @@ function toast(message, isError = false) {
   toast.timer = setTimeout(() => element.classList.remove('is-visible'), 3200);
 }
 
+function backendProductionWorking(production) {
+  const terminalOrIdle = ['RECOVERY_READY','NEEDS_ATTENTION','BLOCKED','COMPLETE'];
+  return !terminalOrIdle.includes(production?.pipeline_status) && ['RUNNING','RECOVERING'].includes(production?.pipeline_status);
+}
+
 function setBusy(value, label = '') {
   state.busy = value;
   state.busyLabel = label;
@@ -38,7 +43,7 @@ function setBusy(value, label = '') {
   document.querySelector('#busyReason')?.remove();
   if (value) document.body.insertAdjacentHTML('beforeend', '<div class="loading-line" aria-hidden="true"></div>');
   if (value && label) document.body.insertAdjacentHTML('beforeend', `<span id="busyReason" class="sr-only" role="status">${esc(label)}</span>`);
-  $('#runtimeState').textContent = value ? 'Working' : 'Ready';
+  $('#runtimeState').textContent = value || backendProductionWorking(state.snapshot?.production) ? 'Working' : 'Ready';
 }
 
 function setHeader(eyebrow, title, actions = '') {
@@ -217,7 +222,9 @@ function renderProject() {
   const workspace=state.snapshot, production=workspace.production, blocker=production.blocker, action=production.next_action, flow=production.flow;
   projectHeader(workspace);
   if (production.pipeline_status === 'COMPLETE') { renderComplete(workspace); return; }
-  const visual=production.stages.VISUALS || {}, activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
+  const visual=production.stages.VISUALS || {}, recovery=production.recovery || {};
+  const activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (recovery.human_message || blocker?.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
+  if (!state.busy) $('#runtimeState').textContent = backendProductionWorking(production) ? 'Working' : 'Ready';
   const immediateAction = state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action;
   const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(state.busy ? 'Working…' : immediateAction.label)}</button>`;
   $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(immediateAction.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
@@ -375,7 +382,10 @@ function actionOutcome(result, snapshot) {
   if (outcome === 'OWNER_DECISION_REQUIRED') {
     return {kind:'blocker',title:'Your decision is needed',message:blocker.human_message || 'Review the saved production decision before Story Auto continues.',code,raw:'',action_id:canonicalAction?.action || 'review_project',action:canonicalAction?.label || blocker.next_action || 'Review project'};
   }
-  if (['AUTH_REQUIRED','AUTH_RECOVERY_REQUIRED','NOT_CONFIGURED','STALE','PROJECT_MISMATCH','CAPABILITY_MISSING'].includes(outcome)) {
+  if (outcome === 'NEEDS_ATTENTION') {
+    return {kind:'blocker',title:'Production needs attention',message:blocker.human_message || production.recovery?.human_message || 'Review the saved recovery evidence before continuing.',code,raw:result.error || '',action_id:canonicalAction?.action || 'review_recovery',action:canonicalAction?.label || blocker.next_action || 'Review recovery'};
+  }
+  if (['BLOCKED','AUTH_REQUIRED','AUTH_RECOVERY_REQUIRED','NOT_CONFIGURED','STALE','PROJECT_MISMATCH','CAPABILITY_MISSING'].includes(outcome)) {
     return {kind:'blocker',title:'Flow needs attention',message:flow.human_message || 'Complete the required Flow recovery before continuing.',code,raw:result.error || '',action_id:canonicalAction?.action || 'settings',action:canonicalAction?.label || 'Review Flow'};
   }
   return {kind:'progress',title:'Production is continuing.',message:production.human_message || 'Story Auto saved this progress and refreshed the current production state.',code,raw:''};

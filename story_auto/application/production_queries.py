@@ -29,9 +29,10 @@ class ProductionQueries:
             existing=read_json(self.reconciler.state_path(paths))
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
-            required = {"pipeline_status", "active_stage", "stages", "quality", "next_action", "final_output"}
+            required = {"pipeline_status", "active_stage", "stages", "quality", "recovery", "visual_asset_evidence", "next_action", "final_output"}
             if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.2"
-                    and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint):
+                    and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint
+                    and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
                 return self._with_flow_summary(project_id, config, existing)
         except Exception:
             pass
@@ -49,16 +50,23 @@ class ProductionQueries:
                               "recoverable": False, "next_action": {"action": "continue_production", "label": "Continue production"},
                               "required": False}
             return result
+        recovery = result.get("recovery") if isinstance(result.get("recovery"), dict) else {}
         flow = product_flow_status(self.flow_connections, project_id, config,
-                                   auth_required=result.get("pipeline_status") == "AUTH_REQUIRED")
+                                   auth_required=recovery.get("reason_code") == "AUTH_REQUIRED")
         flow["required"] = True
         result["flow"] = flow
-        if flow["status"] != "CONNECTED" and result.get("active_stage") == "VISUALS" and result.get("pipeline_status") == "READY":
-            result["pipeline_status"] = flow["status"]
+        if (flow["status"] != "CONNECTED" and result.get("active_stage") == "VISUALS"
+                and result.get("pipeline_status") in {"READY", "RECOVERY_READY"}):
+            result["pipeline_status"] = "BLOCKED"
             result["blocker"] = {"reason_code": flow["status"], "human_message": flow["human_message"],
                                  "next_action": flow["next_action"]["label"], "recoverable": True,
                                  "requires_owner_decision": flow["status"] == "PROJECT_MISMATCH", "stage": "VISUALS"}
             result["next_action"] = dict(flow["next_action"])
+            result["recovery"] = {**recovery, "status": "BLOCKED", "reason_code": flow["status"],
+                                  "human_message": flow["human_message"], "automatic_recovery_available": False,
+                                  "provider_dispatches_per_continue": 0,
+                                  "requires_owner_decision": flow["status"] == "PROJECT_MISMATCH",
+                                  "next_action": flow["next_action"]["label"]}
         return result
 
     @staticmethod
@@ -67,6 +75,16 @@ class ProductionQueries:
         if not path.is_file(): return {"path":relative,"present":False}
         stat=path.stat()
         return {"path":relative,"present":True,"bytes":stat.st_size,"mtime_ns":stat.st_mtime_ns}
+
+    @classmethod
+    def _selected_assets_unchanged(cls, paths, evidence) -> bool:
+        if not isinstance(evidence, list):
+            return False
+        return all(
+            isinstance(item, dict) and isinstance(item.get("path"), str)
+            and item["path"].startswith("assets/") and cls._signature(paths, item["path"]) == item
+            for item in evidence
+        )
 
     def record_run(self, project_id: str, run_id: str, status: str) -> None:
         """Persist only the current bounded run marker; evidence remains canonical."""

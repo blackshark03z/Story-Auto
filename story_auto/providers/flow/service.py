@@ -617,6 +617,18 @@ def _recovery_input_from_entry(entry: dict | None, *, rate_limit_backoff_ready: 
         if item.get("recovery_action") == "AUTO_RETRY"
         and item.get("provider_submission_recorded") is True
     )
+    # A durable provider-progress observation is the only positive evidence
+    # that a persisted GENERATING record still represents work happening now.
+    # The legacy entry status by itself is deliberately not treated as active.
+    if (latest.get("provider_progress_active") is True
+            and latest.get("dispatch_confirmed") is True
+            and latest.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"):
+        return RecoveryInput(
+            FailureFamily.PROVIDER_IN_PROGRESS, AttemptOutcome.GENERATING,
+            DispatchCertainty.DISPATCH_CONFIRMED, provider_progress_active=True,
+            transient_redispatch_count=retry_count, provider_attempt_count=submissions,
+            legacy_request_status=entry.get("status"),
+        )
     if canonical_no_dispatch_proof(latest):
         return RecoveryInput(
             FailureFamily.PRE_DISPATCH_FAILURE, AttemptOutcome.FAILED,

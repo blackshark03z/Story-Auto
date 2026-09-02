@@ -52,7 +52,10 @@ class ProductionCoordinator:
                 state = self.query(project_id)
             if state["pipeline_status"] == "COMPLETE":
                 return self._result(project_id, run_id, "FINAL_VIDEO_COMPLETE", invoked, state)
-            if state["pipeline_status"] in {"OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
+            if state["pipeline_status"] in {"RUNNING", "RECOVERING", "RECOVERY_READY", "NEEDS_ATTENTION", "BLOCKED",
+                                            "OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
+                if state["pipeline_status"] in {"RUNNING", "RECOVERING", "NEEDS_ATTENTION", "BLOCKED"}:
+                    return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
                 # Automatic quality is an explicit request to continue through
                 # validated planning.  There are two canonical plan approvals:
                 # the story plan, then the compiled shot/media plan.  Keep every
@@ -78,7 +81,8 @@ class ProductionCoordinator:
                         code = getattr(error, "failure_class", type(error).__name__)
                         return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
                                             error=str(error), reason_code=code)
-                return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
+                if state["pipeline_status"] != "RECOVERY_READY":
+                    return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
             flow = state.get("flow", {})
             if state.get("active_stage") == "VISUALS" and flow.get("required") and flow.get("status") != "CONNECTED":
                 return self._result(project_id, run_id, flow["status"], invoked, state, flow=flow)

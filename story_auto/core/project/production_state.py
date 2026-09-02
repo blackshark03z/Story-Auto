@@ -15,6 +15,14 @@ from typing import Any
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project.execution import execution_mode, stage_policy
 from story_auto.core.project.quality_policy import AI_REVIEW, AUTO_ACCEPT, MANUAL_REVIEW, effective_qc_policy
+from story_auto.core.visual.recovery import (
+    AttemptOutcome,
+    DispatchCertainty,
+    FailureFamily,
+    RecoveryAction,
+    RecoveryInput,
+    evaluate_recovery,
+)
 
 
 PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.2"
@@ -76,6 +84,9 @@ class ProductionStateReconciler:
     def reconcile(self, paths, config) -> ProjectProductionState:
         evidence = [_signature(paths, item) for item in self._evidence_files]
         evidence_fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        manifest_for_assets = _read(paths.artifact_path("output/generation_manifest.json"), {"requests": []})
+        visual_asset_evidence = self._selected_asset_evidence(paths, manifest_for_assets)
+        evidence.extend(visual_asset_evidence)
         existing = _read(self.state_path(paths), {})
         rebuilt = self._derive(paths, config, evidence, evidence_fingerprint, existing)
         # Do not churn the file when canonical evidence and compact projection agree.
@@ -101,13 +112,16 @@ class ProductionStateReconciler:
         accepted_markers = {"APPROVED", "OWNER_ACCEPTED", "AUTO_ACCEPTED"}
         selected = bool(request_ids) and all(
             entry.get("status") == "SUCCEEDED" and isinstance(entry.get("selected_asset"), dict)
+            and self._selected_asset_usable(paths, entry)
             and entry["selected_asset"].get("production_qc") in accepted_markers
             for entry in required_entries
         )
         generated_for_quality = bool(request_ids) and all(
             entry.get("status") in {"QC_PENDING", "SUCCEEDED"} and isinstance(entry.get("selected_asset"), dict)
+            and self._selected_asset_usable(paths, entry)
             for entry in required_entries
         )
+        recovery = self._visual_recovery(paths, requests, entries, request_ids, generated_for_quality)
         qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
         quality = {
             "status": "NOT_STARTED", "policy": qc_policy, "policy_explicit": qc_policy_explicit,
@@ -130,8 +144,12 @@ class ProductionStateReconciler:
         plan_ready = present["output/continuity_bible.json"] or present["output/generation_requests.json"]
         plan_complete = present["output/generation_requests.json"] and plan_approved
         stages["PLAN"] = self._stage("COMPLETE" if plan_complete else ("BLOCKED" if plan_ready else "READY"), policy["planning"].action, "Planning approval is required." if plan_ready and not plan_approved else policy["planning"].reason)
-        visual_status = "COMPLETE" if generated_for_quality else ("BLOCKED" if any(status in {"AUTH_REQUIRED", "CREDIT_BLOCKED", "AMBIGUOUS", "FAILED_PERMANENT", "FAILED_FATAL", "CANCELLED"} for status in statuses) else ("RUNNING" if any(status in {"PENDING", "NOT_DISPATCHED", "FAILED_RETRYABLE"} for status in statuses) else "READY"))
+        visual_status = "COMPLETE" if generated_for_quality else recovery["status"]
         stages["VISUALS"] = self._stage(visual_status, policy["visuals"].action, policy["visuals"].reason)
+        stages["VISUALS"]["reason_code"] = recovery["reason_code"]
+        stages["VISUALS"]["human_message"] = recovery["human_message"] or stages["VISUALS"]["human_message"]
+        stages["VISUALS"]["recoverable"] = recovery["status"] == "RECOVERY_READY"
+        stages["VISUALS"]["requires_owner_decision"] = recovery["requires_owner_decision"]
         stages["VISUALS"]["completed_items"] = sum(1 for status in statuses if status in {"QC_PENDING", "SUCCEEDED"})
         stages["VISUALS"]["total_items"] = len(request_ids)
         if not request_ids:
@@ -144,7 +162,7 @@ class ProductionStateReconciler:
             quality_status = "READY"; quality.update({"human_message": "Technical checks passed; Story Auto will accept eligible visuals automatically.", "next_action": "Continue production"})
         elif qc_policy == AI_REVIEW:
             quality_status = "BLOCKED"; quality.update({"human_message": "AI review is reserved but is not available in this version.", "next_action": "Choose a supported quality review policy"})
-        elif quality["rejected"]:
+        elif quality["rejected"] and recovery["status"] not in {"RECOVERY_READY", "RUNNING"}:
             quality_status = "BLOCKED"; quality.update({"human_message": "A technical or provenance safety check needs recovery before quality can continue.", "next_action": "Review recovery"})
         else:
             quality_status = "READY"
@@ -162,6 +180,12 @@ class ProductionStateReconciler:
             blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
         elif stages["PLAN"]["status"] == "BLOCKED":
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
+        elif recovery["status"] == "BLOCKED":
+            blocker = self._blocker(recovery["reason_code"], recovery["human_message"], recovery["next_action"], True,
+                                    recovery["requires_owner_decision"], "VISUALS")
+        elif recovery["status"] == "NEEDS_ATTENTION":
+            blocker = self._blocker(recovery["reason_code"], recovery["human_message"], recovery["next_action"], True,
+                                    True, "VISUALS")
         elif any(status == "AUTH_REQUIRED" for status in statuses):
             blocker = self._blocker("AUTH_REQUIRED", "Sign in to Flow to continue.", "Open Flow sign-in", True, False, "VISUALS")
         elif stages["VISUALS"]["status"] == "BLOCKED":
@@ -175,12 +199,18 @@ class ProductionStateReconciler:
 
         if final_present:
             pipeline_status, active_stage, next_action = "COMPLETE", "RENDER", {"action": "open_final", "label": "Open final video"}
+            recovery = {**recovery, "status": "COMPLETE", "reason_code": "COMPLETE", "human_message": "All required production outputs are valid.",
+                        "affected_request_id": None, "automatic_recovery_available": False,
+                        "provider_dispatches_per_continue": 0, "requires_owner_decision": False,
+                        "next_action": "Open final video"}
         elif blocker:
             canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
-            pipeline_status, active_stage, next_action = blocker["reason_code"], blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
+            pipeline_status = recovery["status"] if blocker.get("stage") == "VISUALS" and recovery["status"] in {"BLOCKED", "NEEDS_ATTENTION"} else blocker["reason_code"]
+            active_stage, next_action = blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
         else:
             active_stage = self._first_incomplete(stages)
-            pipeline_status, next_action = "READY", {"action": "run_to_final", "label": "Create video" if active_stage == "SOURCE" else "Continue production"}
+            pipeline_status = recovery["status"] if active_stage == "VISUALS" and recovery["status"] in {"RUNNING", "RECOVERY_READY"} else "READY"
+            next_action = {"action": "run_to_final", "label": "Create video" if active_stage == "SOURCE" else "Continue production"}
         revision = int(existing.get("state_revision", 0)) + 1 if isinstance(existing, dict) else 1
         if isinstance(existing, dict) and existing.get("evidence_fingerprint") == fingerprint:
             revision = int(existing.get("state_revision", 1))
@@ -190,10 +220,153 @@ class ProductionStateReconciler:
             "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
             "pipeline_status": pipeline_status, "active_stage": active_stage,
             "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality,
-            "blocker": blocker, "next_action": next_action,
+            "recovery": recovery, "blocker": blocker, "next_action": next_action,
+            "visual_asset_evidence": [item for item in evidence if item["path"].startswith("assets/")],
             "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},
             "evidence_fingerprint": fingerprint, "evidence": evidence, "updated_at": _now(),
         }
+
+    @staticmethod
+    def _selected_asset_evidence(paths, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+        """Keep the compact cache honest when selected local bytes disappear."""
+        items: list[dict[str, Any]] = []
+        for entry in manifest.get("requests", []) if isinstance(manifest, dict) else []:
+            selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+            relative = selected.get("path") if isinstance(selected, dict) else None
+            if isinstance(relative, str) and relative.startswith("assets/"):
+                items.append(_signature(paths, relative))
+        return items
+
+    @staticmethod
+    def _selected_asset_present(paths, entry: dict[str, Any]) -> bool:
+        """Confirm only that the projected selected bytes still exist locally.
+
+        Provider-grade validation remains owned by the Flow service.  This
+        compact read model merely avoids declaring a missing selection complete
+        and lets the existing provider-free repair seam make the final call.
+        """
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if not isinstance(selected, dict) or not isinstance(selected.get("path"), str):
+            return False
+        try:
+            path = paths.artifact_path(selected["path"])
+            return path.is_file() and path.stat().st_size > 0
+        except Exception:
+            return False
+
+    @classmethod
+    def _selected_asset_usable(cls, paths, entry: dict[str, Any]) -> bool:
+        """Verify real provider selections while retaining legacy fixture projections."""
+        selected = entry.get("selected_asset") if isinstance(entry, dict) else None
+        if not isinstance(selected, dict):
+            return False
+        provenance_bound = isinstance(selected.get("source_provider_attempt"), int) or any(
+            isinstance(attempt, dict) and (
+                attempt.get("production_image_postprocess_required") is True
+                or attempt.get("production_video_postprocess_required") is True
+            )
+            for attempt in entry.get("attempts", [])
+        )
+        return cls._selected_asset_present(paths, entry) if provenance_bound else True
+
+    def _visual_recovery(self, paths, requests: dict[str, Any], entries: dict[str, dict[str, Any]],
+                         request_ids: set[str], generated_for_quality: bool) -> dict[str, Any]:
+        """Project Slice 1-3 evidence without creating a second dispatch path."""
+        base = {
+            "status": "READY", "reason_code": "NO_VISUAL_RECOVERY_REQUIRED", "human_message": None,
+            "affected_request_id": None, "automatic_recovery_available": False,
+            "provider_dispatches_per_continue": 0, "requires_owner_decision": False,
+            "next_action": "Continue production",
+        }
+        if not request_ids:
+            return base
+        if generated_for_quality:
+            return {**base, "status": "COMPLETE", "reason_code": "VISUALS_COMPLETE",
+                    "human_message": "Required visuals are valid and ready for quality.", "next_action": "Continue production"}
+
+        # These deterministic environment outcomes never authorize a Flow
+        # call, regardless of a stale attempt status elsewhere in the manifest.
+        blocked_statuses = {
+            "AUTH_REQUIRED": ("AUTH_REQUIRED", "Sign in to Flow to continue.", "Open Flow sign-in"),
+            "CREDIT_BLOCKED": ("CREDIT_BLOCKED", "Provider credit is required before visuals can continue.", "Review provider access"),
+        }
+        capability_failures = {"FLOW_CAPABILITY_UNAVAILABLE", "FLOW_PROJECT_MISMATCH", "FLOW_REFERENCE_VIDEO_CAPABILITY_BLOCKED"}
+        decisions: list[tuple[str, Any]] = []
+        for request_id in request_ids:
+            entry = entries.get(request_id)
+            if not isinstance(entry, dict):
+                decisions.append((request_id, evaluate_recovery(RecoveryInput(
+                    FailureFamily.INITIAL_ATTEMPT, AttemptOutcome.NOT_STARTED, DispatchCertainty.NOT_DISPATCHED,
+                ))))
+                continue
+            status = entry.get("status")
+            # A valid selected asset is completed work, not an unresolved
+            # recovery candidate.  Do not let its historical attempt evidence
+            # block a different logical visual that Continue must resume.
+            if (status in {"SUCCEEDED", "QC_PENDING"}
+                    and self._selected_asset_usable(paths, entry)):
+                continue
+            if status in blocked_statuses:
+                code, message, action = blocked_statuses[status]
+                return {**base, "status": "BLOCKED", "reason_code": code, "human_message": message,
+                        "affected_request_id": request_id, "next_action": action}
+            if entry.get("failure_class") in capability_failures:
+                return {**base, "status": "BLOCKED", "reason_code": entry["failure_class"],
+                        "human_message": "The current Flow project cannot satisfy this visual requirement.",
+                        "affected_request_id": request_id, "next_action": "Review provider access"}
+            preserved_raw = any(
+                isinstance(attempt, dict) and attempt.get("status") == "SUCCEEDED"
+                and (attempt.get("production_image_postprocess_required") is True
+                     or attempt.get("production_video_postprocess_required") is True)
+                for attempt in entry.get("attempts", [])
+            )
+            if (isinstance(entry.get("selected_asset"), dict)
+                    and not self._selected_asset_present(paths, entry)
+                    and preserved_raw):
+                return {**base, "status": "RECOVERY_READY", "reason_code": "LOCAL_ASSET_REPAIR_AVAILABLE",
+                        "human_message": "A saved provider result can be repaired locally without another generation.",
+                        "affected_request_id": request_id, "automatic_recovery_available": True,
+                        "next_action": "Continue production"}
+            if (status in {"SUCCEEDED", "QC_PENDING"} and isinstance(entry.get("selected_asset"), dict)
+                    and not self._selected_asset_usable(paths, entry)):
+                return {**base, "status": "NEEDS_ATTENTION", "reason_code": "LOCAL_ASSET_EVIDENCE_INSUFFICIENT",
+                        "human_message": "The selected visual is missing and no preserved raw result proves a local repair.",
+                        "affected_request_id": request_id, "requires_owner_decision": True,
+                        "next_action": "Review recovery"}
+            # This local import deliberately reuses the exact Slice 3 durable
+            # evidence normalization; it only reads evidence and cannot reach
+            # the provider adapter from the compact projection.
+            from story_auto.providers.flow.service import _recovery_input_from_entry
+            decisions.append((request_id, evaluate_recovery(_recovery_input_from_entry(entry))))
+
+        # Any unresolved/owner boundary dominates a concurrent or dispatchable
+        # entry.  This preserves serial safety and never lets a status label
+        # silently bypass ambiguity.
+        for request_id, decision in decisions:
+            if decision.action in {RecoveryAction.RECONCILE_FIRST, RecoveryAction.OWNER_ACTION,
+                                   RecoveryAction.PROMPT_REPAIR, RecoveryAction.MANUAL_REGENERATE,
+                                   RecoveryAction.CREATIVE_REGENERATE, RecoveryAction.NO_RETRY}:
+                return {**base, "status": "NEEDS_ATTENTION", "reason_code": decision.reason_code.value,
+                        "human_message": "This visual needs evidence reconciliation or an owner decision before production can continue.",
+                        "affected_request_id": request_id, "requires_owner_decision": True,
+                        "next_action": "Review recovery"}
+        for request_id, decision in decisions:
+            if decision.action is RecoveryAction.RESUME_POLLING:
+                return {**base, "status": "RUNNING", "reason_code": decision.reason_code.value,
+                        "human_message": "A confirmed Flow generation is still active.", "affected_request_id": request_id,
+                        "next_action": "Continue production"}
+        for request_id, decision in decisions:
+            if decision.safe_to_dispatch or decision.action in {RecoveryAction.WAIT_AND_RETRY, RecoveryAction.REACQUIRE,
+                                                                 RecoveryAction.REVALIDATE, RecoveryAction.REPOSTPROCESS}:
+                return {**base, "status": "RECOVERY_READY", "reason_code": decision.reason_code.value,
+                        "human_message": "Saved evidence authorizes a bounded recovery when you continue production.",
+                        "affected_request_id": request_id, "automatic_recovery_available": True,
+                        "provider_dispatches_per_continue": int(decision.provider_generation_required or decision.action is RecoveryAction.WAIT_AND_RETRY),
+                        "next_action": "Continue production"}
+        return {**base, "status": "NEEDS_ATTENTION", "reason_code": "RECOVERY_EVIDENCE_INSUFFICIENT",
+                "human_message": "Visual recovery needs more durable evidence before production can continue.",
+                "affected_request_id": next(iter(request_ids)), "requires_owner_decision": True,
+                "next_action": "Review recovery"}
 
     @staticmethod
     def _stage(status: str, execution: str, human_message: str | None = None) -> dict[str, Any]:
