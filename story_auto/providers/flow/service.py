@@ -31,6 +31,16 @@ from story_auto.core.project import (AUTO_ACCEPT, MANUAL_REVIEW, RuntimeLayout, 
                                      load_project)
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.resources import ensure_free_space
+from story_auto.core.visual.recovery import (
+    AttemptOutcome,
+    DispatchCertainty,
+    FailureFamily,
+    RecoveryInput,
+)
+from story_auto.core.visual.recovery_executor import (
+    AlreadyOwnedSingleFlight,
+    RecoveryExecutionGate,
+)
 from story_auto.core.render import MediaError, derive_trim_retime_video
 from story_auto.core.visual import (
     CAPTION_SAFE_PROMPT_VERSION,
@@ -577,6 +587,59 @@ def _provider_generation_retry_authorized(entry: dict | None) -> bool:
     if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
         return False
     return not attempts or canonical_no_dispatch_proof(attempts[-1])
+
+
+def _recovery_input_from_entry(entry: dict | None) -> RecoveryInput:
+    """Project current durable Flow evidence into the Slice 1 decision input.
+
+    Status is intentionally not used as authority.  A retry is possible only
+    from the existing positive pre-dispatch proof or hash-bound terminal
+    evidence; every other persisted shape is ambiguity until reconciled.
+    """
+    attempts = entry.get("attempts") if isinstance(entry, dict) else None
+    if not isinstance(attempts, list) or any(not isinstance(item, dict) for item in attempts):
+        return RecoveryInput(FailureFamily.DISPATCH_AMBIGUOUS, AttemptOutcome.FAILED,
+                             DispatchCertainty.DISPATCH_UNCERTAIN)
+    submissions = entry.get("provider_submissions", 0)
+    if not isinstance(submissions, int) or submissions < 0:
+        return RecoveryInput(FailureFamily.DISPATCH_AMBIGUOUS, AttemptOutcome.FAILED,
+                             DispatchCertainty.DISPATCH_UNCERTAIN)
+    if not attempts:
+        return RecoveryInput(FailureFamily.INITIAL_ATTEMPT, AttemptOutcome.NOT_STARTED,
+                             DispatchCertainty.NOT_DISPATCHED, provider_attempt_count=submissions)
+    latest = attempts[-1]
+    retry_count = sum(
+        1 for item in attempts
+        if item.get("recovery_action") == "AUTO_RETRY"
+        and item.get("provider_submission_recorded") is True
+    )
+    if canonical_no_dispatch_proof(latest):
+        return RecoveryInput(
+            FailureFamily.PRE_DISPATCH_FAILURE, AttemptOutcome.FAILED,
+            DispatchCertainty.NOT_DISPATCHED, canonical_no_dispatch_proof=True,
+            transient_redispatch_count=retry_count, provider_attempt_count=submissions,
+            legacy_request_status=entry.get("status"),
+        )
+    terminal_log = latest.get("terminal_evidence")
+    terminal = terminal_log[-1] if isinstance(terminal_log, list) and terminal_log else None
+    if isinstance(terminal, dict) and terminal.get("authoritative") is True:
+        try:
+            family = FailureFamily(terminal.get("failure_family"))
+        except (TypeError, ValueError):
+            family = FailureFamily.PROVIDER_TERMINAL_UNKNOWN
+        return RecoveryInput(
+            family, AttemptOutcome.FAILED, DispatchCertainty.TERMINAL_CONFIRMED,
+            terminal_evidence_confirmed=True,
+            exact_attribution_confirmed=terminal.get("exact_attribution_confirmed") is True,
+            rate_limit_backoff_ready=False,
+            transient_redispatch_count=retry_count, provider_attempt_count=submissions,
+            legacy_request_status=entry.get("status"),
+        )
+    return RecoveryInput(FailureFamily.DISPATCH_AMBIGUOUS, AttemptOutcome.FAILED,
+                         DispatchCertainty.DISPATCH_UNCERTAIN,
+                         transient_redispatch_count=retry_count,
+                         provider_attempt_count=submissions,
+                         legacy_request_status=entry.get("status"))
 
 
 def _migrate_request_references(value: Any, old_request_id: str, replacement_request_id: str) -> bool:
@@ -6078,11 +6141,6 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 blocked_request_id = request["request_id"]
                 break
             if entry.get("status") in (FINAL - {"SUCCEEDED"}): continue
-            if not _provider_generation_retry_authorized(entry):
-                # This is intentionally independent of status/failure labels.
-                # An unproven prior attempt cannot reach executor.run again.
-                blocked_request_id = request["request_id"]
-                break
             if not _runnable(request, entries, paths): continue
             entry["reference_asset_hashes"] = [entries[dep]["selected_asset"]["sha256"] for dep in request.get("depends_on", [])]
             # This check is deliberately after dependency resolution and
@@ -6094,44 +6152,82 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             if geometry_validation is not None:
                 entry.setdefault("pre_dispatch_geometry_validations", []).append(geometry_validation)
                 atomic_write_json(path, manifest)
-            attempt_number = len(entry["attempts"]) + 1
-            # Ambiguous/retryable attempts are append-only.  A finite higher
-            # ceiling prevents loops while accepted-goal policy permits recovery.
-            # The default permits an evidence-led correction after an initial
-            # bounded retry cycle; it is a stop-loss, never a cost ceiling.
-            maximum = int(config.settings.get("flow", {}).get("max_attempts", 12))
-            if attempt_number > maximum:
-                entry["status"] = "FAILED_PERMANENT"; entry["failure_class"]="FLOW_RETRY_STOP_LOSS"
-                entry["updated_at"]=_now(); atomic_write_json(path,manifest); continue
-            attempt = {"attempt":attempt_number, "status":"SUBMITTED", "started_at":_now(), "provider_mode":request["media_type"], "dispatch_confirmed":False,
-                       "provider_execution_state":"NOT_STARTED"}; entry["attempts"].append(attempt); entry["status"]="GENERATING"; atomic_write_json(path, manifest)
-            if flow_connection_provenance is not None:
-                if not isinstance(flow_connection_provenance,dict) or not isinstance(flow_connection_provenance.get("flow_connection_id"),str):
-                    raise FlowError("FLOW_CONNECTION_PROVENANCE_INVALID")
-                # Persist before the only provider boundary.  Later runtime changes
-                # cannot reinterpret this historical attempt.
-                attempt["flow_connection"]=dict(flow_connection_provenance)
-                entry["flow_connection"]=dict(flow_connection_provenance)
+            initial_facts = _recovery_input_from_entry(entry)
+            # A first request has no manifest on disk yet. Persist the exact
+            # canonical state that the final gate must re-read.
+            atomic_write_json(path, manifest)
+            execution: dict[str, Any] = {}
+
+            def fresh_recovery_facts() -> RecoveryInput:
+                """Re-read durable evidence after owning ProjectLock, never reuse a decision."""
+                nonlocal manifest, entries, entry
+                manifest = read_json(path)
+                entries = {item["request_id"]: item for item in manifest["requests"]}
+                entry = entries.get(request["request_id"])
+                if not isinstance(entry, dict) or not _runnable(request, entries, paths):
+                    return RecoveryInput(FailureFamily.DISPATCH_AMBIGUOUS, AttemptOutcome.FAILED,
+                                         DispatchCertainty.DISPATCH_UNCERTAIN)
+                return _recovery_input_from_entry(entry)
+
+            def append_authorized_attempt(decision) -> dict:
+                """Append and persist one attempt before a provider boundary exists."""
+                nonlocal entry
+                if not isinstance(entry, dict):
+                    raise FlowError("FLOW_RECOVERY_EVIDENCE_CHANGED")
+                attempt_number = len(entry["attempts"]) + 1
+                attempt = {
+                    "attempt": attempt_number, "status": "SUBMITTED", "started_at": _now(),
+                    "provider_mode": request["media_type"], "dispatch_confirmed": False,
+                    "provider_execution_state": "NOT_STARTED", "recovery_action": decision.action.value,
+                    "recovery_policy_version": decision.policy_version,
+                }
+                entry["attempts"].append(attempt)
+                entry.update({"status": "GENERATING", "updated_at": _now()})
+                execution["attempt"] = attempt
+                execution["attempt_number"] = attempt_number
+                if flow_connection_provenance is not None:
+                    if (not isinstance(flow_connection_provenance, dict)
+                            or not isinstance(flow_connection_provenance.get("flow_connection_id"), str)):
+                        raise FlowError("FLOW_CONNECTION_PROVENANCE_INVALID")
+                    attempt["flow_connection"] = dict(flow_connection_provenance)
+                    entry["flow_connection"] = dict(flow_connection_provenance)
                 atomic_write_json(path, manifest)
-            temp = paths.artifact_path(f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result.{ 'png' if request['media_type'] == 'IMAGE' else 'mp4'}")
-            # Provider adapters receive concrete local files, never manifest-
-            # relative paths.  In particular CDP's file-input API silently
-            # cannot attach a path relative to the process working directory.
-            try:
+                return attempt
+
+            def provider_boundary(attempt: dict) -> None:
+                """The one and only recovery-authorized Flow generation crossing."""
+                attempt_number = execution["attempt_number"]
+                temp = paths.artifact_path(
+                    f"assets/attempts/{request['request_id']}/attempt_{attempt_number:03d}/provider_result."
+                    f"{'png' if request['media_type'] == 'IMAGE' else 'mp4'}"
+                )
                 temp.parent.mkdir(parents=True, exist_ok=True)
                 request_context = dict(request)
                 request_context["_flow_provider_identity_history"] = _provider_identity_history(
-                    manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt_number
+                    manifest, exclude_request_id=request["request_id"], exclude_attempt=attempt_number,
                 )
                 request_context["_flow_reference_paths"] = list(refs)
-                # Persist this marker before the only call that can reach the
-                # provider.  Recovery may prove no dispatch only while the
-                # durable state remains NOT_STARTED.
+                # Persist the boundary marker and accounting immediately before
+                # the sole call which can activate Flow.
                 attempt["provider_execution_state"] = "PROVIDER_BOUNDARY_ENTERED"
                 attempt["provider_boundary_entered_at"] = _now()
+                attempt["provider_submission_recorded"] = True
                 entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
                 atomic_write_json(path, manifest)
-                result = executor.run(request_context, refs, temp)
+                execution["result"] = executor.run(request_context, refs, temp)
+                execution["temporary"] = temp
+
+            try:
+                outcome = RecoveryExecutionGate(AlreadyOwnedSingleFlight()).execute(
+                    initial_facts, load_fresh=fresh_recovery_facts,
+                    append_attempt=append_authorized_attempt, dispatch=provider_boundary,
+                )
+                if not outcome.dispatched:
+                    blocked_request_id = request["request_id"]
+                    break
+                attempt = execution["attempt"]
+                temp = execution["temporary"]
+                result = execution["result"]
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", True))
                 _record_attempt_provider_state(attempt, executor.generate)
                 _confirm_executor_attribution(attempt, executor.generate)
@@ -6139,6 +6235,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 if _finalize_attributed_result(paths, manifest, entry, request, attempt, temp, source):
                     submissions += 1
             except (FlowError, FlowSessionError) as error:
+                attempt = execution.get("attempt")
+                if not isinstance(attempt, dict):
+                    raise
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 _record_attempt_provider_state(attempt, executor.generate)
                 _append_terminal_observations(request, attempt, executor.generate)
@@ -6160,6 +6259,9 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     state = "FAILED_RETRYABLE"
                 attempt.update({"status":state, "failure_class":error.failure_class, "diagnostic":str(error), "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
             except AssetValidationError as error:
+                attempt = execution.get("attempt")
+                if not isinstance(attempt, dict):
+                    raise
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})
             atomic_write_json(path, manifest); entries[request["request_id"]] = entry
             if _unresolved_flow_entry(entry):
