@@ -35,11 +35,11 @@ _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contentedit
 _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);parsed.hash='';key=parsed.href}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0})}}return out})()"""
-_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]'));for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count}})()"""
+_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]')),locale=document.documentElement.lang||null;for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),provider_job_id=tile.getAttribute('data-job-id')||tile.getAttribute('data-job')||null,hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,provider_job_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,terminal_structural_signals:terminalFailure?['warning','refresh','delete_forever']:[],raw_message:(tile.innerText||'').trim(),locale,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count,locale}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
-PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.0.0"
+PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.1.0"
 POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.2.0"
 MAX_POLL_OBSERVATIONS = 2048
 MAX_PROVIDER_IDENTITIES_PER_POLL = 256
@@ -882,6 +882,19 @@ class LiveFlowGenerator:
         baseline_ids = {item["identity"] for item in baseline_projection}
         delta = [item for item in current_projection if item["identity"] not in baseline_ids]
         candidates = observation.candidate_identities if observation is not None else delta
+        terminal_observations = [
+            {
+                "card_id": record.get("card_id"),
+                "provider_job_id": record.get("provider_job_id"),
+                "state": record.get("state"),
+                "failure_class": record.get("failure_class"),
+                "terminal_structural_signals": record.get("terminal_structural_signals"),
+                "raw_message": record.get("raw_message"),
+                "locale": record.get("locale") or (surface or {}).get("locale"),
+            }
+            for record in current
+            if record.get("failure_class") == "PROVIDER_VISIBLE_TERMINAL_FAILURE"
+        ]
         lineage_card_id = observation.lineage_card_id if observation is not None else None
         durable_job_identity = (
             f"card:{lineage_card_id}" if isinstance(lineage_card_id, str) and lineage_card_id else None
@@ -922,6 +935,7 @@ class LiveFlowGenerator:
             "input_dispatched": bool((activation or {}).get("input_dispatched")),
             "activation_verified": bool((activation or {}).get("activation_verified")),
             "provider_acceptance_transition": bool((activation or {}).get("provider_acceptance_transition")),
+            "terminal_observations": terminal_observations,
         }
         persisted = self._poll_timeline.append(value)
         # A dispatch transition may use this poll only after the exact persisted
@@ -970,6 +984,8 @@ class LiveFlowGenerator:
                 durable_identity=durable_identity,
             )
         self._sync_poll_evidence()
+        if terminal_observations:
+            self.last_settings["terminal_observations"] = terminal_observations
         if binding is not None:
             self._sync_bound_decision(binding)
         return persisted
@@ -1403,6 +1419,11 @@ class LiveFlowGenerator:
                 )
                 self._record_observation(observation)
                 self._sync_dispatch_state(dispatch)
+                if self.last_settings.get("terminal_observations"):
+                    raise FlowError(
+                        "PROVIDER_VISIBLE_TERMINAL_FAILURE",
+                        "Flow exposed a structurally terminal provider tile",
+                    )
                 time.sleep(.5)
 
             self.dispatch_confirmation_state = dispatch.state

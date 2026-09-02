@@ -57,6 +57,7 @@ from .postprocess import (
 )
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
+from .terminal_evidence import build_terminal_evidence
 
 
 _transaction_read_cache: ContextVar[dict[object, Any] | None] = ContextVar(
@@ -1107,6 +1108,33 @@ def _media_paths_in(value: Any) -> set[str]:
         for item in value:
             found.update(_media_paths_in(item))
     return found
+
+
+def _append_terminal_observations(request: dict, attempt: dict, generator: Any) -> list[dict]:
+    """Append classified terminal observations without changing dispatch authority."""
+    settings = getattr(generator, "last_settings", None)
+    observations = settings.get("terminal_observations") if isinstance(settings, dict) else None
+    if not isinstance(observations, list):
+        return []
+    appended = []
+    evidence_log = attempt.setdefault("terminal_evidence", [])
+    if not isinstance(evidence_log, list):
+        raise FlowError("FLOW_TERMINAL_EVIDENCE_INVALID")
+    for observation in observations:
+        if not isinstance(observation, dict):
+            continue
+        evidence = build_terminal_evidence(
+            request_id=request["request_id"],
+            attempt=attempt,
+            observation=observation,
+            observed_at=_now(),
+        )
+        if any(item.get("evidence_digest_sha256") == evidence["evidence_digest_sha256"]
+               for item in evidence_log if isinstance(item, dict)):
+            continue
+        evidence_log.append(evidence)
+        appended.append(evidence)
+    return appended
 
 
 def _terminal_media_tombstone_directory(paths) -> Path:
@@ -6091,6 +6119,7 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             except (FlowError, FlowSessionError) as error:
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 _record_attempt_provider_state(attempt, executor.generate)
+                _append_terminal_observations(request, attempt, executor.generate)
                 safe_pre_dispatch_candidate = error.failure_class in {
                     "FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED",
                     "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
