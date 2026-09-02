@@ -12,11 +12,11 @@ from typing import Any
 from story_auto.core.visual.recovery import FailureFamily
 
 
-TERMINAL_CLASSIFIER_VERSION = "story-auto-flow-terminal-classifier/1.1.0"
+TERMINAL_CLASSIFIER_VERSION = "story-auto-flow-terminal-classifier/1.1.1"
 _REQUIRED_TERMINAL_SIGNALS = frozenset({"warning", "refresh", "delete_forever"})
 _POLICY_REJECTION_TERMS = (
     "blocked", "rejected", "not allowed", "cannot generate", "can't generate",
-    "unable to generate due to",
+    "unable to generate due to", "không thể tạo",
 )
 _POLICY_CONTEXT_TERMS = (
     "policy", "safety", "reputation", "current events",

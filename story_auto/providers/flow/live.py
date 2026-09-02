@@ -993,16 +993,17 @@ class LiveFlowGenerator:
                 durable_identity=durable_identity,
             )
         self._sync_poll_evidence()
-        if terminal_observations:
-            self.last_settings["terminal_observations"] = terminal_observations
-            self.last_settings["terminal_observation_sources"] = [
-                {
-                    "source_poll_sequence": persisted["poll_sequence"],
-                    "source_observation_sha256": persisted["observation_sha256"],
-                    "terminal_observation": dict(item),
-                }
-                for item in terminal_observations
-            ]
+        # These are current-poll convenience projections, never accumulated
+        # evidence.  The hash-chained timeline above retains full history.
+        self.last_settings["terminal_observations"] = terminal_observations
+        self.last_settings["terminal_observation_sources"] = [
+            {
+                "source_poll_sequence": persisted["poll_sequence"],
+                "source_observation_sha256": persisted["observation_sha256"],
+                "terminal_observation": dict(item),
+            }
+            for item in terminal_observations
+        ]
         if binding is not None:
             self._sync_bound_decision(binding)
         return persisted

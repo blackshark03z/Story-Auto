@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from story_auto.providers.flow.service import _append_terminal_observations
-from story_auto.providers.flow.live import ProviderPollEvidenceTimeline
+from story_auto.providers.flow.live import LiveFlowGenerator, ProviderPollEvidenceTimeline
 from story_auto.providers.flow.terminal_evidence import (
     TERMINAL_CLASSIFIER_VERSION,
     build_terminal_evidence,
@@ -129,6 +129,85 @@ class FlowTerminalEvidenceTests(unittest.TestCase):
         item = evidence("This request was blocked by policy due to current events.")
         self.assert_authoritative_family(item, "PROVIDER_POLICY_BLOCK")
         self.assertEqual(item["provider_job_id"], "job-1")
+
+    def test_pre_dispatch_terminal_then_empty_post_dispatch_poll_clears_current_failure(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        self.assertEqual(generator.last_settings["terminal_observations"][0]["card_id"],
+                         "old-tile")
+
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[], current=[], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        self.assertEqual(generator.last_settings["terminal_observations"], [])
+        self.assertEqual(generator.last_settings["terminal_observation_sources"], [])
+        self.assertFalse(generator.last_settings.get("terminal_observations"))
+
+    def test_post_dispatch_terminal_replaces_pre_dispatch_terminal_source(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        new = terminal(
+            "This request was blocked by policy due to current events.",
+            card_id="new-tile", provider_job_id="new-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        current_source = generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[], current=[new], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        self.assertEqual(generator.last_settings["terminal_observations"], [new])
+        self.assertEqual(generator.last_settings["terminal_observation_sources"], [{
+            "source_poll_sequence": current_source["poll_sequence"],
+            "source_observation_sha256": current_source["observation_sha256"],
+            "terminal_observation": new,
+        }])
+        self.assertNotIn(
+            "old-tile",
+            {item["card_id"] for item in generator.last_settings["terminal_observations"]},
+        )
+
+    def test_historical_terminal_poll_remains_in_verified_raw_timeline_after_clear(self):
+        generator = LiveFlowGenerator(None)
+        old = terminal(
+            "This old request was blocked by policy.",
+            card_id="old-tile", provider_job_id="old-job",
+        )
+        generator._record_poll(
+            phase="PRE_DISPATCH_DISCOVERY", media_type="IMAGE",
+            baseline=[], current=[old], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        generator._record_poll(
+            phase="POST_DISPATCH", media_type="IMAGE",
+            baseline=[], current=[], surface={"locale": "en-US"},
+            stable_polls=1,
+        )
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(
+            generator.last_settings["provider_poll_evidence"],
+        )
+        self.assertEqual(
+            verified["observations"][0]["terminal_observations"][0]["card_id"],
+            "old-tile",
+        )
+        self.assertEqual(verified["observations"][1]["terminal_observations"], [])
 
     def test_mutable_last_settings_observation_without_verified_poll_is_not_authoritative(self):
         source = attempt()
@@ -258,6 +337,25 @@ class FlowTerminalEvidenceTests(unittest.TestCase):
         item = evidence("Prompt topic: current events. Generation could not be completed.")
         self.assert_authoritative_family(item, "PROVIDER_TERMINAL_UNKNOWN")
         self.assertNotEqual(item["failure_family"], "PROVIDER_POLICY_BLOCK")
+
+    def test_canonical_vietnamese_rejection_with_restriction_context_is_policy(self):
+        item = evidence(
+            "Không thể tạo video có thể gây rủi ro về danh tiếng hoặc xuyên tạc "
+            "các sự kiện hiện tại.",
+        )
+        self.assert_authoritative_family(item, "PROVIDER_POLICY_BLOCK")
+
+    def test_generic_vietnamese_policy_fragments_remain_unknown(self):
+        cases = (
+            "sự kiện hiện tại",
+            "danh tiếng",
+            "Không thể tạo nội dung này.",
+        )
+        for message in cases:
+            with self.subTest(message=message):
+                self.assert_authoritative_family(
+                    evidence(message), "PROVIDER_TERMINAL_UNKNOWN",
+                )
 
     def test_stray_sign_in_or_generic_quota_text_is_terminal_unknown(self):
         cases = (
