@@ -4,18 +4,30 @@ from __future__ import annotations
 import itertools
 import json
 import time
+import threading
+from collections import deque
 from urllib.request import urlopen
 
 from .session import FlowSessionError
 
 MAX_UNMATCHED_CDP_MESSAGES = 128
+MAX_TRANSPORT_TRACE_EVENTS = 256
+SAFE_PRE_DISPATCH_REPLAY_METHODS = frozenset({"Runtime.evaluate", "Page.reload"})
+_CONNECTION_GENERATIONS = itertools.count(1)
 
 
 class CdpPage:
     def __init__(self, websocket, runtime=None, *, command_timeout_seconds: float = 30.0,
-                 clock=time.monotonic):
+                 clock=time.monotonic, opener=urlopen, ws_connect=None, target_id: str = ""):
         self.websocket, self._ids, self.runtime = websocket, itertools.count(1), runtime
         self.command_timeout_seconds, self._clock = command_timeout_seconds, clock
+        self._opener, self._ws_connect, self.target_id = opener, ws_connect, target_id
+        self.connection_generation = next(_CONNECTION_GENERATIONS)
+        self._command_lock = threading.RLock()
+        self._transport_trace = deque(maxlen=MAX_TRANSPORT_TRACE_EVENTS)
+        self._pre_dispatch_reconnect_enabled = False
+        self._pre_dispatch_reconnects = 0
+        self._trace("connected")
 
     @classmethod
     def open(cls, runtime, *, opener=urlopen, ws_connect=None):
@@ -31,16 +43,82 @@ class CdpPage:
             if ws_connect is None:
                 import websocket
                 ws_connect = websocket.create_connection
-            return cls(ws_connect(address, timeout=30), runtime)
+            return cls(ws_connect(address, timeout=30), runtime, opener=opener,
+                       ws_connect=ws_connect, target_id=str(matches[0].get("id", "")))
         except FlowSessionError: raise
         except Exception as error: raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "cannot attach to dedicated Story Auto Chrome") from error
 
     def close(self):
-        try: self.websocket.close()
+        with self._command_lock:
+            self._trace("close")
+            try: self.websocket.close()
+            except Exception: pass
+
+    def enable_pre_dispatch_reconnect(self) -> None:
+        """Permit one replay-safe connection reset before the Generate path."""
+        self._pre_dispatch_reconnect_enabled = True
+
+    def disable_pre_dispatch_reconnect(self) -> None:
+        """Freeze transport recovery before any prompt/input activation."""
+        self._pre_dispatch_reconnect_enabled = False
+
+    def transport_diagnostics(self) -> dict:
+        """Bounded, payload-free CDP chronology for durable attempt evidence."""
+        return {
+            "target_id": self.target_id,
+            "connection_generation": self.connection_generation,
+            "pre_dispatch_reconnects": self._pre_dispatch_reconnects,
+            "events": list(self._transport_trace),
+        }
+
+    def _trace(self, event: str, **fields) -> None:
+        self._transport_trace.append({"event": event, "at": round(self._clock(), 6),
+                                      "thread": threading.get_ident(), **fields})
+
+    @staticmethod
+    def _is_timeout(error: Exception) -> bool:
+        return isinstance(error, TimeoutError) or error.__class__.__name__ == "WebSocketTimeoutException"
+
+    def _reconnect_pre_dispatch(self, method: str) -> None:
+        if self.runtime is None:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "CDP reconnect requires a Flow runtime")
+        self._trace("reconnect_start", method=method)
+        fresh = type(self).open(self.runtime, opener=self._opener, ws_connect=self._ws_connect)
+        old_socket = self.websocket
+        self.websocket = fresh.websocket
+        self.target_id = fresh.target_id
+        self.connection_generation = fresh.connection_generation
+        try: old_socket.close()
         except Exception: pass
+        self._pre_dispatch_reconnects += 1
+        self._trace("reconnect_complete", method=method)
 
     def command(self, method: str, params: dict | None = None) -> dict:
-        identifier = next(self._ids)
+        with self._command_lock:
+            for attempt in range(2):
+                identifier = next(self._ids)
+                self._trace("command_start", method=method, command_id=identifier,
+                            delivery_attempt=attempt + 1)
+                try:
+                    result = self._command_once(identifier, method, params)
+                    self._trace("command_response", method=method, command_id=identifier,
+                                delivery_attempt=attempt + 1)
+                    return result
+                except FlowSessionError as error:
+                    self._trace("command_error", method=method, command_id=identifier,
+                                delivery_attempt=attempt + 1, failure_class=error.failure_class)
+                    can_reconnect = (
+                        error.failure_class == "FLOW_CDP_COMMAND_TIMEOUT"
+                        and self._pre_dispatch_reconnect_enabled
+                        and self._pre_dispatch_reconnects == 0
+                        and method in SAFE_PRE_DISPATCH_REPLAY_METHODS
+                    )
+                    if not can_reconnect:
+                        raise
+                    self._reconnect_pre_dispatch(method)
+            raise AssertionError("CDP command replay loop exhausted")
+
+    def _command_once(self, identifier: int, method: str, params: dict | None) -> dict:
         try:
             deadline = self._clock() + self.command_timeout_seconds
             unmatched_messages = 0
@@ -64,11 +142,23 @@ class CdpPage:
                             f"CDP {method} exceeded the pre-provider unmatched-event limit",
                         )
                     continue
-                if "error" in payload: raise FlowSessionError("FLOW_UI_CHANGED", f"CDP {method} rejected")
+                if "error" in payload:
+                    detail = payload.get("error", {})
+                    code = detail.get("code") if isinstance(detail, dict) else None
+                    message = detail.get("message") if isinstance(detail, dict) else None
+                    self._trace("protocol_error", method=method, command_id=identifier,
+                                cdp_error_code=code, cdp_error_message=str(message or "")[:180])
+                    raise FlowSessionError("FLOW_UI_CHANGED", f"CDP {method} rejected: {str(message or '')[:180]}")
                 return payload.get("result", {})
         except FlowSessionError:
             raise
         except Exception as error:
+            # A websocket read deadline does not prove the DevTools endpoint
+            # or target died; Chrome can answer a later fresh connection.
+            # Keep this distinct from an actual socket transport failure.
+            if self._is_timeout(error):
+                raise FlowSessionError("FLOW_CDP_COMMAND_TIMEOUT",
+                                       f"CDP {method} did not return before its command deadline") from error
             raise FlowSessionError("FLOW_CDP_UNAVAILABLE", f"CDP {method} transport failed") from error
 
     def evaluate(self, expression: str):
@@ -79,10 +169,18 @@ class CdpPage:
             raise FlowSessionError("FLOW_UI_CHANGED", description)
         return result.get("result", {}).get("value")
 
-    def set_input_files(self, selector: str, files: list[str]) -> None:
+    def set_input_files(self, selector: str, files: list[str], *, expected_count: int = 1) -> None:
+        """Assign files to one freshly-resolved, canonical Flow input.
+
+        Flow recreates its media-library input during React updates. Resolve
+        the node immediately before assignment and reject an ambiguous surface
+        rather than retaining a stale DOM node from an earlier upload.
+        """
         root = self.command("DOM.getDocument", {"depth":1}).get("root", {}).get("nodeId")
-        node = self.command("DOM.querySelector", {"nodeId":root, "selector":selector}).get("nodeId", 0)
-        if not node: raise FlowSessionError("FLOW_UI_CHANGED", "reference input not found")
+        nodes = self.command("DOM.querySelectorAll", {"nodeId":root, "selector":selector}).get("nodeIds", [])
+        if not isinstance(nodes, list) or len(nodes) != expected_count:
+            raise FlowSessionError("FLOW_UI_CHANGED", f"expected {expected_count} active reference input, found {len(nodes) if isinstance(nodes, list) else 0}")
+        node = nodes[0]
         self.command("DOM.setFileInputFiles", {"nodeId":node, "files":files})
 
     def insert_text(self, text: str) -> None:

@@ -13,7 +13,7 @@ from story_auto.core.project.production_state import ProductionStateReconciler
 
 def _project(root: str, project_id: str = "prj_phasea"):
     runtime = RuntimeLayout.from_root(root)
-    return create_project(runtime, ProjectConfig(project_id, settings={"execution": {"mode": "RENDER_ONLY"}}), "# Phase A\n\n## Narration\n\nA reusable narration."), runtime
+    return create_project(runtime, ProjectConfig(project_id, render_mode="full_image", settings={"execution": {"mode": "RENDER_ONLY"}}), "# Phase A\n\n## Narration\n\nA reusable narration."), runtime
 
 
 def _complete(paths):
@@ -37,7 +37,7 @@ class ProductionStateTests(unittest.TestCase):
             paths, _ = _project(root)
             state = ProductionStateReconciler().reconcile(paths, load_project(RuntimeLayout.from_root(root), paths.project_id)[1]).to_dict()
             self.assertEqual(state["project_id"], paths.project_id)
-            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.4")
+            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.5")
             self.assertTrue((paths.root / "output" / "production_state.json").is_file())
             self.assertNotIn("generation_manifest", str(state["stages"]))
 

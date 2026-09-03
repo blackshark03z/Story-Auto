@@ -15,6 +15,98 @@ def record(card: str, asset: str | None = None, *, media_type="IMAGE", state="RE
 
 
 class FlowAttributionTests(unittest.TestCase):
+    def test_causal_model_delta_excludes_historical_cards(self):
+        historical = record("tile-history", "asset-history")
+        owned = record("tile-request", "asset-request")
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+
+        for _ in range(3):
+            observation = tracker.observe(
+                [historical, owned], causal_card_ids={"tile-request"},
+            )
+
+        self.assertEqual(observation.state, "CONFIRMED")
+        self.assertEqual(observation.candidate["asset_id"], "asset-request")
+        self.assertEqual(
+            [item["asset_id"] for item in observation.foreign_candidate_identities],
+            ["asset-history"],
+        )
+
+    def test_virtualized_historical_card_reinsert_is_not_new(self):
+        tracker = RequestAttributionTracker(
+            [record("tile-original", "asset-history")],
+            media_type="IMAGE", expected_count=1,
+        )
+        observation = tracker.observe(
+            [record("tile-reinserted", "asset-history")],
+            causal_card_ids={"tile-reinserted"},
+        )
+        self.assertEqual((observation.state, observation.lineage_card_id), ("WAITING", None))
+        self.assertEqual(observation.historical_alias_card_ids, ["tile-reinserted"])
+        observation = tracker.observe(
+            [record("tile-reinserted", "asset-history")],
+            causal_card_ids={"tile-reinserted"}, causal_anchor_final=True,
+        )
+        self.assertEqual((observation.state, observation.candidate), ("AMBIGUOUS", None))
+
+    def test_historical_alias_and_one_new_pending_card_yield_one_causal_group(self):
+        tracker = RequestAttributionTracker(
+            [record("tile-original", "asset-history")],
+            media_type="IMAGE", expected_count=1,
+        )
+        observation = tracker.observe(
+            [
+                record("tile-history-rewrap", "asset-history"),
+                record("tile-request", state="PENDING"),
+            ],
+            causal_card_ids={"tile-history-rewrap", "tile-request"},
+        )
+        self.assertEqual((observation.state, observation.lineage_card_id),
+                         ("WAITING", "tile-request"))
+        self.assertEqual(observation.causal_card_ids, ["tile-request"])
+        self.assertEqual(observation.historical_alias_card_ids, ["tile-history-rewrap"])
+
+    def test_pending_causal_card_preserves_ownership_when_ready(self):
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        pending = tracker.observe(
+            [record("tile-request", state="PENDING")],
+            causal_card_ids={"tile-request"},
+        )
+        self.assertEqual((pending.state, pending.lineage_card_id), ("WAITING", "tile-request"))
+        current = [record("tile-request", "asset-request")]
+        for _ in range(3):
+            observation = tracker.observe(current, causal_card_ids={"tile-request"})
+        self.assertEqual((observation.state, observation.candidate["asset_id"]),
+                         ("CONFIRMED", "asset-request"))
+
+    def test_unrelated_causal_groups_remain_ambiguous(self):
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        observation = tracker.observe(
+            [record("tile-a", "asset-a"), record("tile-b", "asset-b")],
+            causal_card_ids={"tile-a", "tile-b"},
+        )
+        self.assertEqual((observation.state, observation.candidate), ("AMBIGUOUS", None))
+
+    def test_multiple_candidates_inside_one_causal_group_are_deterministic(self):
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        current = [record("tile-request", "asset-z"), record("tile-request", "asset-a")]
+        for _ in range(3):
+            observation = tracker.observe(current, causal_card_ids={"tile-request"})
+        self.assertEqual(observation.state, "CONFIRMED")
+        self.assertEqual(observation.candidate["asset_id"], "asset-a")
+        self.assertEqual(
+            observation.within_group_selection_policy,
+            "LEXICOGRAPHIC_PROVIDER_IDENTITY_WITHIN_CAUSAL_GROUP",
+        )
+
+    def test_no_causal_anchor_after_boundary_is_ambiguous(self):
+        tracker = RequestAttributionTracker([], media_type="IMAGE", expected_count=1)
+        observation = tracker.observe(
+            [record("tile-history", "asset-history")],
+            causal_card_ids=set(), causal_anchor_final=True,
+        )
+        self.assertEqual((observation.state, observation.candidate), ("AMBIGUOUS", None))
+
     def test_pre_dispatch_baseline_excludes_stale_outputs_from_delta(self):
         stale = record("tile-old", "asset-old")
         tracker = RequestAttributionTracker([stale], media_type="IMAGE", expected_count=1)

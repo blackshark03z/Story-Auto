@@ -139,7 +139,7 @@ class KokoroLocalTests(unittest.TestCase):
             settings=self._runtime(directory)
             (Path(settings["model_cache"])/"snapshots"/SNAPSHOT/"kokoro-v1_0.pth").unlink()
             runtime=RuntimeLayout.from_root(Path(directory)/"runtime")
-            config=ProjectConfig("prj_kokoro_missing",settings={
+            config=ProjectConfig("prj_kokoro_missing",render_mode="full_image",settings={
                 "tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":settings},
                 "llm":{"provider":"gemini","model":"gemini-3.5-flash"},
                 "flow":{"project_identity":"must-not-run"},

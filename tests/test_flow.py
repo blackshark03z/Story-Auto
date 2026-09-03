@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
+from story_auto.core.project.production_state import ProductionStateReconciler
 from story_auto.providers.flow.page import FlowComposer
 from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_generation, reconcile_local_assets,
                                                 adopt_exact_flow_recovery, adopt_manual_recovery,
@@ -24,7 +25,7 @@ from story_auto.providers.flow.service import (FlowError, FlowExecutor, execute_
 from story_auto.providers.flow.validation import validate_video
 from story_auto.providers.flow.session import FlowCapabilities, FlowRuntime, FlowSessionError, launch_dedicated_session, preflight
 from story_auto.providers.flow.settings import resolve_settings, select_model
-from story_auto.providers.flow.live import DispatchEvidenceTracker, records_for_media
+from story_auto.providers.flow.live import DispatchEvidenceTracker, FlowBrowserDom, records_for_media
 from story_auto.providers.flow.live import ProviderPollEvidenceTimeline
 from story_auto.providers.flow.postprocess import process_flow_image
 from story_auto.providers.flow.cdp import CdpPage, MAX_UNMATCHED_CDP_MESSAGES
@@ -36,8 +37,8 @@ class Editor:
     def set_text(self, value): self.value = value
     def read_text(self): return self.value
 class Button:
-    def __init__(self): self.clicked = False
-    def click(self): self.clicked = True
+    def __init__(self): self.clicked = False; self.click_count = 0
+    def click(self): self.clicked = True; self.click_count += 1
 class DOM:
     def __init__(self, editors=1, controls=1): self.editors=[Editor() for _ in range(editors)]; self.controls=[Button() for _ in range(controls)]
     def active_prompt_editors(self): return self.editors
@@ -307,6 +308,7 @@ class FlowTests(unittest.TestCase):
         return runtime,cfg,paths,request_id,digest,original
     def test_fail_closed_composer(self):
         dom=DOM(); FlowComposer(dom).submit("complete prompt", references=[], media_type="IMAGE"); self.assertTrue(dom.controls[0].clicked)
+        self.assertEqual(dom.controls[0].click_count, 1)
         for dom in (DOM(0),DOM(2),DOM(1,2)):
             with self.assertRaises(FlowSessionError) as caught: FlowComposer(dom).submit("p",references=[],media_type="IMAGE")
             self.assertEqual(caught.exception.failure_class,"FLOW_UI_CHANGED")
@@ -446,6 +448,59 @@ class FlowTests(unittest.TestCase):
             self.assertEqual((entry["status"],entry.get("provider_submissions",0)),("NOT_DISPATCHED",0))
             self.assertEqual((attempt["provider_execution_state"],attempt.get("provider_submission_recorded")),("NOT_STARTED",None))
 
+    def test_session_preparation_failure_stops_sibling_video_requests(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            requests = {"requests": [{
+                "request_id": f"video_{index}", "fingerprint": f"video-{index}", "purpose": "SHOT",
+                "shot_id": f"sh_{index:04d}", "media_type": "VIDEO", "prompt": "short scene",
+                "depends_on": [], "provider": "google_flow", "output_count": 1,
+                "motion_risk_analysis": {"physical_complexity": "LOW"},
+            } for index in range(1, 4)]}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), requests)
+            class SessionPreparationFails:
+                dispatch_confirmed = False
+                last_settings = {"activation": {"input_dispatched": False,
+                                 "proof": "PRE_DISPATCH_COMPOSER_FAILURE"},
+                                 "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                 "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                def set_before_provider_boundary(self, callback): self.callback = callback
+                def __call__(self, request, *_):
+                    calls.append(request["request_id"])
+                    raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "provider composer attachment failed")
+            executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),SessionPreparationFails())
+            result=execute_generation(runtime.root,cfg.project_id,executor=executor,execute=True,production_batch=True)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            self.assertEqual((calls, result["attention"], result["blocked_request_id"]),
+                             (["video_1"], "FLOW_SESSION_PREPARATION_FAILED", "video_1"))
+            self.assertEqual(manifest["session_preparation_blocker"]["failure_class"], "FLOW_REFERENCE_UPLOAD_FAILED")
+            self.assertEqual([item["request_id"] for item in manifest["requests"]], ["video_1"])
+            state=ProductionStateReconciler().reconcile(paths,cfg).to_dict()
+            self.assertEqual((state["pipeline_status"],state["recovery"]["reason_code"],state["recovery"]["affected_request_id"]),
+                             ("OWNER_DECISION_REQUIRED", "FLOW_SESSION_PREPARATION_FAILED", "video_1"))
+
+    def test_content_specific_failure_does_not_create_session_blocker(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime,cfg,paths=self._project(root); calls=[]
+            request={"request_id":"video_1","fingerprint":"video-1","purpose":"SHOT","shot_id":"sh_0001",
+                     "media_type":"VIDEO","prompt":"short scene","depends_on":[],"provider":"google_flow",
+                     "output_count":1,"motion_risk_analysis":{"physical_complexity":"LOW"}}
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests":[request]})
+            class ContentFailure:
+                dispatch_confirmed = False
+                last_settings = {"activation": {"input_dispatched": False,
+                                 "proof": "PRE_DISPATCH_COMPOSER_FAILURE"},
+                                 "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                                 "provider_job_id": None, "attribution_state": "NOT_ATTEMPTED"}
+                def set_before_provider_boundary(self, callback): self.callback = callback
+                def __call__(self, *_):
+                    calls.append(1)
+                    raise FlowError("CREATIVE_REJECTED", "specific asset cannot satisfy the requested content")
+            execute_generation(runtime.root,cfg.project_id,executor=FlowExecutor(FlowCapabilities(True,True,True,True,True,True),ContentFailure()),execute=True)
+            manifest=read_json(paths.artifact_path("output/generation_manifest.json"))
+            self.assertEqual(calls,[1])
+            self.assertNotIn("session_preparation_blocker",manifest)
+
     def test_interrupted_pre_dispatch_attempt_can_be_safely_reopened(self):
         with tempfile.TemporaryDirectory() as root:
             runtime,cfg,paths=self._project(root)
@@ -482,6 +537,80 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(socket.sent), 1)
         self.assertEqual(len(socket.timeouts), MAX_UNMATCHED_CDP_MESSAGES + 1)
         self.assertTrue(socket.timeouts)
+
+    def test_socket_read_timeout_is_not_misclassified_as_transport_unavailable(self):
+        class TimedOutSocket:
+            def send(self, _payload): pass
+            def settimeout(self, _value): pass
+            def recv(self):
+                class WebSocketTimeoutException(TimeoutError): pass
+                raise WebSocketTimeoutException("Connection timed out")
+        with self.assertRaises(FlowSessionError) as caught:
+            CdpPage(TimedOutSocket()).evaluate("document.title")
+        self.assertEqual(caught.exception.failure_class, "FLOW_CDP_COMMAND_TIMEOUT")
+
+    def test_pre_dispatch_timeout_reconnects_once_and_replays_only_the_safe_cdp_command(self):
+        class TimedOutSocket:
+            def __init__(self): self.closed = False
+            def send(self, _payload): pass
+            def settimeout(self, _value): pass
+            def recv(self): raise TimeoutError("read timed out")
+            def close(self): self.closed = True
+        class ResponsiveSocket:
+            def __init__(self): self.sent = []
+            def send(self, payload): self.sent.append(json.loads(payload))
+            def settimeout(self, _value): pass
+            def recv(self): return json.dumps({"id": self.sent[-1]["id"], "result": {"result": {"value": "ok"}}})
+            def close(self): pass
+        runtime = SimpleNamespace()
+        old, fresh_socket = TimedOutSocket(), ResponsiveSocket()
+        fresh = CdpPage(fresh_socket, runtime, target_id="fresh-target")
+        page = CdpPage(old, runtime, target_id="old-target")
+        page.enable_pre_dispatch_reconnect()
+        with patch.object(CdpPage, "open", return_value=fresh) as reopen:
+            self.assertEqual(page.evaluate("document.title"), "ok")
+        self.assertEqual(reopen.call_count, 1)
+        self.assertTrue(old.closed)
+        diagnostic = page.transport_diagnostics()
+        self.assertEqual(diagnostic["pre_dispatch_reconnects"], 1)
+        self.assertIn("reconnect_complete", [event["event"] for event in diagnostic["events"]])
+
+    def test_cdp_reconnect_is_frozen_before_composer_activation(self):
+        class TimedOutSocket:
+            def send(self, _payload): pass
+            def settimeout(self, _value): pass
+            def recv(self): raise TimeoutError("read timed out")
+            def close(self): pass
+        page = CdpPage(TimedOutSocket(), SimpleNamespace())
+        page.enable_pre_dispatch_reconnect()
+        page.disable_pre_dispatch_reconnect()
+        with patch.object(CdpPage, "open") as reopen, self.assertRaises(FlowSessionError) as caught:
+            page.evaluate("document.title")
+        self.assertEqual(caught.exception.failure_class, "FLOW_CDP_COMMAND_TIMEOUT")
+        reopen.assert_not_called()
+
+    def test_flow_settings_scripts_do_not_require_animation_frames(self):
+        class CapturingPage:
+            def __init__(self): self.expressions = []
+            def evaluate(self, expression):
+                self.expressions.append(expression)
+                if "return {media,count" in expression:
+                    return {"media": True, "count": 1, "menu_closed": True}
+                if "return trigger.getAttribute" in expression:
+                    return True
+                return {"media": True, "count": 1, "menu_closed": True,
+                        "ratio": True, "actual_output_count": 1, "model": "Flow"}
+        page = CapturingPage()
+        dom = FlowBrowserDom(page)
+        dom.inspect_generation_count("IMAGE")
+        dom.configure_generation_count("IMAGE", 1)
+        settings = SimpleNamespace(media_type="IMAGE", aspect_ratio="16:9", model_preference="Flow",
+                                   workflow_mode="FULL_IMAGE", quality_tier="", reference_mode="NONE",
+                                   duration_seconds=None)
+        dom.apply_request_settings(settings)
+        scripts = "\n".join(page.expressions)
+        self.assertNotIn("requestAnimationFrame", scripts)
+        self.assertIn("setTimeout", scripts)
 
     def test_valid_qc_corrective_parent_is_not_reconciled_before_its_fresh_child(self):
         parent = {"request_id": "parent"}

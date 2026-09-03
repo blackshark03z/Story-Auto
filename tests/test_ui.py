@@ -30,6 +30,11 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b"Skip to main content",html); self.assertIn(b"newVideoDialog",html); self.assertIn(b" Settings</button>",html)
                 _,styles,_=call("/static/styles.css"); self.assertIn(b":focus-visible",styles); self.assertIn(b"[hidden]",styles)
                 _,script,_=call("/static/app.js"); self.assertNotIn(b"prompt(",script); self.assertIn(b"showModal()",script)
+                status,payload,_=call("/api/runtime-attestation"); attestation=json.loads(payload)
+                self.assertEqual((status,attestation["process_id"]),(200,os.getpid()))
+                self.assertEqual(attestation["provider_surface_extractor_version"],"flow-provider-surface/2.2.0")
+                self.assertEqual(attestation["poll_evidence_version"],"story-auto-flow-poll-evidence/1.3.0")
+                self.assertEqual(len(attestation["flow_module_sha256"]),64)
                 self.assertIn(b"requestPause",script); self.assertIn(b"focusWizardStep",script); self.assertIn(b"aria-invalid",script)
                 self.assertIn(b"data-error-action",script); self.assertIn(b'id="busyReason"',script)
                 self.assertIn(b"KOKORO_MODEL_NOT_FOUND",script); self.assertIn(b"Kokoro model files are missing",script)
@@ -54,12 +59,11 @@ class OperatorUiTests(unittest.TestCase):
                 self.assertIn(b'Quality review',script); self.assertIn(b'name="qcPolicy"',script)
                 self.assertIn(b'Accept eligible visuals',script); self.assertIn(b'accept_selected_assets',script)
                 self.assertNotIn(b"zoom percentage",script); self.assertNotIn(b"particle count",script)
-                status,payload,_=call("/api/projects",{"project_id":"prj_ui001","render_mode":"hybrid_hook","content":"# Story\n\n## Narration\n\nA local operator test.\n"}); self.assertEqual(status,201)
+                status,payload,_=call("/api/projects",{"project_id":"prj_ui001","render_mode":"full_image","content":"# Story\n\n## Narration\n\nA local operator test.\n"}); self.assertEqual(status,201)
                 created=json.loads(payload); self.assertEqual(created["content_status"],"VALID")
                 _,payload,_=call("/api/projects/prj_ui001/actions",{"action":"save_content","content":"# Story\n\n## Narration\n\nUpdated through the shared service.\n"}); self.assertIn(b"Updated through the shared service",payload)
                 _,payload,_=call("/api/projects/prj_ui001/snapshot"); self.assertEqual(json.loads(payload)["project_id"],"prj_ui001")
-                status,payload,_=call("/api/projects",{"project_id":"prj_uiambient","render_mode":"ambient_story","ambient_style":"quiet_verdict","content":"# Ambient\n\n## Narration\n\nA quiet verdict story.\n"})
-                ambient=json.loads(payload); self.assertEqual((status,ambient["render_mode"],ambient["ambient_style_label"]),(201,"ambient_story","Quiet Verdict"))
+                with self.assertRaises(HTTPError): call("/api/projects",{"project_id":"prj_uiambient","render_mode":"ambient_story","ambient_style":"quiet_verdict","content":"# Ambient\n\n## Narration\n\nA quiet verdict story.\n"})
                 with self.assertRaises(HTTPError): call("/api/projects",{"project_id":"prj_uiambient_missing","render_mode":"ambient_story","content":"# Ambient\n\n## Narration\n\nMissing style.\n"})
                 with self.assertRaises(HTTPError): call("/api/projects/prj_ui001/asset?path=../project.json")
             finally:
@@ -141,7 +145,7 @@ class OperatorUiTests(unittest.TestCase):
         complete["production"].update({"pipeline_status":"COMPLETE","active_stage":"RENDER","next_action":{"action":"open_final","label":"Open final video"}})
         with tempfile.TemporaryDirectory() as root:
             server=create_server(root,port=0); service=server.RequestHandlerClass.service
-            service.create_project(project_id=project_id,render_mode="ambient_story",ambient_style="quiet_verdict",content="# Action outcomes\n\n## Narration\n\nDisposable UI fixture.")
+            service.create_project(project_id=project_id,render_mode="full_image",content="# Action outcomes\n\n## Narration\n\nDisposable UI fixture.")
             scenario={"workspace":ready,"result":{"outcome":"SAFETY_BLOCKED","reason_code":"FLOW_CDP_UNAVAILABLE","error":"Flow browser session is unavailable"},"next_workspace":None,"workspace_calls":0,"run_calls":0,"provider_dispatches":0,"delay":0}
             def workspace(_project_id):
                 scenario["workspace_calls"]+=1
@@ -243,7 +247,7 @@ class OperatorUiTests(unittest.TestCase):
                     scenario["workspace"]=ready; scenario["delay"]=3; before_poll=scenario["workspace_calls"]
                     reload_project()
                     continue_production()
-                    self.assertEqual(page.locator("#runtimeState").text_content(),"Ready")
+                    self.assertEqual(page.locator("#runtimeState").text_content(),"Working")
                     page.wait_for_timeout(2600)
                     self.assertGreater(scenario["workspace_calls"],before_poll)
                     page.wait_for_timeout(900)
@@ -287,7 +291,7 @@ class OperatorUiTests(unittest.TestCase):
                 status,inspection=call("/api/validate-content",{"content":"# The Last Letter\n\n## Narration\n\nA letter waited on the table.\n"})
                 self.assertEqual((status,inspection["status"],inspection["title"]),(200,"VALID","The Last Letter"))
                 with self.assertRaises(HTTPError): call("/api/validate-content",{"content":"# Missing narration"})
-                status,created=call("/api/projects",{"project_id":"prj_flow_a","render_mode":"hybrid_hook","content":"# The Last Letter\n\n## Narration\n\nA letter waited on the table.\n"})
+                status,created=call("/api/projects",{"project_id":"prj_flow_a","render_mode":"full_image","content":"# The Last Letter\n\n## Narration\n\nA letter waited on the table.\n"})
                 self.assertEqual((status,created["user_status"],created["primary_action"]["action"]),(201,"Create video","Create video"))
                 _,projects=call("/api/projects"); self.assertEqual(projects["projects"][0]["title"],"The Last Letter")
                 _,settings=call("/api/settings"); self.assertEqual(settings["defaults"]["voice_name"],"George")

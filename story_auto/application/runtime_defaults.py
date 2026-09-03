@@ -9,7 +9,7 @@ from copy import deepcopy
 from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json
-from story_auto.core.project import AUTO_ACCEPT, QC_POLICIES, RENDER_MODES, RuntimeLayout
+from story_auto.core.project import AUTO_ACCEPT, QC_POLICIES, RuntimeLayout
 
 
 RUNTIME_DEFAULTS_SCHEMA_VERSION = "story-auto-runtime-defaults/1.0.0"
@@ -39,7 +39,7 @@ class RuntimeDefaults:
     def _baseline(self) -> dict[str, Any]:
         return {
             "schema_version": RUNTIME_DEFAULTS_SCHEMA_VERSION,
-            "render_mode": "hybrid_hook",
+            "render_mode": "full_image",
             "ambient_style": "quiet_verdict",
             "visual_style": "natural",
             "narrator": {"voice_id": "bm_george"},
@@ -59,7 +59,11 @@ class RuntimeDefaults:
             return baseline
         if not isinstance(raw, dict) or raw.get("schema_version") != RUNTIME_DEFAULTS_SCHEMA_VERSION:
             return baseline
-        return self._validate(_merge(baseline, raw))
+        merged = _merge(baseline, raw)
+        # Preserve an older defaults file while exposing the only supported
+        # creation mode for this release.
+        merged["render_mode"] = "full_image"
+        return self._validate(merged)
 
     def update(self, value: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(value, dict):
@@ -72,8 +76,8 @@ class RuntimeDefaults:
         return merged
 
     def _validate(self, value: dict[str, Any]) -> dict[str, Any]:
-        if value.get("render_mode") not in RENDER_MODES:
-            raise ValueError("runtime default render mode is invalid")
+        if value.get("render_mode") != "full_image":
+            raise ValueError("runtime default render mode must be full_image in this release")
         if value.get("ambient_style") not in {"quiet_verdict", "hidden_mastery"}:
             raise ValueError("runtime default ambient style is invalid")
         if value.get("visual_style") not in {"natural", "documentary"}:

@@ -23,7 +23,10 @@ def _legacy_goal21_attempt(*, missing_nested=False, later_dispatched=False,
     generated hashes are fixture-local; runtime evidence is never opened or
     modified by this test.
     """
-    timeline = ProviderPollEvidenceTimeline()
+    timeline = ProviderPollEvidenceTimeline(
+        poll_evidence_version="story-auto-flow-poll-evidence/1.2.0",
+        parser_extractor_version="flow-provider-surface/2.1.0",
+    )
     for sequence in range(1, 27):
         observation = {
             "phase": "PRE_DISPATCH_DISCOVERY" if sequence <= 3 else "PRE_DISPATCH_BASELINE",

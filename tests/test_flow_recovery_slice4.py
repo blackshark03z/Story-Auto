@@ -28,6 +28,24 @@ def _request(request_id: str = "shot_01") -> dict:
     }
 
 
+def _reference_request(request_id: str = "reference_01") -> dict:
+    request = _request(request_id)
+    request.update({"purpose": "REFERENCE", "shot_id": None})
+    return request
+
+
+def _pre_dispatch_entry(request_id: str) -> dict:
+    return {
+        "request_id": request_id, "request_identity_sha256": request_id, "media_type": "IMAGE",
+        "status": "FAILED_RETRYABLE", "provider_submissions": 0,
+        "attempts": [{"attempt": 1, "status": "NOT_DISPATCHED", "dispatch_confirmed": False,
+                      "provider_execution_state": "NOT_STARTED", "attribution_state": "NOT_ATTEMPTED",
+                      "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                      "provider_settings": {"activation": {"input_dispatched": False,
+                                                             "proof": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP"}}}],
+    }
+
+
 def _terminal(family: str) -> dict:
     return {
         "attempt": 1, "status": "FAILED_RETRYABLE", "dispatch_confirmed": True,
@@ -228,6 +246,22 @@ class ProductionRecoveryProjectionTests(unittest.TestCase):
             self.assertEqual((state["pipeline_status"], state["stages"]["VISUALS"]["status"]),
                              ("NEEDS_ATTENTION", "NEEDS_ATTENTION"))
 
+    def test_reference_recovery_evidence_dominates_missing_shot_projection(self):
+        """The workspace must project the same all-request queue as execution."""
+        reference = {"request_id": "reference_01", "status": "FAILED_RETRYABLE", "provider_submissions": 1,
+                     "attempts": [{"attempt": 1, "status": "FAILED_RETRYABLE", "dispatch_confirmed": False,
+                                   "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED",
+                                   "failure_class": "FLOW_DISPATCH_UNCERTAIN"}]}
+        with tempfile.TemporaryDirectory() as root:
+            runtime, paths = Slice4Fixture.project(root, reference)
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {
+                "requests": [_reference_request(), _request("shot_01")],
+            })
+            state = Slice4Fixture.state(runtime, paths)
+            self.assertEqual((state["pipeline_status"], state["recovery"]["affected_request_id"],
+                              state["next_action"]["label"]),
+                             ("NEEDS_ATTENTION", "reference_01", "Review recovery"))
+
     def test_complete_requires_a_valid_final_output(self):
         with tempfile.TemporaryDirectory() as root:
             runtime, paths = Slice4Fixture.project(root, final=True)
@@ -283,6 +317,28 @@ class ContinueProductionTests(unittest.TestCase):
             self.assertEqual(provider.calls, ["shot_01"])
             self.assertEqual((result["invoked_stages"].count("visuals"), entry["provider_submissions"], len(entry["attempts"])),
                              (1, 1, 1))
+
+    def test_continue_safe_reference_pre_dispatch_reaches_canonical_gate_once(self):
+        with tempfile.TemporaryDirectory() as root:
+            app, paths = Slice4Fixture.operator(root)
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {
+                "requests": [_reference_request()],
+            })
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
+                "schema_version": "story-auto-generation-manifest/1.0.0", "project_id": paths.project_id,
+                "requests": [_pre_dispatch_entry("reference_01")],
+            })
+            provider = _FakeFlow()
+            original_generate = app.generate
+            app.generate = lambda project_id: original_generate(
+                project_id, executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), provider),
+                max_requests=1,
+            )
+            result = app.continue_production(paths.project_id)
+            entry = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"][0]
+            self.assertEqual((provider.calls, result["invoked_stages"].count("visuals"),
+                              entry["provider_submissions"], len(entry["attempts"])),
+                             (["reference_01"], 1, 1, 2))
 
     def test_continue_preserves_completed_visual_and_dispatches_only_recoverable_one(self):
         with tempfile.TemporaryDirectory() as root:
@@ -357,6 +413,25 @@ class ContinueProductionTests(unittest.TestCase):
                 result = app.continue_production(paths.project_id)
                 self.assertEqual(result["invoked_stages"], [])
 
+    def test_continue_ambiguous_policy_and_auth_reference_requests_are_provider_free(self):
+        cases = {
+            "ambiguous": {"request_id": "reference_01", "status": "AMBIGUOUS", "provider_submissions": 1,
+                          "attempts": [{"attempt": 1, "status": "AMBIGUOUS",
+                                        "provider_execution_state": "PROVIDER_BOUNDARY_ENTERED"}]},
+            "policy": {"request_id": "reference_01", "status": "FAILED_RETRYABLE", "provider_submissions": 1,
+                       "attempts": [_terminal("PROVIDER_POLICY_BLOCK")]},
+            "auth": {"request_id": "reference_01", "status": "AUTH_REQUIRED", "attempts": []},
+        }
+        for name, entry in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as root:
+                app, paths = Slice4Fixture.operator(root, entry=entry)
+                atomic_write_json(paths.artifact_path("output/generation_requests.json"), {
+                    "requests": [_reference_request()],
+                })
+                app.generate = lambda _project_id: self.fail("Continue must not activate the provider")
+                result = app.continue_production(paths.project_id)
+                self.assertEqual(result["invoked_stages"], [])
+
     def test_continue_repairs_preserved_raw_asset_without_provider_dispatch(self):
         with tempfile.TemporaryDirectory() as root:
             app, paths = Slice4Fixture.operator(root)
@@ -408,6 +483,8 @@ class Slice4FrontendMappingTests(unittest.TestCase):
         self.assertIn("backendProductionWorking", source)
         self.assertIn("RECOVERING", source)
         self.assertIn("RECOVERY_READY", source)
+        self.assertIn("includes(production?.pipeline_status)) return false;", source)
+        self.assertIn("return state.busy || backendProductionWorking(production);", source)
         self.assertNotIn("FAILED_RETRYABLE", source)
 
 

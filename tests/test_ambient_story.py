@@ -139,8 +139,10 @@ class AmbientProjectAndPlanningTests(unittest.TestCase):
     def test_operator_reports_temporal_qc_not_applicable(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
-            created = app.create_project(project_id="prj_ambientui", render_mode="ambient_story",
-                ambient_style="hidden_mastery", content="# Story\n\n## Narration\n\nApproved narration.\n")
+            runtime = RuntimeLayout.from_root(root)
+            create_project(runtime, ProjectConfig("prj_ambientui", render_mode="ambient_story",
+                settings={"ambient_style":"hidden_mastery"}), "# Story\n\n## Narration\n\nApproved narration.\n")
+            created = app.snapshot("prj_ambientui")
             self.assertEqual((created["render_mode"],created["ambient_style_label"]),("ambient_story","Hidden Mastery"))
             review = app.review_overview(created["project_id"])
             self.assertEqual(review["temporal_video_qc"], "NOT_APPLICABLE")

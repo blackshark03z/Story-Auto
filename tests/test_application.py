@@ -84,7 +84,7 @@ class OperatorApplicationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app=OperatorService(root)
             created=app.create_project(project_id="prj_operator01",content="# Story\n\n## Narration\n\nA quiet story begins.\n")
-            self.assertEqual((created["content_status"],created["render_mode"]),("VALID","hybrid_hook"))
+            self.assertEqual((created["content_status"],created["render_mode"]),("VALID","full_image"))
             app.save_content("prj_operator01","# Story\n\n## Narration\n\nThe story changes.\n")
             self.assertIn("The story changes",app.get_content("prj_operator01")["narration"])
             with self.assertRaises(Exception): app.save_content("prj_operator01","# Missing narration")
@@ -113,7 +113,7 @@ class OperatorApplicationTests(unittest.TestCase):
             runtime=RuntimeLayout.from_root(root)
             create_project(runtime,ProjectConfig("prj_operator03",render_mode="full_video_ai"),"# Story\n\n## Narration\n\nTest.\n")
             app=OperatorService(root)
-            with self.assertRaisesRegex(OperatorServiceError,"Full Video is not available"): app.set_media_override("prj_operator03","sh_0001","IMAGE")
+            with self.assertRaisesRegex(OperatorServiceError,"Only Full Image is available"): app.set_media_override("prj_operator03","sh_0001","IMAGE")
             paths,_=app._project("prj_operator03")
             self.assertNotIn("media",read_json(paths.project_file)["settings"])
 

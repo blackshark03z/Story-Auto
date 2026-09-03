@@ -26,7 +26,10 @@ GOAL24_REPLACEMENT_ID = "req_2f755d20c25245314761"
 
 def _goal24_legacy_attempt() -> dict:
     """Fixture-only copy of the preserved replacement's verified old shape."""
-    timeline = ProviderPollEvidenceTimeline()
+    timeline = ProviderPollEvidenceTimeline(
+        poll_evidence_version="story-auto-flow-poll-evidence/1.2.0",
+        parser_extractor_version="flow-provider-surface/2.1.0",
+    )
     for sequence in range(1, 27):
         timeline.append({
             "phase": "PRE_DISPATCH_DISCOVERY" if sequence <= 3 else "PRE_DISPATCH_BASELINE",

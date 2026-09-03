@@ -45,6 +45,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","settings"]: return self._json(self.service.settings_overview())
             if parts==["api","flow-connection"]: return self._json(self.service.flow_connection_status())
             if parts==["api","creation-defaults"]: return self._json(self.service.creation_defaults())
+            if parts==["api","runtime-attestation"]: return self._json(self.service.runtime_attestation())
             if parts==["api","projects"]: return self._json({"projects":self.service.list_projects()})
             if len(parts)>=3 and parts[:2]==["api","projects"]:
                 project_id=parts[2]; view=parts[3] if len(parts)>3 else "snapshot"
@@ -75,7 +76,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","settings","defaults"]:
                 return self._json(self.service.update_runtime_defaults(body.get("defaults",{})))
             if parts==["api","projects"]:
-                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","hybrid_hook"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
+                return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","full_image"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:
                 return self._json(self.service.flow_connections.validate_candidate(body.get("project_url", ""),required_capabilities=["IMAGE"]))
             if parts==["api","flow-connection","update"]:

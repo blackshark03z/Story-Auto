@@ -36,6 +36,7 @@ from story_auto.providers.flow import (
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
                                                 accept_pending_visuals_by_owner, accept_selected_assets_by_owner, apply_auto_accept_policy, reopen_false_positive_production_qc, review_production_asset,
                                                supersede_ambiguous_request)
+from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
 
@@ -47,7 +48,7 @@ class OperatorServiceError(RuntimeError):
 class FeatureNotAvailableError(OperatorServiceError):
     failure_class = "FEATURE_NOT_AVAILABLE"
 
-    def __init__(self, message: str = "Full Video is not available in this release."):
+    def __init__(self, message: str = "Only Full Image is available in this release."):
         super().__init__(message)
 
 
@@ -257,20 +258,22 @@ class OperatorService:
 
     def production_query(self, project_id: str) -> dict[str, Any]:
         """Canonical Phase A production query; reconciles compact state lazily."""
-        _paths, config = self._project(project_id)
+        paths, config = self._project(project_id)
         unavailable = render_mode_availability(config.render_mode)
         if not unavailable["available"]:
-            # Do not reconcile or rewrite a historical Full Video project just
+            # Do not reconcile or rewrite a historical deferred project just
             # to apply this release's availability policy.
-            stages = {name: {"status": "NOT_STARTED"} for name in ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")}
+            stages = {name: {"status": "NOT_STARTED", "execution": "BLOCK"} for name in ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")}
+            final_present = paths.artifact_path("output/final.mp4").is_file()
             return {"pipeline_status": unavailable["reason_code"], "active_stage": "SOURCE", "stages": stages,
                     "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
-                    "quality": {}, "planning": {}, "recovery": {"status": unavailable["reason_code"],
+                    "quality": {"policy": config.settings.get("qc_policy", AUTO_ACCEPT)}, "planning": {}, "recovery": {"status": unavailable["reason_code"],
                     "reason_code": unavailable["reason_code"], "human_message": unavailable["human_message"],
                     "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
                     "requires_owner_decision": False, "next_action": None}, "blocker": {"reason_code": unavailable["reason_code"],
                     "human_message": unavailable["human_message"], "retryable": False},
-                    "next_action": None, "provider_dispatches": 0}
+                    "next_action": None, "provider_dispatches": 0,
+                    "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None}}
         return self.production_queries.production_query(project_id)
 
     def _require_available_render_mode(self, config) -> None:
@@ -546,7 +549,7 @@ class OperatorService:
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
         ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
         result={"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
-                "format_label":{"hybrid_hook":"Intro Video + Images","full_video_ai":"Full Video (unavailable)","ambient_story":"Ambient Story","full_image":"Full Image"}[config.render_mode],
+                "format_label":{"hybrid_hook":"Intro Video + Images (Coming soon)","full_video_ai":"Full Video (Coming soon)","ambient_story":"Ambient Story (deferred)","full_image":"Full Image"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
                 "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
@@ -577,7 +580,7 @@ class OperatorService:
         if production["pipeline_status"] == "FEATURE_NOT_AVAILABLE":
             result.update({"user_status":"Unavailable","current_stage":"Unavailable",
                            "current_activity":production["recovery"]["human_message"],
-                           "primary_action":{"action":"Full Video unavailable","action_id":"review_project"}})
+                           "primary_action":{"action":"Mode unavailable","action_id":"review_project"}})
         elif production["pipeline_status"] == "COMPLETE":
             result.update({"user_status":"Complete","current_stage":"Finish","current_activity":"Final video is ready.","progress":100,
                            "primary_action":{"action":"Open final video","action_id":"open_final"}})
@@ -836,6 +839,17 @@ class OperatorService:
             "flow_connection":self.flow_connections.get_connection_status(required_capabilities=["IMAGE"]),
         }
 
+    def runtime_attestation(self) -> dict[str, Any]:
+        """Identify the Flow implementation loaded by this UI process."""
+        source=Path(flow_live.__file__).resolve()
+        return {
+            "process_id":os.getpid(),
+            "flow_module":str(source),
+            "flow_module_sha256":hashlib.sha256(source.read_bytes()).hexdigest(),
+            "provider_surface_extractor_version":flow_live.PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "poll_evidence_version":flow_live.POLL_EVIDENCE_VERSION,
+        }
+
     def diagnostics(self, project_id: str) -> dict[str, Any]:
         return {"snapshot":self.snapshot(project_id),"planning":self.planning_review(project_id),"media":self.media_items(project_id)}
 
@@ -1065,6 +1079,8 @@ class OperatorService:
         return run_render_stages(self.runtime.root, project_id, force_final=force_final)
 
     def publishing(self, project_id: str, action: str, *, provider=None) -> Any:
+        _paths, config = self._project(project_id)
+        self._require_available_render_mode(config)
         if action=="metadata": return run_publishing_metadata(self.runtime.root,project_id,provider=provider)
         if action=="prepare_thumbnail": return prepare_thumbnail_request(self.runtime.root,project_id)
         if action=="finalize_thumbnail": return finalize_thumbnail(self.runtime.root,project_id)

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from story_auto.core.project.production_state import ProductionStateReconciler
+from story_auto.core.project.production_state import ProductionStateReconciler, PRODUCTION_STATE_SCHEMA_VERSION
 from story_auto.core.artifacts import atomic_write_json
 
 
@@ -30,7 +30,7 @@ class ProductionQueries:
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
             required = {"pipeline_status", "active_stage", "stages", "quality", "planning", "recovery", "visual_asset_evidence", "next_action", "final_output"}
-            if (isinstance(existing,dict) and existing.get("schema_version") == "story-auto-production-state/1.0.4"
+            if (isinstance(existing,dict) and existing.get("schema_version") == PRODUCTION_STATE_SCHEMA_VERSION
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint
                     and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
                 return self._with_flow_summary(project_id, config, existing)

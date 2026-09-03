@@ -48,7 +48,7 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
             app.create_project(project_id="prj_default", content="# Default\n\n## Narration\n\nText.")
             paths, config = app._project("prj_default")
             self.assertEqual(config.settings["qc_policy"], "AUTO_ACCEPT")
-            legacy = create_project(RuntimeLayout.from_root(root), ProjectConfig("prj_legacy", settings={}), "# Legacy\n\n## Narration\n\nText.")
+            legacy = create_project(RuntimeLayout.from_root(root), ProjectConfig("prj_legacy", render_mode="full_image", settings={}), "# Legacy\n\n## Narration\n\nText.")
             project = read_json(legacy.project_file); project["settings"].pop("qc_policy")
             atomic_write_json(legacy.project_file, project)
             self.assertEqual(app.query_qc_status("prj_legacy")["policy"], "MANUAL_REVIEW")

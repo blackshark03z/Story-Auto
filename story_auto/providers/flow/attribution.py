@@ -7,7 +7,7 @@ import json
 from typing import Any
 
 
-ATTRIBUTION_METHOD_VERSION = "flow-provider-tile-lineage/1.0.0"
+ATTRIBUTION_METHOD_VERSION = "flow-provider-model-card-lineage/2.0.0"
 
 
 def provider_identity(record: dict[str, Any]) -> str:
@@ -62,6 +62,9 @@ class AttributionObservation:
     candidate_identities: list[dict[str, Any]]
     foreign_candidate_identities: list[dict[str, Any]]
     stable_polls: int
+    causal_card_ids: list[str] | None = None
+    within_group_selection_policy: str | None = None
+    historical_alias_card_ids: list[str] | None = None
 
 
 class RequestAttributionTracker:
@@ -98,7 +101,14 @@ class RequestAttributionTracker:
         self._candidate_signature: tuple[str, ...] | None = None
         self._stable_polls = 0
 
-    def observe(self, current: list[dict[str, Any]], *, provider_busy: bool = False) -> AttributionObservation:
+    def observe(self, current: list[dict[str, Any]], *, provider_busy: bool = False,
+                causal_card_ids: set[str] | None = None,
+                causal_anchor_final: bool = False) -> AttributionObservation:
+        if causal_card_ids is not None:
+            return self._observe_causal(
+                current, causal_card_ids=causal_card_ids,
+                causal_anchor_final=causal_anchor_final,
+            )
         typed = records_for_type(current, self.media_type)
         ready = [record for record in typed if record.get("state") == "READY" and provider_identity(record)]
         pending = [record for record in typed if record.get("state") == "PENDING"]
@@ -167,9 +177,103 @@ class RequestAttributionTracker:
         return self._observation(state, lineage[0] if len(lineage) == 1 else None,
                                  unseen, foreign, self._stable_polls)
 
+    def _observe_causal(self, current: list[dict[str, Any]], *,
+                        causal_card_ids: set[str],
+                        causal_anchor_final: bool) -> AttributionObservation:
+        """Track only cards proven new by the complete provider model.
+
+        The visible DOM is virtualized and may reinsert historical tiles.  Its
+        records can describe a causally owned card's pending/ready lifecycle,
+        but they cannot establish which card belongs to this activation.
+        """
+        causal = {str(value) for value in causal_card_ids if str(value)}
+        typed = records_for_type(current, self.media_type)
+        ready = [record for record in typed
+                 if record.get("state") == "READY" and provider_identity(record)]
+        pending = [record for record in typed if record.get("state") == "PENDING"]
+        historical_aliases = {
+            card_id for card_id in causal
+            if (
+                any(str(record.get("card_id") or "") == card_id for record in ready)
+                and not any(str(record.get("card_id") or "") == card_id for record in pending)
+                and all(
+                    provider_identity(record) in self.baseline_identities
+                    for record in ready
+                    if str(record.get("card_id") or "") == card_id
+                )
+            )
+        }
+        causal -= historical_aliases
+        causal_ready = [record for record in ready
+                        if str(record.get("card_id") or "") in causal]
+        foreign = [record for record in ready
+                   if str(record.get("card_id") or "") not in causal
+                   and provider_identity(record) not in self.baseline_identities]
+
+        if len(causal) > self.expected_count:
+            return self._observation(
+                "AMBIGUOUS", None, causal_ready, foreign, 0,
+                causal_card_ids=causal, historical_alias_card_ids=historical_aliases,
+            )
+        if not causal:
+            self._candidate_signature = None
+            self._stable_polls = 0
+            return self._observation(
+                "AMBIGUOUS" if causal_anchor_final else "WAITING",
+                None, [], foreign, 0, causal_card_ids=causal,
+                historical_alias_card_ids=historical_aliases,
+            )
+        if len(causal) != self.expected_count or self.expected_count != 1:
+            self._candidate_signature = None
+            self._stable_polls = 0
+            return self._observation(
+                "AMBIGUOUS" if causal_anchor_final else "WAITING",
+                None, causal_ready, foreign, 0, causal_card_ids=causal,
+                historical_alias_card_ids=historical_aliases,
+            )
+
+        causal_card_id = next(iter(causal))
+        if self.lineage_card_id not in {None, causal_card_id}:
+            return self._observation(
+                "AMBIGUOUS", None, causal_ready, foreign, 0,
+                causal_card_ids=causal, historical_alias_card_ids=historical_aliases,
+            )
+        self.lineage_card_id = causal_card_id
+        lineage_pending = any(
+            str(record.get("card_id") or "") == causal_card_id
+            for record in pending
+        )
+        if not causal_ready or lineage_pending:
+            self._candidate_signature = None
+            self._stable_polls = 0
+            return self._observation(
+                "WAITING", None, causal_ready, foreign, 0,
+                causal_card_ids=causal, historical_alias_card_ids=historical_aliases,
+            )
+
+        ordered = sorted(causal_ready, key=provider_identity)
+        signature = tuple(provider_identity(record) for record in ordered)
+        if signature == self._candidate_signature:
+            self._stable_polls += 1
+        else:
+            self._candidate_signature = signature
+            self._stable_polls = 1
+        state = "CONFIRMED" if self._stable_polls >= self.required_stable_polls else "CANDIDATE"
+        policy = (
+            "LEXICOGRAPHIC_PROVIDER_IDENTITY_WITHIN_CAUSAL_GROUP"
+            if len(ordered) > 1 else "EXACT_CAUSAL_CARD_SINGLE_ASSET"
+        )
+        return self._observation(
+            state, ordered[0], ordered, foreign, self._stable_polls,
+            causal_card_ids=causal, within_group_selection_policy=policy,
+            historical_alias_card_ids=historical_aliases,
+        )
+
     def _observation(self, state: str, candidate: dict[str, Any] | None,
                      candidates: list[dict[str, Any]], foreign: list[dict[str, Any]],
-                     stable_polls: int) -> AttributionObservation:
+                     stable_polls: int, *, causal_card_ids: set[str] | None = None,
+                     within_group_selection_policy: str | None = None,
+                     historical_alias_card_ids: set[str] | None = None) -> AttributionObservation:
         return AttributionObservation(
             state=state,
             method=ATTRIBUTION_METHOD_VERSION,
@@ -179,4 +283,10 @@ class RequestAttributionTracker:
             candidate_identities=[evidence_identity(record) for record in candidates],
             foreign_candidate_identities=[evidence_identity(record) for record in foreign],
             stable_polls=stable_polls,
+            causal_card_ids=(sorted(causal_card_ids) if causal_card_ids is not None else None),
+            within_group_selection_policy=within_group_selection_policy,
+            historical_alias_card_ids=(
+                sorted(historical_alias_card_ids)
+                if historical_alias_card_ids is not None else None
+            ),
         )

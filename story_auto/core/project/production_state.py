@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.4"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.5"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 
 
@@ -109,7 +109,12 @@ class ProductionStateReconciler:
         from story_auto.core.project.lock import project_lock_owned_by_live_process
         active_project_operation = (old_run.get("status") == "RUNNING"
                                     and project_lock_owned_by_live_process(paths.runtime, paths.project_id))
+        # Quality totals deliberately describe timeline shots only.  Recovery,
+        # however, must cover the same complete request queue that
+        # execute_generation() can select: an unresolved reference asset is a
+        # hard serial boundary before any later shot can be submitted.
         request_ids = {item.get("request_id") for item in requests.get("requests", []) if item.get("purpose") == "SHOT" and item.get("request_id")}
+        recovery_request_ids = {item.get("request_id") for item in requests.get("requests", []) if item.get("request_id")}
         entries = {item.get("request_id"): item for item in manifest.get("requests", []) if item.get("request_id")}
         statuses = [str(entries[item].get("status", "NOT_STARTED")) for item in request_ids if item in entries]
         required_entries = [entries.get(item, {}) for item in request_ids]
@@ -125,7 +130,7 @@ class ProductionStateReconciler:
             and self._selected_asset_usable(paths, entry)
             for entry in required_entries
         )
-        recovery = self._visual_recovery(paths, requests, entries, request_ids, generated_for_quality,
+        recovery = self._visual_recovery(paths, requests, manifest, entries, recovery_request_ids, generated_for_quality,
                                          active_project_operation=active_project_operation)
         qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
         quality = {
@@ -295,7 +300,7 @@ class ProductionStateReconciler:
             return False
         return cls._selected_asset_present(paths, entry)
 
-    def _visual_recovery(self, paths, requests: dict[str, Any], entries: dict[str, dict[str, Any]],
+    def _visual_recovery(self, paths, requests: dict[str, Any], manifest: dict[str, Any], entries: dict[str, dict[str, Any]],
                          request_ids: set[str], generated_for_quality: bool, *, active_project_operation: bool) -> dict[str, Any]:
         """Project Slice 1-3 evidence without creating a second dispatch path."""
         base = {
@@ -309,6 +314,15 @@ class ProductionStateReconciler:
         if generated_for_quality:
             return {**base, "status": "COMPLETE", "reason_code": "VISUALS_COMPLETE",
                     "human_message": "Required visuals are valid and ready for quality.", "next_action": "Continue production"}
+
+        session_blocker = manifest.get("session_preparation_blocker") if isinstance(manifest, dict) else None
+        if (isinstance(session_blocker, dict) and session_blocker.get("scope") == "FLOW_SESSION"
+                and session_blocker.get("canonical_no_dispatch_proof") is True
+                and isinstance(session_blocker.get("request_id"), str)):
+            return {**base, "status": "NEEDS_ATTENTION", "reason_code": "FLOW_SESSION_PREPARATION_FAILED",
+                    "human_message": "Flow preparation failed before Generate. Review the Flow session before continuing.",
+                    "affected_request_id": session_blocker["request_id"], "requires_owner_decision": True,
+                    "next_action": "Review recovery"}
 
         # ProjectLock ownership plus the current bounded run marker is durable
         # live-work evidence only while it agrees with a persisted, boundary-

@@ -29,7 +29,8 @@ def _wav(seconds: int = 2) -> bytes:
 class Goal49PipelineReuseTests(unittest.TestCase):
     def _project(self, root: str, mode: str = "EXISTING_VOICE"):
         runtime = RuntimeLayout.from_root(root)
-        config = ProjectConfig("prj_goal49", settings={"execution": {"mode": mode}})
+        config = ProjectConfig("prj_goal49", render_mode="full_image",
+                               settings={"execution": {"mode": mode}})
         paths = create_project(runtime, config, "# Reuse\n\n## Narration\n\nFirst sentence. Second sentence.\n")
         source = Path(root) / "narration.wav"; source.write_bytes(_wav())
         return runtime, paths, source

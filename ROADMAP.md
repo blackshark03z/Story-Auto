@@ -1,5 +1,14 @@
 # Roadmap
 
+## 2026-09-03 product freeze
+
+Story Auto development is temporarily closed with **Full Image** as the only
+release-supported production mode. **Intro Video + Images**, **Full Video**,
+and the local Ambient Story candidate remain preserved for future work but are
+blocked before provider dispatch. Restarting Hybrid/Video work requires a new
+provider attachment strategy; gallery-order, ARIA, perceptual-hash, direct-file
+reassignment, and internal-endpoint replay avenues are closed.
+
 Stable release baseline: **Story Auto v1.0.0 Stable** at
 `6dc3188a16bd1ae4f84906f891083ec6c0651154` (`v1.0.0`). The accepted
 post-release development state includes Goal 10 UX/UI simplification, Goal 11
@@ -9,7 +18,7 @@ a historical implementation anchor for Flow queue/reconciliation behavior.
 This roadmap is retained as product history; see `TASK.md` for active intent
 and Git/source/runtime evidence for current implementation truth.
 
-The next production action is not a normal new batch: resume preserved Trial A
+Historical note: the previously recorded next action was not a normal new batch: resume preserved Trial A
 (`ambient_story + quiet_verdict`) only through the Goal 17 reconciliation and
 serial queue-barrier path. Reconcile its earliest unresolved attempt before any
 Flow activation; unresolved/ambiguous attribution halts the queue. Trial B

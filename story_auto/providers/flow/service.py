@@ -114,6 +114,10 @@ UNRESOLVED_FLOW_FAILURES = {
     "OUTPUT_ATTRIBUTION_UNCERTAIN",
     "OUTPUT_ATTRIBUTION_AMBIGUOUS",
 }
+SESSION_PREPARATION_FAILURES = {
+    "FLOW_REFERENCE_UPLOAD_FAILED", "FLOW_CDP_UNAVAILABLE",
+    "FLOW_CDP_COMMAND_TIMEOUT", "FLOW_UI_CHANGED", "FLOW_GENERATE_DISABLED",
+}
 UNRESOLVED_FLOW_STATES = {"GENERATING", "AMBIGUOUS"}
 SUPERSEDED_AMBIGUOUS_STATUS = "SUPERSEDED_AMBIGUOUS"
 ABANDONED_UNRESOLVED_STATUS = "ABANDONED_UNRESOLVED"
@@ -288,6 +292,19 @@ def _manifest(paths, project_id):
         if data.get("schema_version") != MANIFEST_VERSION or data.get("project_id") != project_id or not isinstance(data.get("requests"), list): raise ValueError()
         return path, data
     except Exception as error: raise FlowError("GENERATION_MANIFEST_INVALID") from error
+
+
+def _session_preparation_blocker(manifest: dict) -> dict | None:
+    """Return one durable, proven provider-session blocker, if present."""
+    value = manifest.get("session_preparation_blocker") if isinstance(manifest, dict) else None
+    if not isinstance(value, dict): return None
+    required = ("failure_class", "request_id", "media_type", "at", "diagnostic")
+    if (value.get("scope") != "FLOW_SESSION" or value.get("canonical_no_dispatch_proof") is not True
+            or value.get("failure_class") not in SESSION_PREPARATION_FAILURES
+            or value.get("media_type") != "VIDEO"
+            or not all(isinstance(value.get(key), str) and value[key] for key in required)):
+        return None
+    return value
 
 def _entry(manifest, request):
     found = next((x for x in manifest["requests"] if x["request_id"] == request["request_id"]), None)
@@ -5934,6 +5951,13 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
             and terminal_log[-1].get("authoritative") is True):
         return True, None, 0
 
+    # This is the persisted positive proof that the provider boundary was
+    # never crossed.  It is already the sole authorization consumed by the
+    # RecoveryExecutionGate below, so reconciliation must release it to that
+    # gate rather than turn an explicitly safe retry into a no-progress loop.
+    if _provider_generation_retry_authorized(entry):
+        return True, None, 0
+
     # A crash before the persisted provider boundary is the only restart case
     # proven locally.  Produce the same current-schema proof every downstream
     # retry/replay/queue consumer verifies.
@@ -6118,6 +6142,12 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
         path, manifest = _manifest(paths, project_id); entries = {e["request_id"]:e for e in manifest["requests"]}; submissions = 0
         control_path = paths.artifact_path("output/execution_control.json")
         paused = False; blocked_request_id = None; reconciliation_count = 0
+        session_blocker = _session_preparation_blocker(manifest)
+        if session_blocker is not None:
+            return {"selected": len(selected), "new_submissions": 0, "paused": False,
+                    "blocked": True, "blocked_request_id": session_blocker["request_id"],
+                    "attention": "FLOW_SESSION_PREPARATION_FAILED", "reconciliations": 0,
+                    "manifest": "output/generation_manifest.json"}
         if _fail_closed_unproven_not_dispatched_entries(manifest):
             atomic_write_json(path, manifest)
             entries = {entry["request_id"]: entry for entry in manifest["requests"]}
@@ -6335,16 +6365,33 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 else:
                     state = "FAILED_RETRYABLE"
                 attempt.update({"status":state, "failure_class":error.failure_class, "diagnostic":str(error), "completed_at":_now()}); entry.update({"status":state, "failure_class":error.failure_class, "updated_at":_now()})
+                if (request.get("media_type") == "VIDEO"
+                        and error.failure_class in SESSION_PREPARATION_FAILURES
+                        and canonical_no_dispatch_proof(attempt)):
+                    # This is provider/session preparation, not an individual
+                    # creative failure. Preserve exact request evidence, then
+                    # stop sibling videos until an operator reviews the Flow
+                    # session; no automatic Generate retry is authorized.
+                    manifest["session_preparation_blocker"] = {
+                        "scope": "FLOW_SESSION", "failure_class": error.failure_class,
+                        "request_id": request["request_id"], "media_type": "VIDEO",
+                        "at": _now(), "diagnostic": str(error),
+                        "canonical_no_dispatch_proof": True,
+                    }
             except AssetValidationError as error:
                 attempt = execution.get("attempt")
                 if not isinstance(attempt, dict):
                     raise
                 attempt.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "completed_at":_now()}); entry.update({"status":"FAILED_RETRYABLE", "failure_class":error.failure_class, "updated_at":_now()})
             atomic_write_json(path, manifest); entries[request["request_id"]] = entry
+            if _session_preparation_blocker(manifest) is not None:
+                blocked_request_id = request["request_id"]
+                break
             if _unresolved_flow_entry(entry):
                 blocked_request_id = request["request_id"]
                 break
     return {"selected":len(selected), "new_submissions":submissions, "paused":paused,
             "blocked":blocked_request_id is not None, "blocked_request_id":blocked_request_id,
-            "attention":"FLOW_GENERATION_RECONCILIATION_REQUIRED" if blocked_request_id else None,
+            "attention":("FLOW_SESSION_PREPARATION_FAILED" if _session_preparation_blocker(manifest) is not None
+                         else "FLOW_GENERATION_RECONCILIATION_REQUIRED") if blocked_request_id else None,
             "reconciliations":reconciliation_count, "manifest":"output/generation_manifest.json"}

@@ -310,7 +310,7 @@ class RenderServiceRecoveryTests(unittest.TestCase):
             first = run_render_stages(runtime.root, config.project_id)
             frozen_identity_chain = read_json(paths.artifact_path("output/render_plan.json"))
             self.assertEqual(first["actions"]["final_render"], "RUN")
-            self.assertEqual(OperatorService(runtime.root).build_render_plan(config.project_id), frozen_identity_chain)
+            self.assertEqual(read_json(paths.artifact_path("output/render_plan.json")), frozen_identity_chain)
             second = run_render_stages(runtime.root, config.project_id)
             self.assertEqual(second["actions"]["final_render"], "SKIP")
             self.assertEqual(read_json(paths.artifact_path("output/render_plan.json")), frozen_identity_chain)

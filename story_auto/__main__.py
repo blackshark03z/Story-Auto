@@ -17,7 +17,7 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     new = commands.add_parser("new", help="Create an isolated project")
     new.add_argument("--project-id")
-    new.add_argument("--render-mode", default="hybrid_hook", choices=("hybrid_hook","full_video_ai","ambient_story","full_image"))
+    new.add_argument("--render-mode", default="full_image", choices=("hybrid_hook","full_video_ai","ambient_story","full_image"))
     new.add_argument("--ambient-style", choices=("quiet_verdict","hidden_mastery"), help="Required when --render-mode ambient_story")
     for name in ("run", "resume"):
         command = commands.add_parser(name, help="Run the foundation pipeline" if name == "run" else "Resume the foundation pipeline")

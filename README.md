@@ -16,12 +16,16 @@ Story Auto is a local, artifact-first production tool that turns a valid `conten
 
 ## Production modes in this release
 
-- **Intro Video + Images (`hybrid_hook`)** — AI video for the opening hook,
-  generated still imagery with restrained motion for the story body.
-- **Full Image (`full_image`)** — images only, deterministic local motion, and
-  optional waveform presentation.
-- **Full Video (`full_video_ai`)** — **deferred / coming soon**. It is not
-  available to create or run in this release.
+- **Full Image (`full_image`)** — the only release-supported mode: images only,
+  deterministic local motion, and optional waveform presentation.
+- **Intro Video + Images (`hybrid_hook`)** — **deferred / coming soon**. Its
+  implementation and historical projects are preserved, but creation and
+  production are blocked before provider work.
+- **Full Video (`full_video_ai`)** — **deferred / coming soon**, with the same
+  provider-free release guard.
+
+Ambient Story remains preserved as historical development work and is not a
+release-supported creation mode during this freeze.
 
 ## V1 provider choices
 

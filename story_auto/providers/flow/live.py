@@ -35,12 +35,16 @@ _EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contentedit
 _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);parsed.hash='';key=parsed.href}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0})}}return out})()"""
-_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]')),locale=document.documentElement.lang||null;for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),provider_job_id=tile.getAttribute('data-job-id')||tile.getAttribute('data-job')||null,hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,provider_job_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,terminal_structural_signals:terminalFailure?['warning','refresh','delete_forever']:[],raw_message:(tile.innerText||'').trim(),locale,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count,locale}})()"""
+_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]')),locale=document.documentElement.lang||null;for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),provider_job_id=tile.getAttribute('data-job-id')||tile.getAttribute('data-job')||null,hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,provider_job_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,terminal_structural_signals:terminalFailure?['warning','refresh','delete_forever']:[],raw_message:(tile.innerText||'').trim(),locale,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));let best=null;for(const tile of tiles){const key=Object.getOwnPropertyNames(tile).find(x=>x.startsWith('__reactFiber$'));let fiber=key?tile[key]:null;for(let depth=0;fiber&&depth<64;depth++,fiber=fiber.return){for(const props of [fiber.memoizedProps,fiber.pendingProps]){const xs=props&&Array.isArray(props.tiles)?props.tiles:null;if(!xs||!xs.length||!xs.every(x=>x&&typeof x.id==='string'))continue;const unique=new Map();for(const x of xs){const iso=v=>v instanceof Date?v.toISOString():(v&&typeof v.toDate==='function'?v.toDate().toISOString():(typeof v==='string'?v:null));unique.set(x.id,{card_id:x.id,media_type:x.type==null?null:String(x.type),created_at:iso(x.createdTime),modified_at:iso(x.modifiedTime),is_archived:!!x.isArchived})}if(!best||unique.size>best.length)best=Array.from(unique.values())}}}const provider_model_complete=Array.isArray(best)&&best.length>0;const provider_model_tiles=provider_model_complete?best:[];const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count,locale,provider_model_complete,provider_model_tiles}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
-PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.1.0"
-POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.2.0"
+PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.2.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.3.0"
+SUPPORTED_POLL_EVIDENCE_SCHEMAS = {
+    "story-auto-flow-poll-evidence/1.2.0": "flow-provider-surface/2.1.0",
+    POLL_EVIDENCE_VERSION: PROVIDER_SURFACE_EXTRACTOR_VERSION,
+}
 MAX_POLL_OBSERVATIONS = 2048
 MAX_PROVIDER_IDENTITIES_PER_POLL = 256
 MAX_CANDIDATE_IDENTITIES_PER_POLL = 64
@@ -51,6 +55,8 @@ _PROVIDER_IDENTITY_FIELDS = {
     "baseline_identity_set", "current_identity_set", "identity_delta",
     "pre_dispatch_asset_identity_set",
     "job_card_identities_observed", "output_asset_identities_observed",
+    "pre_dispatch_provider_model_identity_set", "provider_model_identity_set",
+    "provider_model_delta", "causal_card_ids", "historical_alias_card_ids",
 }
 
 def records_for_media(records, media_type: str):
@@ -106,6 +112,30 @@ def _asset_identity_projection(records: list[dict]) -> list[dict]:
     return [projected[key] for key in sorted(projected)]
 
 
+def _provider_model_projection(surface: dict) -> list[dict] | None:
+    """Return the complete stable Flow tile model, independent of DOM virtualization."""
+    if not isinstance(surface, dict) or surface.get("provider_model_complete") is not True:
+        return None
+    tiles = surface.get("provider_model_tiles")
+    if not isinstance(tiles, list) or not tiles:
+        return None
+    projected: dict[str, dict] = {}
+    for tile in tiles:
+        if not isinstance(tile, dict):
+            return None
+        card_id = str(tile.get("card_id") or "").strip()
+        if not card_id:
+            return None
+        projected[card_id] = {
+            "card_id": card_id,
+            "media_type": tile.get("media_type"),
+            "created_at": tile.get("created_at"),
+            "modified_at": tile.get("modified_at"),
+            "is_archived": bool(tile.get("is_archived")),
+        }
+    return [projected[key] for key in sorted(projected)]
+
+
 class ProviderPollEvidenceTimeline:
     """Bounded, hash-chained poll evidence persisted after every observation.
 
@@ -119,12 +149,18 @@ class ProviderPollEvidenceTimeline:
                  max_provider_identities: int = MAX_PROVIDER_IDENTITIES_PER_POLL,
                  max_candidate_identities: int = MAX_CANDIDATE_IDENTITIES_PER_POLL,
                  max_quarantined_identities: int = MAX_QUARANTINED_IDENTITIES_PER_POLL,
-                 max_serialized_bytes: int = MAX_POLL_EVIDENCE_BYTES):
+                 max_serialized_bytes: int = MAX_POLL_EVIDENCE_BYTES,
+                 poll_evidence_version: str = POLL_EVIDENCE_VERSION,
+                 parser_extractor_version: str = PROVIDER_SURFACE_EXTRACTOR_VERSION):
         if (max_observations < 1 or max_provider_identities < 1
                 or max_candidate_identities < 1 or max_quarantined_identities < 1
                 or max_serialized_bytes <= POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES):
             raise ValueError("poll evidence bounds must be positive and retain overflow reserve")
+        if SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(poll_evidence_version) != parser_extractor_version:
+            raise ValueError("unsupported poll evidence schema pair")
         self.path = path
+        self.poll_evidence_version = poll_evidence_version
+        self.parser_extractor_version = parser_extractor_version
         self.max_observations = max_observations
         self.max_provider_identities = max_provider_identities
         self.max_candidate_identities = max_candidate_identities
@@ -165,8 +201,8 @@ class ProviderPollEvidenceTimeline:
         observation.update({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "poll_sequence": len(self.observations) + 1,
-            "poll_evidence_version": POLL_EVIDENCE_VERSION,
-            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "poll_evidence_version": self.poll_evidence_version,
+            "parser_extractor_version": self.parser_extractor_version,
             "previous_observation_sha256": (
                 self.observations[-1]["observation_sha256"] if self.observations else None
             ),
@@ -265,8 +301,8 @@ class ProviderPollEvidenceTimeline:
 
     def snapshot(self, *, observations: list[dict] | None = None) -> dict:
         snapshot = {
-            "schema_version": POLL_EVIDENCE_VERSION,
-            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "schema_version": self.poll_evidence_version,
+            "parser_extractor_version": self.parser_extractor_version,
             "max_observations": self.max_observations,
             "max_provider_identities_per_poll": self.max_provider_identities,
             "max_candidate_identities_per_poll": self.max_candidate_identities,
@@ -301,9 +337,11 @@ class ProviderPollEvidenceTimeline:
     def verify_snapshot(cls, snapshot: dict) -> dict:
         """Fail closed unless a persisted timeline is exact and internally coherent."""
         try:
-            if not isinstance(snapshot, dict) or snapshot.get("schema_version") != POLL_EVIDENCE_VERSION:
+            if not isinstance(snapshot, dict):
                 raise ValueError("schema")
-            if snapshot.get("parser_extractor_version") != PROVIDER_SURFACE_EXTRACTOR_VERSION:
+            schema_version = snapshot.get("schema_version")
+            parser_version = snapshot.get("parser_extractor_version")
+            if SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(schema_version) != parser_version:
                 raise ValueError("extractor")
             observations = snapshot.get("observations")
             bindings = snapshot.get("decision_bindings")
@@ -345,8 +383,8 @@ class ProviderPollEvidenceTimeline:
                 unsigned = dict(observation); unsigned.pop("observation_sha256", None)
                 if (not isinstance(stored_hash, str) or _json_sha256(unsigned) != stored_hash
                         or observation.get("poll_sequence") != index
-                        or observation.get("poll_evidence_version") != POLL_EVIDENCE_VERSION
-                        or observation.get("parser_extractor_version") != PROVIDER_SURFACE_EXTRACTOR_VERSION
+                        or observation.get("poll_evidence_version") != schema_version
+                        or observation.get("parser_extractor_version") != parser_version
                         or observation.get("previous_observation_sha256") != previous):
                     raise ValueError("chain")
                 if observation.get("evidence_complete") is False:
@@ -659,22 +697,41 @@ class FlowBrowserDom:
         token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
         result = self.page.evaluate("""(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return {reason:'model_trigger'};if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}const xs=Array.from(document.querySelectorAll('button[aria-controls*=%s]')).filter(visible);if(xs.length!==1)return {reason:'mode',count:xs.length};(%s)(xs[0]);await new Promise(r=>setTimeout(r,250));return {ok:true}})()""" % (_ACTIVATE, __import__('json').dumps("content-" + token), _ACTIVATE))
         if not isinstance(result, dict) or not result.get("ok"): raise FlowError("FLOW_UI_CHANGED", f"unable to resolve {media_type} mode: {result}")
-    def apply_settings(self, resolved: ResolvedFlowGenerationSettings) -> dict:
-        """Set/re-read tabs and counts; all labels/DOM stay inside this adapter."""
+    def inspect_generation_count(self, media_type: str) -> int:
+        """Read Flow's count for one media type and leave the menu closed."""
+        token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
+        # These provider-free UI transitions must not depend on animation
+        # frames: Chrome can throttle requestAnimationFrame for an occluded
+        # dedicated Flow tab while CDP itself remains connected.
+        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const selected=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;if(!selected(%s)){const xs=tab(%s);if(xs.length!==1)throw Error('mode:'+xs.length);activate(xs[0]);await new Promise(r=>setTimeout(r,0))}const media=selected(%s),count=[1,2,3,4].find(value=>selected(String(value)))||null;activate(trigger);await new Promise(r=>setTimeout(r,0));return {media,count,menu_closed:trigger.getAttribute('aria-expanded')!=='true'}})()""" % tuple(__import__('json').dumps(value) for value in (token, token, token))
+        actual = self.page.evaluate(script)
+        if not isinstance(actual, dict) or not actual.get("media") or not actual.get("menu_closed"):
+            raise FlowError("FLOW_UI_CHANGED", f"generation-count inspection failed: {actual}")
+        if actual.get("count") not in {1, 2, 3, 4}:
+            raise FlowError("FLOW_UI_CHANGED", f"generation-count readback was ambiguous: {actual}")
+        return int(actual["count"])
+    def configure_generation_count(self, media_type: str, count: int) -> None:
+        """Mutate only the provider count setting, then let the caller verify it."""
+        token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
+        if count not in {1, 2, 3, 4}:
+            raise FlowError("FLOW_CAPABILITY_UNAVAILABLE", "unsupported Flow generation count")
+        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const selected=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;for(const value of [%s,%s]){if(!selected(value)){const xs=tab(value);if(xs.length!==1)throw Error('setting:'+value+':'+xs.length);activate(xs[0]);await new Promise(r=>setTimeout(r,0))}}activate(trigger);await new Promise(r=>setTimeout(r,0));return trigger.getAttribute('aria-expanded')!=='true'})()""" % tuple(__import__('json').dumps(value) for value in (token, str(count)))
+        if self.page.evaluate(script) is not True:
+            raise FlowError("FLOW_UI_CHANGED", "Flow generation-count settings menu did not close")
+    def apply_request_settings(self, resolved: ResolvedFlowGenerationSettings) -> dict:
+        """Apply request-specific mode and ratio without touching generation count."""
         token = "IMAGE" if resolved.media_type == "IMAGE" else "VIDEO"
         ratio = {"16:9":"LANDSCAPE", "4:3":"LANDSCAPE_4_3", "1:1":"SQUARE", "3:4":"PORTRAIT_3_4", "9:16":"PORTRAIT"}.get(resolved.aspect_ratio)
         if not ratio: raise FlowError("FLOW_CAPABILITY_UNAVAILABLE", "unsupported Flow aspect ratio")
-        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,250));}const tab=token=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+token)&&visible(e));const choose=(token,reason)=>{const xs=tab(token);if(xs.length!==1)throw Error(reason+':'+xs.length);activate(xs[0])};choose(%s,'mode');await new Promise(r=>setTimeout(r,200));choose(%s,'ratio');await new Promise(r=>setTimeout(r,200));choose(%s,'count');await new Promise(r=>setTimeout(r,200));const active=token=>tab(token).filter(e=>e.getAttribute('aria-selected')==='true').length===1;const out={media:active(%s),ratio:active(%s),count:active(%s),model:trigger.innerText.trim()};activate(trigger);await new Promise(r=>setTimeout(r,200));out.menu_closed=trigger.getAttribute('aria-expanded')!=='true';return out})()""" % tuple(__import__('json').dumps(v) for v in (token,ratio,str(resolved.output_count),token,ratio,str(resolved.output_count)))
+        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const choose=(value,reason)=>{const xs=tab(value);if(xs.length!==1)throw Error(reason+':'+xs.length);const changed=xs[0].getAttribute('aria-selected')!=='true';if(changed)activate(xs[0]);return changed};const mode_mutated=choose(%s,'mode');await new Promise(r=>setTimeout(r,0));const ratio_mutated=choose(%s,'ratio');await new Promise(r=>setTimeout(r,0));const active=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;const out={media:active(%s),ratio:active(%s),actual_output_count:[1,2,3,4].find(value=>active(String(value)))||null,model:trigger.innerText.trim(),mode_mutated,ratio_mutated};activate(trigger);await new Promise(r=>setTimeout(r,0));out.menu_closed=trigger.getAttribute('aria-expanded')!=='true';return out})()""" % tuple(__import__('json').dumps(value) for value in (token, ratio, token, ratio))
         actual = self.page.evaluate(script)
-        if not isinstance(actual,dict) or not all(actual.get(k) for k in ("media","ratio","count")): raise FlowError("FLOW_UI_CHANGED", f"settings readback mismatch: {actual}")
-        # The configuring trigger itself supplied this value before its menu
-        # was closed; do not re-query an icon variant that exists only while
-        # the popover is open.
-        if not actual["model"]: raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
-        actual.update({"requested_model":resolved.model_preference,"requested_output_count":resolved.output_count,"actual_output_count":resolved.output_count,"output_count":resolved.output_count,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
-        if resolved.media_type == "IMAGE" and not (actual["requested_output_count"] == actual["actual_output_count"] == 1):
-            raise FlowError("IMAGE_OUTPUT_COUNT_MISMATCH")
+        if not isinstance(actual, dict) or not all(actual.get(key) for key in ("media", "ratio")):
+            raise FlowError("FLOW_UI_CHANGED", f"request settings readback mismatch: {actual}")
+        if actual.get("actual_output_count") not in {1, 2, 3, 4}:
+            raise FlowError("FLOW_UI_CHANGED", f"request generation-count readback was ambiguous: {actual}")
+        if not actual.get("model"): raise FlowError("FLOW_UI_CHANGED", "actual Flow model selector was ambiguous")
         if not actual.pop("menu_closed", False): raise FlowError("FLOW_UI_CHANGED", "Flow settings menu did not close before submit")
+        actual.update({"requested_model":resolved.model_preference,"aspect_ratio":resolved.aspect_ratio,"workflow_mode":resolved.workflow_mode,"quality_tier":resolved.quality_tier,"reference_mode":resolved.reference_mode,"duration_seconds":resolved.duration_seconds})
         return actual
     def generate_controls(self, _editor, _media_type):
         # A reference upload is asynchronous.  Do not treat a transiently
@@ -723,7 +780,7 @@ class FlowBrowserDom:
                     if (int(candidate_hash,16)^int(target_hash,16)).bit_count()<=4: matched_url=url; matched_alt=record.get("alt",""); break
             if matched_url is None: time.sleep(.5)
         if matched_url is None: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "uploaded reference bytes were not identifiable in Flow")
-        # Flow replaces its upload tile as it finishes decoding.  Select the
+        # Flow replaces its upload tile as it finishes decoding. Select the
         # semantic option, not a transient thumbnail node, and wait until the
         # option reports selected before exposing the Add control.
         deadline=time.monotonic()+10; selected=False
@@ -744,32 +801,6 @@ class FlowBrowserDom:
         while time.monotonic()<deadline:
             if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"):
                 return {"expected": 1, "committed": True, "method": "library_hash_match_and_composer_attach"}
-            time.sleep(.2)
-        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
-        deadline=time.monotonic()+20
-        while time.monotonic()<deadline:
-            selected=self.page.evaluate("""(()=>{const names=%s,d=document.querySelector('[role=dialog]');if(!d)return null;const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(!tab)return null;if(tab.getAttribute('aria-selected')!=='true')tab.click();const images=names.map(name=>Array.from(d.querySelectorAll('img')).find(e=>e.alt===name));if(images.some(x=>!x))return false;for(const image of images)image.click();const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).find(e=>/add to prompt|thêm vào câu lệnh/i.test((e.innerText||'').trim()));if(!add)return null;add.click();return true})()""" % __import__('json').dumps(names))
-            if selected is True: break
-            time.sleep(.5)
-        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded references {names} were not all selectable in Flow")
-        deadline=time.monotonic()+6
-        while time.monotonic()<deadline:
-            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"): return
-            time.sleep(.2)
-        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
-        open_dialog = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
-        if not open_dialog: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
-        deadline=time.monotonic()+15
-        while time.monotonic()<deadline:
-            selected=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(!tab)return null;if(tab.getAttribute('aria-selected')!=='true')tab.click();const image=Array.from(d.querySelectorAll('img')).find(e=>e.alt===%s);if(!image)return false;image.click();const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).find(e=>{const text=(e.innerText||'').trim().toLowerCase();const aria=(e.getAttribute('aria-label')||'').toLowerCase();return /add|thêm|ajouter|hinzufügen|añadir/.test(text+' '+aria) && !/upload|tải|cancel|hủy|close|đóng/.test(text+' '+aria)});if(!add)return null;add.click();return true})()""" % __import__('json').dumps(name))
-            if selected is True: break
-            time.sleep(.5)
-        else: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", f"uploaded references {names} were not all selectable in Flow")
-        deadline=time.monotonic()+5
-        while time.monotonic()<deadline:
-            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"):
-                if len(files) > 1: self.add_references(files[1:])
-                return
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
@@ -817,6 +848,90 @@ class LiveFlowGenerator:
         self._poll_timeline = ProviderPollEvidenceTimeline()
         self._pre_dispatch_asset_records: list[dict] = []
         self._before_provider_boundary: Callable[[], None] | None = None
+        self._generation_count_evidence: dict[tuple[str, ...], dict] = {}
+        self._active_request_settings_key: tuple[str, ...] | None = None
+
+    def _generation_count_session_identity(self) -> tuple[str, ...]:
+        """Bind setup evidence to the configured Flow project and browser session."""
+        if self.runtime is None:
+            return ("unbound",)
+        return tuple(str(getattr(self.runtime, field, "")) for field in (
+            "profile", "cdp_url", "project_url", "project_identity",
+        ))
+
+    def _generation_count_key(self, media_type: str, desired_count: int) -> tuple[str, ...]:
+        return (*self._generation_count_session_identity(), media_type, str(desired_count))
+
+    def _request_settings_key(self, resolved: ResolvedFlowGenerationSettings) -> tuple[str, ...]:
+        return (*self._generation_count_session_identity(), resolved.media_type,
+                str(resolved.model_preference), resolved.aspect_ratio, resolved.workflow_mode,
+                str(resolved.duration_seconds), str(resolved.reference_mode), resolved.quality_tier)
+
+    def ensure_request_settings(self, dom, resolved: ResolvedFlowGenerationSettings) -> dict | None:
+        """Only reopen Flow's settings UI when request semantics actually changed."""
+        key = self._request_settings_key(resolved)
+        if self._active_request_settings_key == key:
+            return None
+        settings = dom.apply_request_settings(resolved)
+        settings["request_settings_ui_reopened"] = True
+        self._active_request_settings_key = key
+        return settings
+
+    def record_observed_generation_count(self, media_type: str, actual_count: int,
+                                         *, desired_count: int = 1) -> bool:
+        """Consume an explicit provider-UI observation without trusting old evidence."""
+        key = self._generation_count_key(media_type, desired_count)
+        if actual_count != desired_count:
+            self._generation_count_evidence.pop(key, None)
+            return False
+        self._generation_count_evidence[key] = {
+            "actual_output_count": actual_count,
+            "desired_output_count": desired_count,
+            "session_identity": self._generation_count_session_identity(),
+        }
+        return True
+
+    def ensure_generation_count(self, dom, resolved: ResolvedFlowGenerationSettings) -> dict:
+        """Inspect, configure, and verify Flow's count once per proven session setting."""
+        media_type, desired_count = resolved.media_type, resolved.output_count
+        key = self._generation_count_key(media_type, desired_count)
+        evidence = self._generation_count_evidence.get(key)
+        if evidence is not None and evidence.get("actual_output_count") == desired_count:
+            return {
+                "requested_output_count": desired_count,
+                "actual_output_count": desired_count,
+                "output_count": desired_count,
+                "generation_count_preparation": "REUSED_VERIFIED_EVIDENCE",
+                # Per-request counters make a live run auditable without
+                # mistaking the cached proof for another Flow UI operation.
+                "generation_count_setup": {
+                    "ui_inspections": 0,
+                    "ui_mutations": 0,
+                },
+            }
+        inspection_count = 1
+        mutation_count = 0
+        actual_count = dom.inspect_generation_count(media_type)
+        preparation = "VERIFIED_CURRENT"
+        if actual_count != desired_count:
+            dom.configure_generation_count(media_type, desired_count)
+            mutation_count = 1
+            actual_count = dom.inspect_generation_count(media_type)
+            inspection_count += 1
+            preparation = "CONFIGURED_AND_VERIFIED"
+        if actual_count != desired_count:
+            raise FlowError("FLOW_GENERATION_COUNT_MISMATCH", "Flow generation-count verification failed")
+        self.record_observed_generation_count(media_type, actual_count, desired_count=desired_count)
+        return {
+            "requested_output_count": desired_count,
+            "actual_output_count": actual_count,
+            "output_count": desired_count,
+            "generation_count_preparation": preparation,
+            "generation_count_setup": {
+                "ui_inspections": inspection_count,
+                "ui_mutations": mutation_count,
+            },
+        }
 
     def set_before_provider_boundary(self, callback: Callable[[], None] | None) -> None:
         """Install the service-owned marker invoked immediately before Generate."""
@@ -832,6 +947,7 @@ class LiveFlowGenerator:
     def _reset_poll_evidence(self, path: Path) -> None:
         self._poll_timeline = ProviderPollEvidenceTimeline(path)
         self._pre_dispatch_asset_records = []
+        self._pre_dispatch_provider_model_tiles: list[dict] = []
         self.last_settings = {}
         self._sync_poll_evidence()
 
@@ -902,6 +1018,13 @@ class LiveFlowGenerator:
         elif not self._pre_dispatch_asset_records:
             self._pre_dispatch_asset_records = _merge_surface_records(baseline)
         pre_dispatch_assets = _asset_identity_projection(self._pre_dispatch_asset_records)
+        provider_model = _provider_model_projection(surface)
+        pre_dispatch_model = list(getattr(self, "_pre_dispatch_provider_model_tiles", []))
+        pre_dispatch_model_ids = {item["card_id"] for item in pre_dispatch_model}
+        provider_model_delta = (
+            [item for item in provider_model if item["card_id"] not in pre_dispatch_model_ids]
+            if provider_model is not None else []
+        )
         baseline_ids = {item["identity"] for item in baseline_projection}
         delta = [item for item in current_projection if item["identity"] not in baseline_ids]
         candidates = observation.candidate_identities if observation is not None else delta
@@ -958,6 +1081,17 @@ class LiveFlowGenerator:
             "current_identity_set": current_projection,
             "identity_delta": delta,
             "pre_dispatch_asset_identity_set": pre_dispatch_assets,
+            "pre_dispatch_provider_model_identity_set": pre_dispatch_model,
+            "provider_model_identity_set": provider_model or [],
+            "provider_model_delta": provider_model_delta,
+            "provider_model_complete": provider_model is not None,
+            "causal_card_ids": (
+                observation.causal_card_ids if observation is not None
+                else [item["card_id"] for item in provider_model_delta]
+            ),
+            "historical_alias_card_ids": (
+                observation.historical_alias_card_ids if observation is not None else []
+            ),
             "job_card_identities_observed": sorted({
                 str(item.get("card_id")) for item in current_projection if item.get("card_id")
             }),
@@ -975,6 +1109,9 @@ class LiveFlowGenerator:
             "durable_dispatch_identity": durable_output_identity or durable_job_identity or (dispatch.durable_identity if dispatch else None),
             "attribution_evidence_state": observation.state if observation is not None else "NOT_ATTEMPTED",
             "lineage_card_id": lineage_card_id,
+            "within_group_selection_policy": (
+                observation.within_group_selection_policy if observation is not None else None
+            ),
             "input_dispatched": bool((activation or {}).get("input_dispatched")),
             "activation_verified": bool((activation or {}).get("activation_verified")),
             "provider_acceptance_transition": bool((activation or {}).get("provider_acceptance_transition")),
@@ -1166,6 +1303,9 @@ class LiveFlowGenerator:
             "candidate_identities": observation.candidate_identities,
             "foreign_candidate_identities": observation.foreign_candidate_identities,
             "attribution_stable_polls": observation.stable_polls,
+            "causal_card_ids": observation.causal_card_ids,
+            "within_group_selection_policy": observation.within_group_selection_policy,
+            "historical_alias_card_ids": observation.historical_alias_card_ids,
         })
         if observation.lineage_card_id:
             self.last_settings["provider_lineage_card_id"] = observation.lineage_card_id
@@ -1222,23 +1362,51 @@ class LiveFlowGenerator:
         # evidence are request-local and must never leak from a prior attempt.
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
+        self.last_settings = {}
         self._reset_poll_evidence(destination.parent / "provider_poll_evidence.json")
         page = CdpPage.open(self.runtime)
+        page.enable_pre_dispatch_reconnect()
         try:
             dom = FlowBrowserDom(page)
             identity_history = request.get("_flow_provider_identity_history", [])
             history_seed = identity_history if isinstance(identity_history, list) else []
+            provider_model_samples: list[list[dict] | None] = []
+
+            def discovery_observer(surface, records, stable):
+                model = _provider_model_projection(surface)
+                provider_model_samples.append(model)
+                self._record_poll(
+                    phase="PRE_DISPATCH_DISCOVERY", media_type=request["media_type"],
+                    baseline=history_seed, current=records, surface=surface,
+                    stable_polls=stable,
+                )
+
             try:
                 historical_records, _ = _stable_surface(
                     dom, request["media_type"],
                     seed=history_seed,
                     capacity_guard=self._ensure_poll_capacity,
-                    poll_observer=lambda surface, records, stable: self._record_poll(
-                        phase="PRE_DISPATCH_DISCOVERY", media_type=request["media_type"],
-                        baseline=history_seed, current=records, surface=surface,
-                        stable_polls=stable,
-                    ),
+                    poll_observer=discovery_observer,
                 )
+                consecutive = provider_model_samples[-3:]
+                if len(consecutive) != 3 or any(sample is None for sample in consecutive):
+                    raise FlowError(
+                        "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate",
+                    )
+                model_id_sets = [tuple(item["card_id"] for item in (sample or []))
+                                 for sample in consecutive]
+                if len(set(model_id_sets)) != 1:
+                    raise FlowError(
+                        "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate",
+                    )
+                self._pre_dispatch_provider_model_tiles = list(consecutive[-1] or [])
+                self.last_settings.update({
+                    "pre_dispatch_provider_model_identity_set": list(consecutive[-1] or []),
+                    "pre_dispatch_provider_model_stable_polls": 3,
+                    "causal_anchor": "COMPLETE_PROVIDER_MODEL_CARD_ID_DELTA",
+                })
             except FlowError as error:
                 if error.failure_class == "OUTPUT_ATTRIBUTION_NOT_QUIESCENT":
                     # The baseline gate runs before the composer/activation path.
@@ -1256,7 +1424,18 @@ class LiveFlowGenerator:
                 raise
             dom.reset_composer()
             resolved = resolve_settings(request)
-            self.last_settings.update(dom.apply_settings(resolved))
+            generation_count = self.ensure_generation_count(dom, resolved)
+            request_settings = self.ensure_request_settings(dom, resolved) or {}
+            if request_settings:
+                observed_count = request_settings.pop("actual_output_count")
+                # This readback is already available while applying the request's
+                # mode/ratio.  A provider-side reset invalidates evidence and
+                # requires one fresh configure-and-verify pass before Generate.
+                if not self.record_observed_generation_count(
+                        resolved.media_type, observed_count, desired_count=resolved.output_count):
+                    generation_count = self.ensure_generation_count(dom, resolved)
+            self.last_settings.update(request_settings)
+            self.last_settings.update(generation_count)
             self._sync_poll_evidence()
             if request["media_type"] == "IMAGE" and not (
                     self.last_settings.get("requested_output_count") ==
@@ -1307,6 +1486,11 @@ class LiveFlowGenerator:
                         "upload_sha256": sha256_file(staged),
                     })
                 try:
+                    # From this point FlowComposer may type or activate a
+                    # control.  A timeout must remain fail-closed; only the
+                    # preceding provider-free surface/setup operations may be
+                    # repeated on a fresh CDP connection.
+                    page.disable_pre_dispatch_reconnect()
                     submit = FlowComposer(dom).submit(
                         request["prompt"], references=staged_references,
                         media_type=request["media_type"], before_dispatch=baseline,
@@ -1363,6 +1547,9 @@ class LiveFlowGenerator:
                         pass
 
             deadline = time.monotonic() + self.timeout_seconds
+            last_surface: dict = {}
+            last_current: list[dict] = []
+            last_causal_card_ids: set[str] = set()
             while time.monotonic() < deadline:
                 self._ensure_poll_capacity()
                 states = page.evaluate(_EDITOR_JS) or []
@@ -1381,8 +1568,21 @@ class LiveFlowGenerator:
                     )
                 surface = dom.provider_surface()
                 current = surface.get("records", []) if isinstance(surface, dict) else []
+                provider_model = _provider_model_projection(surface)
+                pre_dispatch_model_ids = {
+                    item["card_id"] for item in self._pre_dispatch_provider_model_tiles
+                }
+                causal_card_ids = {
+                    item["card_id"] for item in (provider_model or [])
+                    if item["card_id"] not in pre_dispatch_model_ids
+                }
+                last_surface = surface if isinstance(surface, dict) else {}
+                last_current = current
+                last_causal_card_ids = causal_card_ids
                 observation = attribution.observe(
-                    current, provider_busy=bool(int((surface or {}).get("global_pending_count", 0)))
+                    current,
+                    provider_busy=bool(int((surface or {}).get("global_pending_count", 0))),
+                    causal_card_ids=causal_card_ids,
                 )
                 quarantined: list[dict] = []
                 if observation.state == "AMBIGUOUS":
@@ -1482,6 +1682,24 @@ class LiveFlowGenerator:
                 time.sleep(.5)
 
             self.dispatch_confirmation_state = dispatch.state
+            final_observation = attribution.observe(
+                last_current, causal_card_ids=last_causal_card_ids,
+                causal_anchor_final=True,
+            )
+            if final_observation.state == "AMBIGUOUS":
+                self._record_poll(
+                    phase="POST_DISPATCH", media_type=request["media_type"],
+                    baseline=baseline_records, current=last_current,
+                    surface=last_surface, stable_polls=final_observation.stable_polls,
+                    observation=final_observation, dispatch=dispatch,
+                    activation=activation,
+                )
+                self._record_observation(final_observation)
+                self._sync_dispatch_state(dispatch)
+                raise FlowError(
+                    "OUTPUT_ATTRIBUTION_AMBIGUOUS",
+                    "no complete causal provider-model card delta was proven after Generate",
+                )
             self.last_settings.update({
                 "dispatch_confirmation_state": dispatch.state,
                 "dispatch_confirmation_signal": dispatch.signal,
@@ -1495,6 +1713,7 @@ class LiveFlowGenerator:
             raise FlowError("FLOW_DISPATCH_UNCERTAIN", "activation occurred but no attributable Flow job or output was proven")
         finally:
             try:
+                self.last_settings["cdp_transport"] = page.transport_diagnostics()
                 self._finish_poll_evidence(
                     str((self.last_settings or {}).get("attribution_state") or self.dispatch_confirmation_state)
                 )
