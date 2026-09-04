@@ -12,7 +12,6 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 import re
 import time
-import json
 
 from story_auto.core.artifacts import atomic_write_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, load_project
@@ -180,6 +179,30 @@ class LiveFlowProjects:
     def _title(page: CdpPage) -> str | None:
         return page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value);return xs.length===1?xs[0].value:null})()""")
 
+    @classmethod
+    def _set_title(cls, page: CdpPage, name: str) -> None:
+        # The project URL becomes active before Flow finishes mounting the
+        # editable title control. Wait for that one exact control rather than
+        # treating normal page hydration as a UI ambiguity.
+        deadline = time.monotonic() + 10
+        focused = False
+        while time.monotonic() < deadline:
+            focused = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value);if(xs.length!==1)return false;xs[0].focus();xs[0].select();return true})()""")
+            if focused is True:
+                break
+            time.sleep(.2)
+        if focused is not True:
+            raise FlowProjectBindingError("FLOW_PROJECT_NAME_CONTROL_AMBIGUOUS")
+        # Use real DevTools input/keyboard events. Flow's React title control
+        # currently ignores synthetic DOM change/KeyboardEvent dispatches.
+        page.insert_text(name)
+        page.key("Enter")
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and cls._title(page) != name:
+            time.sleep(.2)
+        if cls._title(page) != name:
+            raise FlowProjectBindingError("FLOW_PROJECT_NAME_NOT_CONFIRMED")
+
     def find_projects(self, name: str) -> list[dict[str, str]]:
         page = self._page()
         try:
@@ -205,18 +228,13 @@ class LiveFlowProjects:
         try:
             page.command("Page.navigate", {"url": FLOW_HOME_URL})
             time.sleep(1)
-            clicked = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const xs=Array.from(document.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length!==1)return false;xs[0].click();return true})()""")
-            if clicked is not True:
-                raise FlowProjectBindingError("FLOW_PROJECT_CREATE_CONTROL_AMBIGUOUS")
+            # Flow's project-create control requires the same trusted browser
+            # activation path used by media generation.  A synthetic DOM
+            # element.click() can be ignored by the current Flow UI even when
+            # the control is uniquely visible.
+            page.locator_click('button:has(i:text-is("add_2"))', timeout_ms=5000)
             url = self._wait_project(page)
-            changed = page.evaluate("""(name=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value);if(xs.length!==1)return false;const input=xs[0],setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;setter.call(input,name);input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:name}));input.dispatchEvent(new Event('change',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true}));input.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true}));input.blur();return true})(%s)""" % json.dumps(name))
-            if changed is not True:
-                raise FlowProjectBindingError("FLOW_PROJECT_NAME_CONTROL_AMBIGUOUS")
-            deadline = time.monotonic() + 8
-            while time.monotonic() < deadline and self._title(page) != name:
-                time.sleep(.2)
-            if self._title(page) != name:
-                raise FlowProjectBindingError("FLOW_PROJECT_NAME_NOT_CONFIRMED")
+            self._set_title(page, name)
             match = _PROJECT_PATH.fullmatch(urlsplit(url).path.rstrip("/"))
             return {"project_name": name, "project_url": url, "project_identity": match.group(1)}
         finally:
