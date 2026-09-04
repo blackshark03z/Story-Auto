@@ -91,11 +91,7 @@ def inspect_import_readiness(*, source_mode: str, audio_path: Path | None = None
     tolerance_ms = SRT_TIMELINE_TOLERANCE_SECONDS * 1000.0
     signed_offset_ms = srt_end_ms - duration_ms
     delta_ms = abs(signed_offset_ms)
-    # SRT may end slightly before the encoded audio tail, but it may never
-    # overrun it: canonical SRT adoption validates that stronger invariant.
-    # Keep wizard readiness congruent so a READY review cannot create a
-    # partially initialized project and then fail during import adoption.
-    if signed_offset_ms > 0 or delta_ms > tolerance_ms:
+    if delta_ms > tolerance_ms:
         direction = "SRT_AFTER_AUDIO" if signed_offset_ms > 0 else "SRT_BEFORE_AUDIO"
         relation = "after" if signed_offset_ms > 0 else "before"
         message = (f"Subtitle timing ends {delta_ms / 1000.0:.3f} s {relation} the narration audio. "

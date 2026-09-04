@@ -49,21 +49,43 @@ def _owner_shape_srt() -> bytes:
 
 
 class Goal53ImportReadinessTests(unittest.TestCase):
-    def test_readiness_rejects_any_srt_overrun_before_project_creation(self):
+    def test_small_srt_overrun_is_ready_and_adoptable_by_project_creation(self):
         """A READY Audio+SRT pair must always be adoptable by the project boundary."""
-        late_srt = b"1\n00:00:00,000 --> 00:00:02,100\nLate cue.\n"
+        overrun_srt = b"1\n00:00:00,000 --> 00:00:02,100\nIn-tolerance cue.\n"
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
             audio = _upload("narration.wav", _wav(2))
-            subtitles = _upload("timing.srt", late_srt)
+            subtitles = _upload("timing.srt", overrun_srt)
             readiness = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=subtitles)
-            self.assertEqual((readiness["status"], readiness["code"], readiness["timeline"]["direction"]),
-                             ("BLOCKED", "TIMELINE_MISMATCH", "SRT_AFTER_AUDIO"))
-            with self.assertRaisesRegex(OperatorServiceError, "TIMELINE_MISMATCH"):
-                app.create_project(project_id="prj_srt_overrun", render_mode="full_image",
-                                   settings={"execution": {"mode": "EXISTING_VOICE"}, "ui": {"input_source": "AUDIO_SRT"}},
-                                   imported_audio=audio, imported_srt=subtitles)
-            self.assertFalse((Path(root) / "projects" / "prj_srt_overrun").exists())
+            self.assertEqual((readiness["status"], readiness["code"], readiness["timeline"]["status"]),
+                             ("READY", "READY", "READY"))
+            created = app.create_project(project_id="prj_srt_overrun", render_mode="full_image",
+                                         settings={"execution": {"mode": "EXISTING_VOICE"}, "ui": {"input_source": "AUDIO_SRT"}},
+                                         imported_audio=audio, imported_srt=subtitles)
+            self.assertEqual(created["input_source"], "AUDIO_SRT")
+
+    def test_owner_exact_numeric_srt_overrun_is_ready_without_decision_rounding(self):
+        owner_srt = b"1\n00:00:00,000 --> 00:29:43,014\nOwner narration.\n"
+        observed = {"duration_seconds": 1783.013878, "container": "m4a", "codec": "aac"}
+        with tempfile.TemporaryDirectory() as root, patch("story_auto.application.import_readiness.inspect_audio", return_value=observed):
+            readiness = OperatorService(root).inspect_imports(
+                source_mode="AUDIO_SRT", imported_audio=_upload("owner.m4a", _wav()),
+                imported_srt=_upload("owner.srt", owner_srt))
+        self.assertEqual((readiness["status"], readiness["timeline"]["status"]), ("READY", "READY"))
+        self.assertAlmostEqual(readiness["timeline"]["delta_ms"], 0.122, places=6)
+
+    def test_symmetric_tolerance_accepts_small_underrun_and_both_boundaries(self):
+        cases = (("underrun.srt", "00:00:01,800", 200.0),
+                 ("after_boundary.srt", "00:00:02,500", 500.0),
+                 ("before_boundary.srt", "00:00:01,500", 500.0))
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root); audio = _upload("voice.wav", _wav())
+            for filename, end, expected_delta in cases:
+                with self.subTest(filename=filename):
+                    srt = _upload(filename, f"1\n00:00:00,000 --> {end}\nIn tolerance.\n".encode())
+                    readiness = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio, imported_srt=srt)
+                    self.assertEqual((readiness["status"], readiness["timeline"]["status"]), ("READY", "READY"))
+                    self.assertAlmostEqual(readiness["timeline"]["delta_ms"], expected_delta)
 
     def test_parser_normalizes_lf_crlf_mixed_and_empty_micro_cues(self):
         fixture = _owner_shape_srt()
@@ -110,17 +132,19 @@ class Goal53ImportReadinessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root); audio = _upload("voice.wav", _wav())
             after = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio,
-                                        imported_srt=_upload("after.srt", b"1\n00:00:00,000 --> 00:00:03,000\nToo late.\n"))
+                                        imported_srt=_upload("after.srt", b"1\n00:00:00,000 --> 00:00:02,600\nToo late.\n"))
             before = app.inspect_imports(source_mode="AUDIO_SRT", imported_audio=audio,
-                                         imported_srt=_upload("before.srt", b"1\n00:00:00,000 --> 00:00:00,200\nToo early.\n"))
+                                         imported_srt=_upload("before.srt", b"1\n00:00:00,000 --> 00:00:01,300\nToo early.\n"))
         self.assertEqual((after["status"], after["timeline"]["code"], after["timeline"]["direction"]),
                          ("BLOCKED", "TIMELINE_MISMATCH", "SRT_AFTER_AUDIO"))
         self.assertIn("after", after["timeline"]["message"]); self.assertNotIn("before", after["timeline"]["message"])
+        self.assertAlmostEqual(after["timeline"]["signed_offset_ms"], 600.0)
+        self.assertEqual(after["timeline"]["delta_ms"], 600.0)
         self.assertEqual((before["status"], before["timeline"]["code"], before["timeline"]["direction"]),
                          ("BLOCKED", "TIMELINE_MISMATCH", "SRT_BEFORE_AUDIO"))
         self.assertIn("before", before["timeline"]["message"]); self.assertNotIn("after", before["timeline"]["message"])
-        self.assertAlmostEqual(before["timeline"]["signed_offset_ms"], -1800.0)
-        self.assertEqual(before["timeline"]["delta_ms"], 1800.0)
+        self.assertAlmostEqual(before["timeline"]["signed_offset_ms"], -700.0)
+        self.assertEqual(before["timeline"]["delta_ms"], 700.0)
 
     def test_existing_audio_semantics_remain_alignment_when_blocked_or_ready(self):
         with tempfile.TemporaryDirectory() as root:
@@ -170,8 +194,13 @@ class Goal53ImportReadinessTests(unittest.TestCase):
                     page.locator('input[name="inputSource"][value="AUDIO_SRT"]').check()
                     page.get_by_role("button", name="Continue", exact=True).click()
                     page.locator("#existingAudio").set_input_files({"name": "voice.wav", "mimeType": "audio/wav", "buffer": _wav()})
-                    page.locator("#existingSrt").set_input_files({"name": "ready.srt", "mimeType": "text/plain", "buffer": b"1\n00:00:00,000 --> 00:00:01,800\nReady subtitle.\n"})
+                    page.locator("#existingSrt").set_input_files({"name": "ready.srt", "mimeType": "text/plain", "buffer": b"1\n00:00:00,000 --> 00:00:02,100\nReady subtitle.\n"})
                     page.locator("#sourceReadiness").get_by_text("Ready to continue", exact=False).wait_for(timeout=5000)
+                    readiness_text = page.locator("#sourceReadiness").inner_text()
+                    self.assertIn("Audio ready", readiness_text)
+                    self.assertIn("Subtitles ready", readiness_text)
+                    self.assertIn("Timing matches", readiness_text)
+                    self.assertNotIn("Timing needs attention", readiness_text)
                     self.assertTrue(page.get_by_role("button", name="Continue", exact=True).is_enabled())
                     page.locator("#existingSrt").set_input_files({"name": "late.srt", "mimeType": "text/plain", "buffer": b"1\n00:00:00,000 --> 00:00:00,200\nLate subtitle.\n"})
                     page.locator("#sourceReadiness").get_by_text("Timing needs attention", exact=False).first.wait_for(timeout=5000)
