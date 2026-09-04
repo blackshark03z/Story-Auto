@@ -143,6 +143,37 @@ def _provider_model_projection(surface: dict) -> list[dict] | None:
     return [projected[key] for key in sorted(projected)]
 
 
+def _resolve_pre_dispatch_provider_model(samples: list[list[dict] | None], *,
+                                         historical_records: list[dict], history_seed: list[dict],
+                                         allow_known_empty: bool) -> tuple[list[list[dict]], str | None]:
+    """Resolve three stable model samples, with one narrow empty-project authority.
+
+    Flow exposes no React tile model at all for a brand-new empty project.  A
+    Story Auto-managed project whose local history proves zero prior provider
+    dispatches may therefore use a stable, record-free surface as the exact
+    empty baseline.  Legacy or previously-dispatched projects keep the strict
+    complete-model requirement.
+    """
+    consecutive = samples[-3:]
+    if len(consecutive) != 3:
+        raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate")
+    if all(sample is None for sample in consecutive):
+        if allow_known_empty and not historical_records and not history_seed:
+            return [[], [], []], "AUTO_MANAGED_BOUND_PROJECT_WITH_NO_PRIOR_DISPATCH"
+        raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate")
+    if any(sample is None for sample in consecutive):
+        raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate")
+    resolved = [list(sample or []) for sample in consecutive]
+    model_id_sets = [tuple(item["card_id"] for item in sample) for sample in resolved]
+    if len(set(model_id_sets)) != 1:
+        raise FlowError("OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+                        "complete Flow provider model was unavailable or unstable before Generate")
+    return resolved, None
+
+
 def _exact_lineage_terminal_failure(records: list[dict], durable_identity: str | None) -> dict | None:
     """Return one structurally terminal record only for the bound lineage."""
     if not isinstance(durable_identity, str) or ":" not in durable_identity:
@@ -1083,9 +1114,11 @@ class FlowInspector:
 
 
 class LiveFlowGenerator:
-    def __init__(self, runtime, *, timeout_seconds: int = 480):
+    def __init__(self, runtime, *, timeout_seconds: int = 480,
+                 allow_empty_provider_model_baseline: bool = False):
         self.runtime = runtime
         self.timeout_seconds = timeout_seconds
+        self._allow_empty_provider_model_baseline = bool(allow_empty_provider_model_baseline)
         self.last_settings = None
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
@@ -1650,25 +1683,23 @@ class LiveFlowGenerator:
                     capacity_guard=self._ensure_poll_capacity,
                     poll_observer=discovery_observer,
                 )
-                consecutive = provider_model_samples[-3:]
-                if len(consecutive) != 3 or any(sample is None for sample in consecutive):
-                    raise FlowError(
-                        "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
-                        "complete Flow provider model was unavailable or unstable before Generate",
-                    )
-                model_id_sets = [tuple(item["card_id"] for item in (sample or []))
-                                 for sample in consecutive]
-                if len(set(model_id_sets)) != 1:
-                    raise FlowError(
-                        "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
-                        "complete Flow provider model was unavailable or unstable before Generate",
-                    )
-                self._pre_dispatch_provider_model_tiles = list(consecutive[-1] or [])
+                consecutive, empty_authority = _resolve_pre_dispatch_provider_model(
+                    provider_model_samples, historical_records=historical_records,
+                    history_seed=history_seed,
+                    allow_known_empty=self._allow_empty_provider_model_baseline,
+                )
+                self._pre_dispatch_provider_model_tiles = list(consecutive[-1])
                 self.last_settings.update({
-                    "pre_dispatch_provider_model_identity_set": list(consecutive[-1] or []),
+                    "pre_dispatch_provider_model_identity_set": list(consecutive[-1]),
                     "pre_dispatch_provider_model_stable_polls": 3,
                     "causal_anchor": "COMPLETE_PROVIDER_MODEL_CARD_ID_DELTA",
                 })
+                if empty_authority is not None:
+                    self.last_settings["pre_dispatch_empty_provider_model_authority"] = empty_authority
+                    # This authority is single-use for a generator instance.
+                    # Once the first request advances past the empty baseline,
+                    # every later request must observe the normal complete model.
+                    self._allow_empty_provider_model_baseline = False
             except FlowError as error:
                 if error.failure_class == "OUTPUT_ATTRIBUTION_NOT_QUIESCENT":
                     # The baseline gate runs before the composer/activation path.

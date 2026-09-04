@@ -1108,6 +1108,29 @@ class OperatorService:
         paths,_=self._project(project_id); atomic_write_json(paths.artifact_path("output/execution_control.json"),{"pause_requested":bool(paused)})
         return {"pause_requested":bool(paused)}
 
+    def _managed_flow_empty_baseline_authorized(self, project_id: str, config: ProjectConfig) -> bool:
+        binding = managed_binding(config)
+        if not binding or binding.get("state") != "BOUND":
+            return False
+        paths,_ = self._project(project_id)
+        manifest_path = paths.artifact_path("output/generation_manifest.json")
+        if not manifest_path.is_file():
+            return True
+        manifest = read_json(manifest_path)
+        for entry in manifest.get("requests", []):
+            for attempt in entry.get("attempts", []):
+                settings = attempt.get("provider_settings") if isinstance(attempt, dict) else None
+                activation = settings.get("activation") if isinstance(settings, dict) else None
+                if (attempt.get("provider_execution_state") not in {None, "NOT_STARTED"}
+                        or attempt.get("provider_boundary_entered_at") is not None
+                        or attempt.get("dispatch_confirmed") is not False
+                        or attempt.get("provider_job_id") is not None
+                        or attempt.get("provider_lineage_card_id") is not None
+                        or not isinstance(activation, dict)
+                        or activation.get("input_dispatched") is not False):
+                    return False
+        return True
+
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None, max_requests: int | None=None) -> dict[str, Any]:
         _,config=self._project(project_id)
         self._require_available_render_mode(config)
@@ -1123,7 +1146,12 @@ class OperatorService:
             error=FlowConnectionError(status.get("code","FLOW_NOT_CONFIGURED")); error.failure_class=status.get("code","FLOW_NOT_CONFIGURED")
             raise error
         if executor is None:
-            runtime=self.flow_connections.runtime_for_connection(connection); capabilities=preflight(runtime,FlowInspector(runtime)); executor=FlowExecutor(capabilities,LiveFlowGenerator(runtime))
+            runtime=self.flow_connections.runtime_for_connection(connection)
+            capabilities=preflight(runtime,FlowInspector(runtime))
+            executor=FlowExecutor(capabilities,LiveFlowGenerator(
+                runtime,
+                allow_empty_provider_model_baseline=self._managed_flow_empty_baseline_authorized(project_id, config),
+            ))
         return execute_generation(self.runtime.root,project_id,executor=executor,execute=True,request_ids=request_ids,production_batch=True,max_requests=max_requests,
                                   flow_connection_provenance=self.flow_connections.provenance(connection))
 

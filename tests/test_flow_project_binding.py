@@ -6,6 +6,8 @@ import unittest
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.flow.connection import FlowConnectionService
+from story_auto.providers.flow.live import _resolve_pre_dispatch_provider_model
+from story_auto.providers.flow.service import FlowError
 from story_auto.providers.flow.project_binding import (
     FlowProjectBindingError,
     FlowProjectBindingService,
@@ -133,6 +135,18 @@ class FlowProjectBindingTests(unittest.TestCase):
             self.assertEqual((status["status"], connection.project_identity), ("CONNECTED", "new-one"))
             self.assertEqual(service.connections.get_current_connection().project_identity,
                              "https://labs.google/fx/vi/tools/flow/project/legacy")
+
+    def test_known_empty_managed_project_can_supply_one_empty_provider_model_baseline(self):
+        resolved, authority = _resolve_pre_dispatch_provider_model(
+            [None, None, None], historical_records=[], history_seed=[], allow_known_empty=True)
+        self.assertEqual(resolved, [[], [], []])
+        self.assertEqual(authority, "AUTO_MANAGED_BOUND_PROJECT_WITH_NO_PRIOR_DISPATCH")
+        for history, allowed in (([{"card_id": "old"}], True), ([], False)):
+            with self.subTest(history=bool(history), allowed=allowed):
+                with self.assertRaises(FlowError):
+                    _resolve_pre_dispatch_provider_model(
+                        [None, None, None], historical_records=history, history_seed=[],
+                        allow_known_empty=allowed)
 
 
 if __name__ == "__main__":
