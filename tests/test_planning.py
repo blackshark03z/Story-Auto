@@ -87,6 +87,19 @@ class PlanningTests(unittest.TestCase):
             project = read_json(paths.project_file); project["settings"]["llm"]["model"] = "gemini-3.6-flash"; atomic_write_json(paths.project_file, project)
             self.assertEqual(run_planning_stages(runtime.root, config.project_id, provider=fake), ("RUN", "RUN"))
 
+    def test_srt_tail_within_import_tolerance_uses_audio_master_timeline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runtime, config, paths, alignment = self._project(directory); fake = FakeGemini()
+            alignment["source"] = "SRT"
+            alignment["timing_source"] = "SRT"
+            alignment["segments"][-1]["end"] = 2.000122
+            atomic_write_json(paths.artifact_path("output/alignment.json"), alignment)
+
+            self.assertEqual(run_planning_stages(runtime.root, config.project_id, provider=fake), ("RUN", "RUN"))
+            timeline = read_json(paths.artifact_path("output/story_timeline.json"))
+            self.assertEqual(timeline["scenes"][-1]["end"], 2.0)
+            self.assertEqual(len(fake.calls), 2)
+
     def test_timeline_and_continuity_semantic_rejections(self):
         with tempfile.TemporaryDirectory() as directory:
             _, _, _, alignment = self._project(directory)

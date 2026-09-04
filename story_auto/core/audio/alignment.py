@@ -6,6 +6,7 @@ from typing import Any
 from story_auto.core.content import narrations_equivalent
 
 ALIGNMENT_SCHEMA_VERSION = "story-auto-alignment/1.0.0"
+SRT_TIMELINE_TOLERANCE_SECONDS = 0.5
 
 
 class AlignmentError(ValueError):
@@ -78,7 +79,8 @@ def validate_alignment(value: Any, *, narration: str, narration_sha256: str, aud
         if start < 0 or end <= start or start < previous_end:
             raise AlignmentError("segments must be ordered non-overlapping positive intervals")
         previous_end, reconstructed = end, reconstructed + [segment["text"]]
-    if previous_end > duration_seconds + tolerance_seconds:
+    end_tolerance = SRT_TIMELINE_TOLERANCE_SECONDS if value.get("timing_source") == "SRT" else tolerance_seconds
+    if previous_end > duration_seconds + end_tolerance:
         raise AlignmentError("alignment exceeds validated audio duration")
     if value.get("timing_source") == "SRT":
         if value.get("source") != "SRT" or not all(str(item.get("segment_id", "")).startswith("cue_") for item in segments):

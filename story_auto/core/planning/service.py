@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
+from story_auto.core.audio import SRT_TIMELINE_TOLERANCE_SECONDS
 from story_auto.core.checkpoint import CheckpointStore, canonical_json, fingerprint
 from story_auto.core.content import narration_hash, parse_content_markdown
 from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, GeminiQCError,
@@ -113,7 +114,8 @@ def validate_timeline(value: Any, alignment: dict[str, Any]) -> None:
         if scene.get("scene_id") != f"scn_{index:04d}" or not isinstance(ids, list) or not ids or any(i not in segments for i in ids): raise PlanningError("STORY_TIMELINE_INVALID")
         start, end = float(scene["start"]), float(scene["end"])
         if used.intersection(ids) or abs(start - previous) > .001 or end <= start: raise PlanningError("STORY_TIMELINE_INVALID")
-        if start > float(segments[ids[0]]["start"]) or end < float(segments[ids[-1]]["end"]): raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
+        tail_tolerance = SRT_TIMELINE_TOLERANCE_SECONDS if alignment.get("timing_source") == "SRT" and index == len(scenes) else 0.0
+        if start > float(segments[ids[0]]["start"]) or end + tail_tolerance < float(segments[ids[-1]]["end"]): raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
         used.update(ids); previous = float(scene["end"])
     if used != set(segments) or abs(float(scenes[0]["start"])) > .001 or abs(float(scenes[-1]["end"]) - float(alignment["duration_seconds"])) > .001: raise PlanningError("TIMELINE_ALIGNMENT_MISMATCH")
 

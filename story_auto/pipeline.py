@@ -7,7 +7,11 @@ from pathlib import Path
 import shutil
 
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
-from story_auto.core.audio import TTSRequest, TimedSpan, audio_duration_seconds, build_alignment, deterministic_text_alignment, parse_srt_file, validate_alignment
+from story_auto.core.audio import (SRT_TIMELINE_TOLERANCE_SECONDS, TTSRequest,
+                                   TimedSpan, audio_duration_seconds,
+                                   build_alignment,
+                                   deterministic_text_alignment,
+                                   parse_srt_file, validate_alignment)
 from story_auto.core.audio.media import inspect_audio
 from story_auto.core.checkpoint import CheckpointStore, fingerprint
 from story_auto.core.content import ContentValidationError, narration_hash, parse_content_markdown
@@ -20,9 +24,6 @@ CONTENT_PRODUCER_VERSION = "story-auto-content-stage/1.0.0"
 CONTENT_MANIFEST_SCHEMA_VERSION = "story-auto-content-manifest/1.0.0"
 TTS_PRODUCER_VERSION = "story-auto-tts-stage/1.1.0"
 ALIGNMENT_PRODUCER_VERSION = "story-auto-alignment-stage/1.0.0"
-SRT_TIMELINE_TOLERANCE_SECONDS = 0.5
-
-
 def _tts_settings(config) -> tuple[str, str, dict]:
     tts = config.settings.get("tts")
     if not isinstance(tts, dict): raise ValueError("project settings.tts is required to run audio")

@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from story_auto.core.audio import SrtCue, SrtError, parse_srt_bytes
+from story_auto.core.audio import (SRT_TIMELINE_TOLERANCE_SECONDS, SrtCue,
+                                   SrtError, parse_srt_bytes)
 from story_auto.core.audio.errors import AudioPipelineError
 from story_auto.core.audio.media import inspect_audio
-from story_auto.pipeline import SRT_TIMELINE_TOLERANCE_SECONDS
 
 
 def _component(status: str, code: str | None, message: str, **facts: Any) -> dict[str, Any]:
