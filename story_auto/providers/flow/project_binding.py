@@ -244,6 +244,21 @@ class LiveFlowProjects:
         exact = canonical_project({"project_name": project_name, "project_url": project_url, "project_identity": project_identity})
         page = self._page()
         try:
+            current_url = page.evaluate("location.href")
+            if current_url == exact["project_url"]:
+                # Re-navigating the exact active Flow project clears the SPA's
+                # currently rendered provider surface.  Preserve that live
+                # surface across bounded Continue calls; only navigate when a
+                # different project/home is actually active.
+                deadline = time.monotonic() + 8
+                title = self._title(page)
+                while time.monotonic() < deadline and title is None:
+                    time.sleep(.2); title = self._title(page)
+                observed = {"project_name": title or "", "project_url": current_url,
+                            "project_identity": urlsplit(current_url).path.rstrip("/").split("/")[-1]}
+                if not FlowProjectBindingService._same(exact, observed):
+                    raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
+                return observed
             page.command("Page.navigate", {"url": exact["project_url"]})
             actual_url = self._wait_project(page)
             deadline = time.monotonic() + 8

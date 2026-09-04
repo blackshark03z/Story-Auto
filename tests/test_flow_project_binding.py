@@ -11,6 +11,7 @@ from story_auto.providers.flow.service import FlowError
 from story_auto.providers.flow.project_binding import (
     FlowProjectBindingError,
     FlowProjectBindingService,
+    LiveFlowProjects,
     managed_flow_settings,
 )
 
@@ -135,6 +136,29 @@ class FlowProjectBindingTests(unittest.TestCase):
             self.assertEqual((status["status"], connection.project_identity), ("CONNECTED", "new-one"))
             self.assertEqual(service.connections.get_current_connection().project_identity,
                              "https://labs.google/fx/vi/tools/flow/project/legacy")
+
+    def test_live_open_project_preserves_exact_active_project_without_navigation(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime = RuntimeLayout.from_root(root)
+            adapter = LiveFlowProjects(runtime)
+            url = "https://labs.google/fx/vi/tools/flow/project/exact-one"
+            name = "StoryAuto_exactone"
+
+            class FakePage:
+                def __init__(self): self.commands = []
+                def evaluate(self, expression):
+                    return url if expression == "location.href" else name
+                def command(self, method, params=None):
+                    self.commands.append((method, params))
+                    if method == "Page.navigate": raise AssertionError("exact active project must not navigate")
+                    return {}
+                def close(self): pass
+
+            page = FakePage()
+            adapter._page = lambda: page
+            observed = adapter.open_project(url, "exact-one", name)
+            self.assertEqual(observed, {"project_name": name, "project_url": url, "project_identity": "exact-one"})
+            self.assertEqual(page.commands, [])
 
     def test_known_empty_managed_project_can_supply_one_empty_provider_model_baseline(self):
         resolved, authority = _resolve_pre_dispatch_provider_model(
