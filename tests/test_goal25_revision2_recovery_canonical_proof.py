@@ -7,6 +7,7 @@ import unittest
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
+from story_auto.providers.flow.live import ProviderPollEvidenceTimeline
 from story_auto.providers.flow.service import (
     FlowError,
     FlowExecutor,
@@ -103,6 +104,103 @@ class Goal25Revision2RecoveryProofTests(unittest.TestCase):
             result = execute_generation(
                 runtime.root, config.project_id,
                 executor=FlowExecutor(FlowCapabilities(True, True, True, True, True, True), lambda *_: None),
+                execute=True, request_ids=set(),
+            )
+            entry = self._entry(paths)
+            self.assertEqual((result["reconciliations"], entry["status"]), (1, "NOT_DISPATCHED"))
+            self.assertTrue(canonical_no_dispatch_proof(entry["attempts"][-1]))
+            self.assertTrue(_provider_generation_retry_authorized(entry))
+            self.assertFalse(_unresolved_flow_entry(entry))
+
+    def test_poll_evidence_overflow_before_provider_boundary_is_not_ambiguous(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, config, paths = self._project(root, entry_status="READY", attempt={})
+            manifest = read_json(paths.artifact_path("output/generation_manifest.json"))
+            manifest["requests"][0]["attempts"] = []
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+
+            poll_timeline = ProviderPollEvidenceTimeline(max_provider_identities=256)
+            identities = [{"card_id": f"card-{index:03d}"} for index in range(257)]
+            with self.assertRaisesRegex(FlowError, "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED"):
+                poll_timeline.append({
+                    "phase": "PRE_DISPATCH_DISCOVERY",
+                    "input_dispatched": False,
+                    "dispatch_evidence_state": "NOT_CONFIRMED",
+                    "dispatch_signal_state": "NONE",
+                    "attribution_evidence_state": "NOT_ATTEMPTED",
+                    "durable_dispatch_identity": None,
+                    "lineage_card_id": None,
+                    "provider_model_identity_set": identities,
+                })
+            overflow_snapshot = poll_timeline.snapshot()
+
+            class PreDispatchPollOverflow:
+                dispatch_confirmed = False
+                last_settings = {
+                    "provider_job_id": None,
+                    "durable_dispatch_identity": None,
+                    "provider_lineage_card_id": None,
+                    "attributed_provider_identity": None,
+                    "attribution_state": None,
+                    "provider_poll_evidence_complete": False,
+                    "provider_poll_terminal_state": "NOT_ATTEMPTED",
+                    "provider_poll_evidence": overflow_snapshot,
+                }
+
+                def set_before_provider_boundary(self, callback):
+                    self.callback = callback
+
+                def __call__(self, *_args):
+                    raise FlowError(
+                        "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED",
+                        "provider poll evidence is incomplete",
+                    )
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(
+                    FlowCapabilities(True, True, True, True, True, True),
+                    PreDispatchPollOverflow(),
+                ),
+                execute=True, request_ids={REQUEST_ID}, max_requests=1,
+            )
+            entry = self._entry(paths)
+            attempt = entry["attempts"][-1]
+            self.assertEqual((result["new_submissions"], entry["status"]), (0, "NOT_DISPATCHED"))
+            self.assertEqual(entry.get("provider_submissions", 0), 0)
+            self.assertTrue(canonical_no_dispatch_proof(attempt))
+            self.assertFalse(_unresolved_flow_entry(entry))
+
+    def test_persisted_pre_boundary_poll_overflow_reopens_without_live_reconciliation(self):
+        with tempfile.TemporaryDirectory() as root:
+            attempt = {
+                "attempt": 1,
+                "status": "AMBIGUOUS",
+                "failure_class": "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED",
+                "dispatch_confirmed": False,
+                "provider_execution_state": "NOT_STARTED",
+                "provider_job_id": None,
+                "durable_dispatch_identity": None,
+                "provider_lineage_card_id": None,
+                "attributed_provider_identity": None,
+                "attribution_state": None,
+                "provider_settings": {
+                    "provider_poll_evidence_complete": False,
+                    "provider_poll_terminal_state": "NOT_ATTEMPTED",
+                },
+            }
+            runtime, config, paths = self._project(root, entry_status="AMBIGUOUS", attempt=attempt)
+
+            class LiveReconciliationForbidden:
+                def reconcile(self, *_args):
+                    raise AssertionError("pre-boundary recovery must remain local")
+
+            result = execute_generation(
+                runtime.root, config.project_id,
+                executor=FlowExecutor(
+                    FlowCapabilities(True, True, True, True, True, True),
+                    LiveReconciliationForbidden(),
+                ),
                 execute=True, request_ids=set(),
             )
             entry = self._entry(paths)

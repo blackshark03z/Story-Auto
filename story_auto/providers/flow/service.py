@@ -559,6 +559,72 @@ def canonical_no_dispatch_proof(attempt: dict) -> bool:
     return _proven_safe_pre_dispatch_attempt(attempt) or _verified_historical_no_dispatch_attempt(attempt)
 
 
+def _materialize_persisted_pre_dispatch_proof(attempt: dict, *, proof: str) -> bool:
+    """Project the coordinator's unentered provider boundary into canonical proof."""
+    if not isinstance(attempt, dict):
+        return False
+    if (attempt.get("provider_execution_state") != "NOT_STARTED"
+            or attempt.get("provider_boundary_entered_at") is not None
+            or attempt.get("dispatch_confirmed") is not False
+            or attempt.get("provider_submission_recorded") is True):
+        return False
+    if any(attempt.get(key) is not None for key in (
+        "provider_job_id", "durable_dispatch_identity", "provider_lineage_card_id",
+        "attributed_provider_identity",
+    )):
+        return False
+    if attempt.get("attribution_state") not in {None, "NOT_ATTEMPTED"}:
+        return False
+    settings = attempt.get("provider_settings")
+    if settings is not None and not isinstance(settings, dict):
+        return False
+    settings = dict(settings or {})
+    activation = settings.get("activation")
+    if activation is not None and (
+            not isinstance(activation, dict) or activation.get("input_dispatched") is not False):
+        return False
+    if any(settings.get(key) is not None for key in (
+        "provider_job_id", "durable_dispatch_identity", "provider_lineage_card_id",
+        "attributed_provider_identity", "dispatch_confirmation_signal",
+    )):
+        return False
+    if settings.get("dispatch_confirmation_state") not in {None, "NOT_CONFIRMED", "PRE_DISPATCH_FAILURE"}:
+        return False
+    if settings.get("dispatch_signal_state") not in {None, "NONE"}:
+        return False
+    if settings.get("attribution_state") not in {None, "NOT_ATTEMPTED"}:
+        return False
+    if settings.get("provider_poll_terminal_state") not in {None, "NOT_ATTEMPTED"}:
+        return False
+    snapshot = settings.get("provider_poll_evidence")
+    if snapshot is not None:
+        if not isinstance(snapshot, dict):
+            return False
+        try:
+            from .live import ProviderPollEvidenceTimeline
+            verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+        except (FlowError, ValueError, TypeError):
+            return False
+        for observation in verified.get("observations", []):
+            if (observation.get("phase") not in {"PRE_DISPATCH_DISCOVERY", "PRE_DISPATCH_BASELINE"}
+                    or observation.get("input_dispatched") is not False
+                    or observation.get("dispatch_evidence_state") != "NOT_CONFIRMED"
+                    or observation.get("dispatch_signal_state") != "NONE"
+                    or observation.get("attribution_evidence_state") != "NOT_ATTEMPTED"
+                    or observation.get("durable_dispatch_identity") is not None
+                    or observation.get("lineage_card_id") is not None):
+                return False
+    settings["activation"] = {"input_dispatched": False, "proof": proof}
+    settings["dispatch_confirmation_state"] = "PRE_DISPATCH_FAILURE"
+    settings["attribution_state"] = "NOT_ATTEMPTED"
+    attempt.update({
+        "provider_settings": settings,
+        "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+        "attribution_state": "NOT_ATTEMPTED",
+    })
+    return canonical_no_dispatch_proof(attempt)
+
+
 def _produce_crash_before_provider_setup_proof(attempt: dict) -> bool:
     """Persist the current-schema proof only before the provider boundary.
 
@@ -583,15 +649,9 @@ def _produce_crash_before_provider_setup_proof(attempt: dict) -> bool:
         return False
     if attempt.get("attribution_state") not in {None, "NOT_ATTEMPTED"}:
         return False
-    attempt.update({
-        "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
-        "attribution_state": "NOT_ATTEMPTED",
-        "provider_settings": {"activation": {
-            "input_dispatched": False,
-            "proof": "PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP",
-        }},
-    })
-    return canonical_no_dispatch_proof(attempt)
+    return _materialize_persisted_pre_dispatch_proof(
+        attempt, proof="PROCESS_INTERRUPTED_BEFORE_PROVIDER_SETUP",
+    )
 
 
 def _provider_generation_retry_authorized(entry: dict | None) -> bool:
@@ -5951,6 +6011,33 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
             and terminal_log[-1].get("authoritative") is True):
         return True, None, 0
 
+    # The coordinator persists NOT_STARTED before entering the adapter and
+    # synchronously replaces it immediately before Generate.  If that marker
+    # remains intact and no contradictory provider identity exists, recovery
+    # is local: no Flow inspection or asset attachment is needed.
+    if _materialize_persisted_pre_dispatch_proof(
+            attempt, proof="PERSISTED_PROVIDER_BOUNDARY_NOT_ENTERED"):
+        event = {
+            "at": _now(), "state": "PROVEN_PRE_DISPATCH_FAILURE",
+            "evidence": {
+                "input_dispatched": False,
+                "reason": "PERSISTED_PROVIDER_BOUNDARY_NOT_ENTERED",
+                "canonical_no_dispatch_proof": True,
+            },
+        }
+        attempt.setdefault("reconciliation_events", []).append(event)
+        attempt.update({
+            "status": "NOT_DISPATCHED",
+            "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+            "completed_at": event["at"],
+        })
+        entry.update({
+            "status": "NOT_DISPATCHED",
+            "failure_class": "FLOW_RECONCILED_PRE_DISPATCH_FAILURE",
+            "updated_at": event["at"],
+        })
+        return True, None, 1
+
     # This is the persisted positive proof that the provider boundary was
     # never crossed.  It is already the sole authorization consumed by the
     # RecoveryExecutionGate below, so reconciliation must release it to that
@@ -6348,11 +6435,14 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 attempt["dispatch_confirmed"] = bool(getattr(executor.generate, "dispatch_confirmed", attempt.get("dispatch_confirmed", False)))
                 _record_attempt_provider_state(attempt, executor.generate)
                 _append_terminal_observations(request, attempt, executor.generate)
+                _materialize_persisted_pre_dispatch_proof(
+                    attempt, proof="PERSISTED_PROVIDER_BOUNDARY_NOT_ENTERED",
+                )
                 safe_pre_dispatch_candidate = error.failure_class in {
                     "FLOW_NOT_DISPATCHED", "FLOW_PRE_DISPATCH_ACTIVATION_FAILED",
                     "OUTPUT_ATTRIBUTION_NOT_QUIESCENT", "FLOW_REFERENCE_UPLOAD_FAILED",
                 }
-                if safe_pre_dispatch_candidate and canonical_no_dispatch_proof(attempt):
+                if canonical_no_dispatch_proof(attempt):
                     state = "NOT_DISPATCHED"
                 elif safe_pre_dispatch_candidate or error.failure_class in UNRESOLVED_FLOW_FAILURES:
                     # Error labels and a missing job ID are not dispatch proof.
