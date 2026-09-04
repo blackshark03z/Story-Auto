@@ -30,9 +30,16 @@ class ProductionQueries:
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
             required = {"pipeline_status", "active_stage", "stages", "quality", "planning", "recovery", "visual_asset_evidence", "next_action", "final_output"}
+            deadline = existing.get("recovery", {}).get("stuck_pending_at") if isinstance(existing, dict) and isinstance(existing.get("recovery"), dict) else None
+            deadline_crossed = False
+            if isinstance(deadline, str) and existing.get("pipeline_status") != "STUCK_PENDING":
+                try:
+                    deadline_crossed = datetime.now(timezone.utc) >= datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                except ValueError:
+                    deadline_crossed = True
             if (isinstance(existing,dict) and existing.get("schema_version") == PRODUCTION_STATE_SCHEMA_VERSION
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint
-                    and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
+                    and not deadline_crossed and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
                 return self._with_flow_summary(project_id, config, existing)
         except Exception:
             pass

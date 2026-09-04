@@ -6,7 +6,7 @@ the revision they intend to use, while provider attempts snapshot that reference
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -191,9 +191,26 @@ class FlowConnectionService:
 
     def connection_for_project(self, project_id: str, *, required_capabilities: Iterable[str] | None = None) -> tuple[FlowConnection | None, dict[str, Any]]:
         paths, config = load_project(self.runtime, project_id)
+        from .project_binding import managed_binding, canonical_project
+        managed = managed_binding(config)
         binding = config.settings.get("flow_binding") if isinstance(config.settings, dict) else None
         expected = self._project_reference(config)
         current = self.get_current_connection()
+        if managed is not None:
+            if managed.get("state") != "BOUND":
+                code = ("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED"
+                        if managed.get("activation_state") == "STARTED" else "FLOW_PROJECT_SETUP_REQUIRED")
+                return None, {**self.get_connection_status(required_capabilities=required_capabilities),
+                              "status":"PROJECT_SETUP_REQUIRED", "code":code,
+                              "message":"Story Auto must finish creating this project's Flow project before media can be created.",
+                              "project_url":managed.get("project_url"), "project_identity":managed.get("project_identity")}
+            if current is None:
+                return None, {**self.get_connection_status(required_capabilities=required_capabilities),
+                              "status":"NOT_CONFIGURED", "code":"FLOW_NOT_CONFIGURED"}
+            exact = canonical_project(managed)
+            composed = replace(current, project_url=exact["project_url"], project_identity=exact["project_identity"])
+            status = self.get_connection_status(required_capabilities=required_capabilities)
+            return composed, {**status, "project_url":exact["project_url"], "project_identity":exact["project_identity"]}
         if isinstance(binding, dict):
             if current is None or binding.get("connection_id") != current.connection_id:
                 return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"STALE", "code":"FLOW_CONNECTION_STALE", "message":"Flow connection needs confirmation before this project can create media."}

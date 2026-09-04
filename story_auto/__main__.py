@@ -83,7 +83,7 @@ def main() -> int:
     ui.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
     try:
-        app = OperatorService(Path(args.runtime_root))
+        app = OperatorService(Path(args.runtime_root), auto_flow_projects=True)
         if args.command == "ui":
             from .ui import serve
             serve(Path(args.runtime_root),args.host,args.port); return 0

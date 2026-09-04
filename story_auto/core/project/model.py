@@ -125,6 +125,34 @@ class ProjectConfig:
                     or not isinstance(project_binding["project_identity"], str) or not project_binding["project_identity"].strip()
                     or not isinstance(project_binding["project_url"], str) or not project_binding["project_url"].strip()):
                 raise ProjectValidationError("settings.flow_project_binding must retain the expected Flow project")
+        provider_binding = self.settings.get("provider_binding")
+        if provider_binding is not None:
+            if not isinstance(provider_binding, dict) or set(provider_binding) != {"flow"}:
+                raise ProjectValidationError("settings.provider_binding must contain only flow")
+            flow = provider_binding.get("flow")
+            required = {"state", "project_url", "project_identity", "created_for_story_project_id",
+                        "project_name", "activation_state", "created_at"}
+            optional = {"activation_started_at", "created_at_provider", "bound_at"}
+            if (not isinstance(flow, dict) or not required.issubset(flow)
+                    or not set(flow).issubset(required | optional)
+                    or flow.get("state") not in {"CREATE_INTENT", "CREATED", "BOUND"}
+                    or flow.get("activation_state") not in {"NOT_ATTEMPTED", "STARTED"}
+                    or flow.get("created_for_story_project_id") != self.project_id
+                    or not isinstance(flow.get("project_name"), str) or not flow["project_name"].strip()
+                    or not isinstance(flow.get("created_at"), str) or not flow["created_at"].strip()):
+                raise ProjectValidationError("settings.provider_binding.flow is invalid")
+            if flow["state"] in {"CREATED", "BOUND"}:
+                if (not isinstance(flow.get("project_url"), str) or not flow["project_url"].strip()
+                        or not isinstance(flow.get("project_identity"), str) or not flow["project_identity"].strip()):
+                    raise ProjectValidationError("settings.provider_binding.flow created project is incomplete")
+            elif flow.get("project_url") is not None or flow.get("project_identity") is not None:
+                raise ProjectValidationError("settings.provider_binding.flow intent cannot claim a project")
+        recovery = self.settings.get("provider_recovery")
+        if recovery is not None:
+            seconds = recovery.get("stuck_pending_seconds") if isinstance(recovery, dict) else None
+            if (not isinstance(recovery, dict) or set(recovery) != {"stuck_pending_seconds"}
+                    or isinstance(seconds, bool) or not isinstance(seconds, int) or not 300 <= seconds <= 86400):
+                raise ProjectValidationError("settings.provider_recovery.stuck_pending_seconds must be 300..86400")
 
     def to_dict(self) -> dict[str, Any]:
         return {"schema_version": self.schema_version, "project_id": self.project_id,

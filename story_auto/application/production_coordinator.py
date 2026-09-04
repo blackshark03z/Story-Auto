@@ -101,9 +101,9 @@ class ProductionCoordinator:
                     code = getattr(error, "failure_class", type(error).__name__)
                     return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
                                         error=str(error), reason_code=code)
-            if state["pipeline_status"] in {"RUNNING", "RECOVERING", "RECOVERY_READY", "NEEDS_ATTENTION", "BLOCKED",
+            if state["pipeline_status"] in {"RUNNING", "RECOVERING", "RECOVERY_READY", "NEEDS_ATTENTION", "STUCK_PENDING", "BLOCKED",
                                             "OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
-                if state["pipeline_status"] in {"RUNNING", "RECOVERING", "NEEDS_ATTENTION", "BLOCKED"}:
+                if state["pipeline_status"] in {"RUNNING", "RECOVERING", "NEEDS_ATTENTION", "STUCK_PENDING", "BLOCKED"}:
                     return self._result(project_id, run_id, state["pipeline_status"], invoked, state)
                 if state["pipeline_status"] != "RECOVERY_READY":
                     return self._result(project_id, run_id, state["pipeline_status"], invoked, state)

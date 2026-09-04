@@ -25,8 +25,45 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.5"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.6"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
+DEFAULT_STUCK_PENDING_SECONDS = 900
+
+
+def _instant(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def stuck_pending_evidence(entry: dict[str, Any], *, now: datetime, threshold_seconds: int) -> dict[str, Any]:
+    attempts = entry.get("attempts") if isinstance(entry, dict) else None
+    latest = attempts[-1] if isinstance(attempts, list) and attempts and isinstance(attempts[-1], dict) else None
+    if not isinstance(latest, dict) or latest.get("terminal_evidence"):
+        return {"eligible": False, "stuck": False, "deadline": None}
+    settings = latest.get("provider_settings") if isinstance(latest.get("provider_settings"), dict) else {}
+    binding = settings.get("provider_poll_authoritative_binding")
+    lineage = latest.get("provider_lineage_card_id")
+    eligible = (
+        latest.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"
+        and latest.get("provider_submission_recorded") is True
+        and latest.get("dispatch_confirmed") is True
+        and isinstance(lineage, str) and bool(lineage)
+        and isinstance(binding, dict)
+        and binding.get("resulting_dispatch_state") == "CONFIRMED"
+        and binding.get("resulting_attribution_state") == "WAITING"
+        and binding.get("durable_identity_used") == "card:" + lineage
+    )
+    started = _instant(latest.get("provider_boundary_entered_at"))
+    if not eligible or started is None:
+        return {"eligible": False, "stuck": False, "deadline": None}
+    deadline = started.timestamp() + threshold_seconds
+    return {"eligible": True, "stuck": now.timestamp() >= deadline,
+            "deadline": datetime.fromtimestamp(deadline, tz=timezone.utc).isoformat().replace("+00:00", "Z")}
 
 
 def _now() -> str:
@@ -76,6 +113,9 @@ class ProductionStateReconciler:
         "output/generation_manifest.json", "output/review_state.json", "output/render_plan.json",
         "output/final_manifest.json", "output/final.mp4", "output/execution_control.json",
     )
+
+    def __init__(self, *, clock=None):
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
 
     @staticmethod
     def state_path(paths) -> Path:
@@ -130,8 +170,12 @@ class ProductionStateReconciler:
             and self._selected_asset_usable(paths, entry)
             for entry in required_entries
         )
+        recovery_settings = config.settings.get("provider_recovery", {}) if isinstance(config.settings, dict) else {}
+        threshold = recovery_settings.get("stuck_pending_seconds", DEFAULT_STUCK_PENDING_SECONDS) if isinstance(recovery_settings, dict) else DEFAULT_STUCK_PENDING_SECONDS
+        if isinstance(threshold, bool) or not isinstance(threshold, int) or not 300 <= threshold <= 86400:
+            threshold = DEFAULT_STUCK_PENDING_SECONDS
         recovery = self._visual_recovery(paths, requests, manifest, entries, recovery_request_ids, generated_for_quality,
-                                         active_project_operation=active_project_operation)
+                                         active_project_operation=active_project_operation, threshold_seconds=threshold)
         qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
         quality = {
             "status": "NOT_STARTED", "policy": qc_policy, "policy_explicit": qc_policy_explicit,
@@ -222,7 +266,7 @@ class ProductionStateReconciler:
         elif recovery["status"] == "BLOCKED":
             blocker = self._blocker(recovery["reason_code"], recovery["human_message"], recovery["next_action"], True,
                                     recovery["requires_owner_decision"], "VISUALS")
-        elif recovery["status"] == "NEEDS_ATTENTION":
+        elif recovery["status"] in {"NEEDS_ATTENTION", "STUCK_PENDING"}:
             blocker = self._blocker(recovery["reason_code"], recovery["human_message"], recovery["next_action"], True,
                                     True, "VISUALS")
         elif any(status == "AUTH_REQUIRED" for status in statuses):
@@ -244,7 +288,7 @@ class ProductionStateReconciler:
                         "next_action": "Open final video"}
         elif blocker:
             canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
-            pipeline_status = recovery["status"] if blocker.get("stage") == "VISUALS" and recovery["status"] in {"BLOCKED", "NEEDS_ATTENTION"} else blocker["reason_code"]
+            pipeline_status = recovery["status"] if blocker.get("stage") == "VISUALS" and recovery["status"] in {"BLOCKED", "NEEDS_ATTENTION", "STUCK_PENDING"} else blocker["reason_code"]
             active_stage, next_action = blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
         else:
             active_stage = self._first_incomplete(stages)
@@ -301,7 +345,8 @@ class ProductionStateReconciler:
         return cls._selected_asset_present(paths, entry)
 
     def _visual_recovery(self, paths, requests: dict[str, Any], manifest: dict[str, Any], entries: dict[str, dict[str, Any]],
-                         request_ids: set[str], generated_for_quality: bool, *, active_project_operation: bool) -> dict[str, Any]:
+                         request_ids: set[str], generated_for_quality: bool, *, active_project_operation: bool,
+                         threshold_seconds: int = DEFAULT_STUCK_PENDING_SECONDS) -> dict[str, Any]:
         """Project Slice 1-3 evidence without creating a second dispatch path."""
         base = {
             "status": "READY", "reason_code": "NO_VISUAL_RECOVERY_REQUIRED", "human_message": None,
@@ -339,6 +384,20 @@ class ProductionStateReconciler:
                     return {**base, "status": "RUNNING", "reason_code": "LIVE_PROJECT_OPERATION",
                             "human_message": "A confirmed Flow generation is currently executing.",
                             "affected_request_id": request_id, "next_action": "Continue production"}
+
+        pending_deadlines = {}
+        for request_id in request_ids:
+            entry = entries.get(request_id)
+            pending = stuck_pending_evidence(entry, now=self.clock(), threshold_seconds=threshold_seconds)
+            if pending["eligible"]:
+                pending_deadlines[request_id] = pending["deadline"]
+            if pending["eligible"] and pending["stuck"]:
+                return {**base, "status":"STUCK_PENDING", "reason_code":"STUCK_PENDING",
+                        "human_message":"Flow generation appears stuck. Provider job has remained pending beyond Story Auto's normal operational window. Automatic continuation is blocked.",
+                        "affected_request_id":request_id, "requires_owner_decision":True,
+                        "automatic_recovery_available":False, "provider_dispatches_per_continue":0,
+                        "next_action":"Recheck status", "stuck_pending_at":pending["deadline"],
+                        "threshold_seconds":threshold_seconds}
 
         # These deterministic environment outcomes never authorize a Flow
         # call, regardless of a stale attempt status elsewhere in the manifest.
@@ -410,7 +469,8 @@ class ProductionStateReconciler:
             if decision.action is RecoveryAction.RESUME_POLLING:
                 return {**base, "status": "RUNNING", "reason_code": decision.reason_code.value,
                         "human_message": "A confirmed Flow generation is still active.", "affected_request_id": request_id,
-                        "next_action": "Continue production"}
+                        "next_action": "Continue production", "stuck_pending_at": pending_deadlines.get(request_id),
+                        "threshold_seconds": threshold_seconds}
         for request_id, decision in decisions:
             if decision.safe_to_dispatch or decision.action in {RecoveryAction.WAIT_AND_RETRY, RecoveryAction.REACQUIRE,
                                                                  RecoveryAction.REVALIDATE, RecoveryAction.REPOSTPROCESS}:

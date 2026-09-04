@@ -98,6 +98,9 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="pause": result=self.service.set_pause(project_id,True)
             elif action=="resume_generation": result=self.service.generate(project_id,max_requests=body.get("max_requests"))
             elif action=="open_flow_sign_in": result=self.service.open_flow_sign_in(project_id)
+            elif action=="open_flow_project": result=self.service.open_flow_project(project_id)
+            elif action=="ensure_flow_project": result=self.service.ensure_flow_project(project_id)
+            elif action=="recheck_flow_generation": result=self.service.recheck_flow_generation(project_id)
             elif action=="flow_status": result=self.service.flow_status(project_id)
             elif action=="prepare_flow_recovery": result=self.service.prepare_flow_recovery(project_id)
             elif action=="validate_flow_connection": result=self.service.validate_flow_connection(project_id,body.get("project_url"))
@@ -129,7 +132,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
 
 def create_server(runtime_root: Path | str, host: str="127.0.0.1", port: int=8765) -> ThreadingHTTPServer:
     if host not in {"127.0.0.1","localhost","::1"}: raise ValueError("operator UI must bind to loopback")
-    service=OperatorService(runtime_root)
+    service=OperatorService(runtime_root, auto_flow_projects=True)
     handler=type("BoundOperatorHandler",(OperatorHandler,),{"service":service})
     return ThreadingHTTPServer((host,port),handler)
 

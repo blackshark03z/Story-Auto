@@ -18,6 +18,7 @@ _MESSAGES = {
     "STALE": "Flow connection needs confirmation",
     "PROJECT_MISMATCH": "Open the correct Flow project to continue",
     "CAPABILITY_MISSING": "This Flow project cannot create the required media",
+    "PROJECT_SETUP_REQUIRED": "Story Auto is setting up this video's Flow project",
 }
 
 _ACTIONS = {
@@ -27,6 +28,7 @@ _ACTIONS = {
     "STALE": {"action": "validate_flow_connection", "label": "Validate Flow connection"},
     "PROJECT_MISMATCH": {"action": "open_flow_sign_in", "label": "Open expected Flow project"},
     "CAPABILITY_MISSING": {"action": "settings", "label": "Review Flow project"},
+    "PROJECT_SETUP_REQUIRED": {"action": "ensure_flow_project", "label": "Finish Flow project setup"},
 }
 
 

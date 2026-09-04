@@ -35,9 +35,11 @@ from story_auto.providers.flow import (
 )
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
                                                 accept_pending_visuals_by_owner, accept_selected_assets_by_owner, apply_auto_accept_policy, reopen_false_positive_production_qc, review_production_asset,
-                                               supersede_ambiguous_request)
+                                               supersede_ambiguous_request, reconcile_unresolved_flow_attempt)
 from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
+from story_auto.providers.flow.project_binding import (FlowProjectBindingError, FlowProjectBindingService,
+                                                        LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
 
 
@@ -242,9 +244,12 @@ def _identity(value: dict[str, Any], prefix: str = "req_ui_") -> str:
 class OperatorService:
     """The single mutation surface used by both HTTP handlers and CLI additions."""
 
-    def __init__(self, runtime_root: Path | str):
+    def __init__(self, runtime_root: Path | str, *, auto_flow_projects: bool = False, flow_projects=None):
         self.runtime=RuntimeLayout.from_root(runtime_root).ensure()
         self.flow_connections=FlowConnectionService(self.runtime)
+        self.flow_project_bindings=FlowProjectBindingService(self.runtime, self.flow_connections)
+        self.flow_projects=flow_projects if flow_projects is not None else (LiveFlowProjects(self.runtime) if auto_flow_projects else None)
+        self.auto_flow_projects=auto_flow_projects or flow_projects is not None
         self.production_queries=ProductionQueries(self.runtime, self.flow_connections)
         self.runtime_defaults=RuntimeDefaults(self.runtime, lambda voice_id: _creation_settings({}, voice_id))
 
@@ -387,7 +392,11 @@ class OperatorService:
         if source_mode=="EXISTING_AUDIO" and not content:
             raise OperatorServiceError("EXISTING_AUDIO_TEXT_REQUIRED")
         connection=self.flow_connections.get_current_connection()
-        if connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
+        if self.auto_flow_projects and mode!="RENDER_ONLY":
+            resolved_settings=managed_flow_settings(resolved_settings,ident)
+        elif connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
+            # Compatibility for callers that explicitly use the legacy
+            # application mode.  The normal UI/CLI enables managed projects.
             resolved_settings["flow_binding"]={"connection_id":connection.connection_id,"connection_revision":connection.revision}
             resolved_settings["flow_project_binding"]={"project_identity":connection.project_identity,"project_url":connection.project_url}
         paths=create_project(self.runtime,ProjectConfig(ident,render_mode=effective_render_mode,settings=resolved_settings),content or "# Story\n\n## Narration\n\nWrite narration here.\n")
@@ -424,6 +433,13 @@ class OperatorService:
                     if temporary_dir.exists(): temporary_dir.rmdir()
             except Exception:
                 raise
+        if self.auto_flow_projects and mode!="RENDER_ONLY" and connection is not None:
+            try:
+                self.flow_project_bindings.ensure(ident,self.flow_projects)
+            except FlowProjectBindingError:
+                # The Story Auto project and its pre-activation intent remain
+                # durable.  The project page exposes the fail-closed recovery.
+                pass
         return self.snapshot(paths.project_id)
 
     def _project(self, project_id: str): return load_project(self.runtime,project_id)
@@ -855,7 +871,11 @@ class OperatorService:
 
     def open_flow_sign_in(self, project_id: str) -> dict[str, str]:
         _paths, config = self._project(project_id)
-        reference = config.settings.get("flow_project_binding", {}) if isinstance(config.settings, dict) else {}
+        managed = managed_binding(config)
+        if managed is not None and managed.get("state") == "BOUND":
+            reference = managed
+        else:
+            reference = config.settings.get("flow_project_binding", {}) if isinstance(config.settings, dict) else {}
         if isinstance(reference, dict) and isinstance(reference.get("project_url"), str) and isinstance(reference.get("project_identity"), str):
             runtime = FlowRuntime(self.runtime.flow_profile, "http://127.0.0.1:9222", reference["project_url"], reference["project_identity"])
         else:
@@ -864,6 +884,42 @@ class OperatorService:
             runtime = self.flow_connections.runtime_for_connection(connection)
         launch_dedicated_session(runtime)
         return {"status":"OPENED","message":"Complete Google sign-in in the Story Auto Flow window, then return and try again."}
+
+    def open_flow_project(self, project_id: str) -> dict[str, str]:
+        _paths, config = self._project(project_id)
+        binding = managed_binding(config)
+        if binding is not None:
+            if binding.get("state") != "BOUND":
+                raise FlowProjectBindingError("FLOW_PROJECT_SETUP_REQUIRED")
+            if self.flow_projects is None:
+                raise FlowProjectBindingError("FLOW_PROJECT_AUTOMATION_UNAVAILABLE")
+            self.flow_project_bindings.ensure(project_id, self.flow_projects)
+            return {"status":"OPENED", "message":"Opened this video's exact Flow project."}
+        return self.open_flow_sign_in(project_id)
+
+    def ensure_flow_project(self, project_id: str) -> dict[str, Any]:
+        _paths, config = self._project(project_id)
+        if managed_binding(config) is None:
+            return self.flow_status(project_id)
+        if self.flow_projects is None:
+            raise FlowProjectBindingError("FLOW_PROJECT_AUTOMATION_UNAVAILABLE")
+        self.flow_project_bindings.ensure(project_id, self.flow_projects)
+        return self.project_workspace(project_id)
+
+    def recheck_flow_generation(self, project_id: str) -> dict[str, Any]:
+        state = self.production_query(project_id)
+        recovery = state.get("recovery") if isinstance(state.get("recovery"), dict) else {}
+        request_id = recovery.get("affected_request_id")
+        if state.get("pipeline_status") != "STUCK_PENDING" or not isinstance(request_id, str):
+            raise OperatorServiceError("STUCK_PENDING_RECHECK_NOT_AVAILABLE")
+        connection, status = self.flow_connections.connection_for_project(project_id, required_capabilities=["IMAGE"])
+        if connection is None or status.get("status") != "CONNECTED":
+            raise FlowConnectionError(status.get("code", "FLOW_NOT_CONFIGURED"))
+        runtime = self.flow_connections.runtime_for_connection(connection)
+        capabilities = preflight(runtime, FlowInspector(runtime))
+        executor = FlowExecutor(capabilities, LiveFlowGenerator(runtime))
+        result = reconcile_unresolved_flow_attempt(self.runtime.root, project_id, request_id, executor=executor)
+        return {"recheck": result, "production": self.production_query(project_id)}
 
     def _flow_capabilities_for_project(self, project_id: str, request_ids: set[str] | None = None) -> list[str]:
         paths, config = self._project(project_id)
@@ -1056,6 +1112,10 @@ class OperatorService:
         _,config=self._project(project_id)
         self._require_available_render_mode(config)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
+        if managed_binding(config) is not None:
+            if self.flow_projects is None:
+                raise FlowProjectBindingError("FLOW_PROJECT_AUTOMATION_UNAVAILABLE")
+            self.flow_project_bindings.ensure(project_id,self.flow_projects)
         self.set_pause(project_id,False)
         connection,status=self.flow_connections.connection_for_project(
             project_id, required_capabilities=self._flow_capabilities_for_project(project_id, request_ids))
