@@ -219,20 +219,25 @@ def _now(): return datetime.now(timezone.utc).isoformat()
 
 
 def _persisted_provider_settings(settings: Any) -> Any:
-    """Retain the canonical poll snapshot once when writing an attempt.
+    """Keep detailed poll evidence external and the attempt operationally small.
 
     ``FlowLiveGenerator.last_settings`` deliberately exposes convenient
     projections of a poll snapshot to the live execution path.  Persisting
     those projections alongside the snapshot multiplied a single immutable
-    evidence record in every completed attempt.  The snapshot is the
-    canonical, hash-verified evidence; its timeline and decision bindings are
-    deterministically recoverable from it.  Keep the live projections in
-    memory, but omit only their redundant persisted aliases.
+    evidence record in every completed attempt.  Once a content-addressed
+    external reference exists, the manifest retains only that reference and
+    compact decision summaries.  Fixtures and legacy attempts without a
+    verified external reference keep their embedded snapshot fail-closed.
     """
     if not isinstance(settings, dict):
         return settings
     persisted = copy.deepcopy(settings)
-    if isinstance(persisted.get("provider_poll_evidence"), dict):
+    evidence_ref = persisted.get("provider_poll_evidence_ref")
+    if isinstance(evidence_ref, dict) and isinstance(evidence_ref.get("sha256"), str):
+        persisted.pop("provider_poll_evidence", None)
+        persisted.pop("provider_poll_decision_bindings", None)
+        persisted.pop("provider_poll_timeline", None)
+    elif isinstance(persisted.get("provider_poll_evidence"), dict):
         persisted.pop("provider_poll_decision_bindings", None)
         persisted.pop("provider_poll_timeline", None)
     return persisted
@@ -271,6 +276,7 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "candidate_observed_poll_sequence": settings.get("candidate_observed_poll_sequence"),
         "attribution_confirmation_timestamp": settings.get("attribution_confirmation_timestamp"),
         "poll_evidence_version": settings.get("poll_evidence_version"),
+        "provider_poll_evidence_ref": settings.get("provider_poll_evidence_ref"),
         "provider_surface_extractor_version": settings.get("provider_surface_extractor_version"),
         "provider_poll_authoritative_binding": settings.get("provider_poll_authoritative_binding"),
         "provider_poll_max_observations": settings.get("provider_poll_max_observations"),
@@ -292,6 +298,249 @@ def _manifest(paths, project_id):
         if data.get("schema_version") != MANIFEST_VERSION or data.get("project_id") != project_id or not isinstance(data.get("requests"), list): raise ValueError()
         return path, data
     except Exception as error: raise FlowError("GENERATION_MANIFEST_INVALID") from error
+
+
+def _external_poll_evidence_path(paths, request_id: str, attempt: dict, reference: dict) -> Path:
+    if reference.get("path_scope") != "ATTEMPT_DIRECTORY":
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "unsupported evidence path scope")
+    name = reference.get("path")
+    if (not isinstance(name, str) or not name or Path(name).name != name
+            or "/" in name or "\\" in name):
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "invalid evidence artifact name")
+    number = attempt.get("attempt")
+    if not isinstance(number, int) or number < 1:
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "invalid attempt evidence identity")
+    return paths.artifact_path(
+        f"assets/attempts/{request_id}/attempt_{number:03d}/{name}"
+    )
+
+
+def _hydrate_attempt_external_poll_evidence(paths, request_id: str, attempt: dict) -> dict:
+    """Return an in-memory attempt whose external evidence is hash verified."""
+    hydrated = copy.deepcopy(attempt)
+    settings = hydrated.get("provider_settings")
+    if not isinstance(settings, dict) or isinstance(settings.get("provider_poll_evidence"), dict):
+        return hydrated
+    reference = settings.get("provider_poll_evidence_ref")
+    if not isinstance(reference, dict):
+        return hydrated
+    path = _external_poll_evidence_path(paths, request_id, hydrated, reference)
+    expected_sha = reference.get("sha256")
+    if (not path.is_file() or not isinstance(expected_sha, str)
+            or sha256_file(path) != expected_sha):
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "external evidence is missing or corrupt")
+    try:
+        from .live import ProviderPollEvidenceTimeline
+        snapshot = read_json(path)
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+    except Exception as error:
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "external evidence failed verification") from error
+    if (reference.get("schema_version") != snapshot.get("schema_version")
+            or reference.get("evidence_head_sha256") != snapshot.get("evidence_head_sha256")
+            or reference.get("timeline_sha256") != snapshot.get("timeline_sha256")
+            or reference.get("observation_count") != verified.get("observation_count")):
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "external evidence reference does not match")
+    settings["provider_poll_evidence"] = snapshot
+    return hydrated
+
+
+def _verified_embedded_poll_evidence_reference(paths, request_id: str, attempt: dict) -> dict | None:
+    settings = attempt.get("provider_settings")
+    snapshot = settings.get("provider_poll_evidence") if isinstance(settings, dict) else None
+    if not isinstance(snapshot, dict):
+        return None
+    number = attempt.get("attempt")
+    if not isinstance(number, int) or number < 1:
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "invalid embedded evidence attempt")
+    path = paths.artifact_path(
+        f"assets/attempts/{request_id}/attempt_{number:03d}/provider_poll_evidence.json"
+    )
+    if not path.is_file():
+        # Keep the embedded snapshot in the manifest when no independently
+        # durable artifact exists.
+        return None
+    from .live import POLL_EVIDENCE_VERSION, ProviderPollEvidenceTimeline
+    verified_embedded = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+    persisted = read_json(path)
+    verified_persisted = ProviderPollEvidenceTimeline.verify_snapshot(persisted)
+    if (verified_embedded.get("timeline_sha256") != verified_persisted.get("timeline_sha256")
+            or snapshot.get("evidence_head_sha256") != persisted.get("evidence_head_sha256")):
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "embedded evidence artifact differs")
+    return {
+        "schema_version": persisted.get("schema_version"),
+        "path_scope": "ATTEMPT_DIRECTORY",
+        "path": path.name,
+        "sha256": sha256_file(path),
+        "evidence_head_sha256": persisted.get("evidence_head_sha256"),
+        "timeline_sha256": persisted.get("timeline_sha256"),
+        "observation_count": persisted.get("observation_count"),
+        "terminal_state": persisted.get("terminal_state"),
+        "evidence_complete": persisted.get("evidence_complete"),
+        "legacy_embedded_externalized": persisted.get("schema_version") != POLL_EVIDENCE_VERSION,
+    }
+
+
+def _append_poll_evidence_history(attempt: dict, reference: dict | None) -> None:
+    if not isinstance(reference, dict):
+        return
+    history = attempt.setdefault("provider_poll_evidence_history", [])
+    if not isinstance(history, list):
+        raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "poll evidence history is malformed")
+    if not any(
+        isinstance(item, dict) and item.get("sha256") == reference.get("sha256")
+        for item in history
+    ):
+        history.append(copy.deepcopy(reference))
+
+
+def externalize_legacy_poll_evidence(runtime_root: Path | str, project_id: str) -> dict:
+    """Externalize only one project's verified embedded evidence.
+
+    Legacy source artifacts are read and hashed but never rewritten.  A compact
+    sidecar is generated, verified, and content-bound before its embedded copy
+    is removed from the operational manifest.
+    """
+    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        before_size = manifest_path.stat().st_size if manifest_path.is_file() else 0
+        prepared = []
+        prepared_history = []
+        from .live import POLL_EVIDENCE_VERSION, ProviderPollEvidenceTimeline
+
+        for entry in manifest.get("requests", []):
+            request_id = entry.get("request_id")
+            if not isinstance(request_id, str):
+                continue
+            for attempt in entry.get("attempts", []):
+                if not isinstance(attempt, dict):
+                    continue
+                settings = attempt.get("provider_settings")
+                if not isinstance(settings, dict):
+                    continue
+                embedded = settings.get("provider_poll_evidence")
+                if not isinstance(embedded, dict):
+                    number = attempt.get("attempt")
+                    current_reference = settings.get("provider_poll_evidence_ref")
+                    history = attempt.get("provider_poll_evidence_history", [])
+                    source_path = paths.artifact_path(
+                        f"assets/attempts/{request_id}/attempt_{number:03d}/provider_poll_evidence.json"
+                    ) if isinstance(number, int) and number > 0 else None
+                    source_already_bound = (
+                        isinstance(current_reference, dict)
+                        and current_reference.get("path") == "provider_poll_evidence.json"
+                    ) or any(
+                        isinstance(item, dict) and (
+                            item.get("path") == "provider_poll_evidence.json"
+                            or (isinstance(item.get("legacy_source"), dict)
+                                and item["legacy_source"].get("path") == "provider_poll_evidence.json")
+                        )
+                        for item in (history if isinstance(history, list) else [])
+                    )
+                    if source_path is None or not source_path.is_file() or source_already_bound:
+                        continue
+                    source_sha = sha256_file(source_path)
+                    source_snapshot = read_json(source_path)
+                    ProviderPollEvidenceTimeline.verify_snapshot(source_snapshot)
+                    compact_path = source_path
+                    compact_snapshot = source_snapshot
+                    if source_snapshot.get("schema_version") != POLL_EVIDENCE_VERSION:
+                        compact_path = source_path.with_name("provider_poll_evidence.compact.json")
+                        compact_snapshot = ProviderPollEvidenceTimeline.compact_legacy_snapshot(source_snapshot)
+                        atomic_write_json(compact_path, compact_snapshot)
+                    ProviderPollEvidenceTimeline.verify_snapshot(read_json(compact_path))
+                    history_reference = {
+                        "schema_version": compact_snapshot["schema_version"],
+                        "path_scope": "ATTEMPT_DIRECTORY",
+                        "path": compact_path.name,
+                        "sha256": sha256_file(compact_path),
+                        "evidence_head_sha256": compact_snapshot["evidence_head_sha256"],
+                        "timeline_sha256": compact_snapshot["timeline_sha256"],
+                        "observation_count": compact_snapshot["observation_count"],
+                        "terminal_state": compact_snapshot.get("terminal_state"),
+                        "evidence_complete": compact_snapshot.get("evidence_complete"),
+                    }
+                    if compact_path != source_path:
+                        history_reference["legacy_source"] = {
+                            "schema_version": source_snapshot.get("schema_version"),
+                            "path_scope": "ATTEMPT_DIRECTORY",
+                            "path": source_path.name,
+                            "sha256": source_sha,
+                            "evidence_head_sha256": source_snapshot.get("evidence_head_sha256"),
+                        }
+                    prepared_history.append((attempt, history_reference, source_path, source_sha))
+                    continue
+                verified_embedded = ProviderPollEvidenceTimeline.verify_snapshot(embedded)
+                number = attempt.get("attempt")
+                if not isinstance(number, int) or number < 1:
+                    raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "invalid legacy attempt identity")
+                source_path = paths.artifact_path(
+                    f"assets/attempts/{request_id}/attempt_{number:03d}/provider_poll_evidence.json"
+                )
+                if not source_path.is_file():
+                    raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "legacy evidence artifact is missing")
+                source_sha = sha256_file(source_path)
+                source_snapshot = read_json(source_path)
+                verified_source = ProviderPollEvidenceTimeline.verify_snapshot(source_snapshot)
+                if (verified_source.get("timeline_sha256") != verified_embedded.get("timeline_sha256")
+                        or source_snapshot.get("evidence_head_sha256") != embedded.get("evidence_head_sha256")):
+                    raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "embedded and external legacy evidence differ")
+
+                if source_snapshot.get("schema_version") == POLL_EVIDENCE_VERSION:
+                    compact_path = source_path
+                    compact_snapshot = source_snapshot
+                else:
+                    compact_path = source_path.with_name("provider_poll_evidence.compact.json")
+                    compact_snapshot = ProviderPollEvidenceTimeline.compact_legacy_snapshot(source_snapshot)
+                    atomic_write_json(compact_path, compact_snapshot)
+                ProviderPollEvidenceTimeline.verify_snapshot(read_json(compact_path))
+                if sha256_file(source_path) != source_sha:
+                    raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "legacy evidence source changed")
+                reference = {
+                    "schema_version": compact_snapshot["schema_version"],
+                    "path_scope": "ATTEMPT_DIRECTORY",
+                    "path": compact_path.name,
+                    "sha256": sha256_file(compact_path),
+                    "evidence_head_sha256": compact_snapshot["evidence_head_sha256"],
+                    "timeline_sha256": compact_snapshot["timeline_sha256"],
+                    "observation_count": compact_snapshot["observation_count"],
+                    "terminal_state": compact_snapshot.get("terminal_state"),
+                    "evidence_complete": compact_snapshot.get("evidence_complete"),
+                    "dispatch_state": attempt.get("dispatch_confirmation_state"),
+                    "attribution_state": attempt.get("attribution_state"),
+                }
+                if compact_path != source_path:
+                    reference["legacy_source"] = {
+                        "schema_version": source_snapshot.get("schema_version"),
+                        "path_scope": "ATTEMPT_DIRECTORY",
+                        "path": source_path.name,
+                        "sha256": source_sha,
+                        "evidence_head_sha256": source_snapshot.get("evidence_head_sha256"),
+                    }
+                prepared.append((attempt, settings, reference, source_path, source_sha))
+
+        for attempt, settings, reference, source_path, source_sha in prepared:
+            settings["provider_poll_evidence_ref"] = reference
+            settings.pop("provider_poll_evidence", None)
+            settings.pop("provider_poll_timeline", None)
+            settings.pop("provider_poll_decision_bindings", None)
+            attempt["provider_poll_evidence_ref"] = copy.deepcopy(reference)
+            if sha256_file(source_path) != source_sha:
+                raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "legacy evidence source changed")
+        for attempt, reference, source_path, source_sha in prepared_history:
+            _append_poll_evidence_history(attempt, reference)
+            if sha256_file(source_path) != source_sha:
+                raise FlowError("FLOW_POLL_EVIDENCE_INVALID", "legacy evidence source changed")
+        if prepared or prepared_history:
+            atomic_write_json(manifest_path, manifest)
+        after_size = manifest_path.stat().st_size if manifest_path.is_file() else 0
+        return {
+            "project_id": project_id,
+            "externalized_attempts": len(prepared),
+            "historical_evidence_bound": len(prepared_history),
+            "manifest_size_before": before_size,
+            "manifest_size_after": after_size,
+        }
 
 
 def _session_preparation_blocker(manifest: dict) -> dict | None:
@@ -1272,11 +1521,16 @@ def _append_terminal_observations(request: dict, attempt: dict, generator: Any) 
     """Append classified terminal observations without changing dispatch authority."""
     settings = getattr(generator, "last_settings", None)
     persisted_settings = attempt.get("provider_settings")
+    live_settings = settings if isinstance(settings, dict) else {}
     if not isinstance(persisted_settings, dict):
-        persisted_settings = settings if isinstance(settings, dict) else {}
-    observations = persisted_settings.get("terminal_observations")
-    provider_poll_evidence = persisted_settings.get("provider_poll_evidence")
-    source_hints = persisted_settings.get("terminal_observation_sources")
+        persisted_settings = {}
+    observations = live_settings.get("terminal_observations", persisted_settings.get("terminal_observations"))
+    provider_poll_evidence = live_settings.get(
+        "provider_poll_evidence", persisted_settings.get("provider_poll_evidence")
+    )
+    source_hints = live_settings.get(
+        "terminal_observation_sources", persisted_settings.get("terminal_observation_sources")
+    )
     if not isinstance(observations, list):
         return []
     appended = []
@@ -2212,7 +2466,7 @@ def recover_confirmed_output_after_manifest_persistence_failure(
             from .live import ProviderPollEvidenceTimeline
             evidence = read_json(evidence_path)
             verified = ProviderPollEvidenceTimeline.verify_snapshot(evidence)
-            binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified)
+            binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(evidence)
             raw_metadata = validate_image(raw_path)
             clean_metadata = validate_image(clean_path)
         except (ValueError, AssetValidationError, OSError) as error:
@@ -5900,7 +6154,9 @@ def _confirm_executor_attribution(attempt: dict, generator: Any) -> None:
         verified = ProviderPollEvidenceTimeline.verify_snapshot(settings["provider_poll_evidence"])
         if not verified.get("evidence_complete"):
             raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED")
-        binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified)
+        binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(
+            settings["provider_poll_evidence"]
+        )
         if (settings.get("attribution_state") != binding.get("resulting_attribution_state")
                 or settings.get("dispatch_confirmation_state") != binding.get("resulting_dispatch_state")
                 or settings.get("dispatch_confirmation_signal") != binding.get("resulting_dispatch_signal")):
@@ -6073,12 +6329,30 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
         for dependency in request.get("depends_on", [])
         if dependency in entries and isinstance(entries[dependency].get("selected_asset"), dict)
     ]
-    result = executor.reconcile_attempt(request_context, attempt, temporary)
+    reconciliation_attempt = _hydrate_attempt_external_poll_evidence(
+        paths, request["request_id"], attempt
+    )
+    result = executor.reconcile_attempt(request_context, reconciliation_attempt, temporary)
     if not isinstance(result, dict):
         return False, request["request_id"], 0
     state = result.get("state")
     evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
-    event = {"at": _now(), "state": state, "prior_status": attempt.get("status"), "evidence": evidence}
+    if isinstance(evidence.get("provider_poll_evidence_ref"), dict):
+        prior_reference = _verified_embedded_poll_evidence_reference(
+            paths, request["request_id"], attempt
+        )
+        merged_settings = copy.deepcopy(attempt.get("provider_settings")) \
+            if isinstance(attempt.get("provider_settings"), dict) else {}
+        merged_settings.update(evidence)
+        attempt["provider_settings"] = _persisted_provider_settings(merged_settings)
+        attempt["provider_poll_evidence_ref"] = copy.deepcopy(
+            evidence["provider_poll_evidence_ref"]
+        )
+        _append_poll_evidence_history(attempt, prior_reference)
+    event = {
+        "at": _now(), "state": state, "prior_status": attempt.get("status"),
+        "evidence": _persisted_provider_settings(evidence),
+    }
     attempt.setdefault("reconciliation_events", []).append(event)
     entry.setdefault("reconciliation_events", []).append({
         "at": event["at"], "attempt": attempt.get("attempt"), "state": state,
@@ -6109,6 +6383,49 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
         source = Path(result.get("path") or temporary)
         _finalize_attributed_result(paths, manifest, entry, request, attempt, temporary, source)
         return True, None, 1
+    if state == "TERMINAL_NO_OUTPUT_PROVEN" and evidence.get("terminal_no_output_proven") is True:
+        try:
+            from .live import ProviderPollEvidenceTimeline
+            snapshot = evidence.get("provider_poll_evidence")
+            verified_terminal = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+            binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(snapshot)
+            durable_identity = binding.get("durable_identity_used")
+            expected_identity = attempt.get("durable_dispatch_identity")
+            if not expected_identity and attempt.get("provider_lineage_card_id"):
+                expected_identity = f"card:{attempt['provider_lineage_card_id']}"
+            if (binding.get("resulting_dispatch_state") != "CONFIRMED"
+                    or binding.get("resulting_attribution_state") != "TERMINAL_NO_OUTPUT_PROVEN"
+                    or not isinstance(durable_identity, str) or not durable_identity
+                    or (expected_identity and durable_identity != expected_identity)
+                    or verified_terminal.get("terminal_state") != "TERMINAL_NO_OUTPUT_PROVEN"):
+                raise FlowError("FLOW_TERMINAL_NO_OUTPUT_EVIDENCE_INVALID")
+        except Exception:
+            event["state"] = "TERMINAL_NO_OUTPUT_EVIDENCE_REJECTED"
+            return False, request["request_id"], 1
+        merged_settings = copy.deepcopy(attempt.get("provider_settings")) \
+            if isinstance(attempt.get("provider_settings"), dict) else {}
+        merged_settings.update(evidence)
+        attempt.update({
+            "status": "AMBIGUOUS",
+            "failure_class": "FLOW_TERMINAL_NO_OUTPUT_PROVEN",
+            "dispatch_confirmed": True,
+            "dispatch_confirmation_state": "CONFIRMED",
+            "dispatch_confirmation_signal": "exact_lineage_terminal_failure",
+            "durable_dispatch_identity": durable_identity,
+            "attribution_state": "TERMINAL_NO_OUTPUT_PROVEN",
+            "terminal_no_output_proven": True,
+            "terminal_no_output_evidence_head_sha256": snapshot.get("evidence_head_sha256"),
+            "provider_settings": _persisted_provider_settings(merged_settings),
+            "completed_at": event["at"],
+        })
+        entry.update({
+            "status": "AMBIGUOUS",
+            "failure_class": "FLOW_TERMINAL_NO_OUTPUT_PROVEN",
+            "updated_at": event["at"],
+        })
+        # This proves the existing provider execution is terminal, but does not
+        # itself authorize a replacement dispatch.
+        return False, request["request_id"], 1
     if state == "CONFIRMED_DISPATCH":
         attempt["dispatch_confirmed"] = True
         entry.update({"status": "AMBIGUOUS", "failure_class": "OUTPUT_ATTRIBUTION_UNCERTAIN", "updated_at": event["at"]})
@@ -6182,11 +6499,27 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
             for dependency in request.get("depends_on", [])
             if dependency in entries and isinstance(entries[dependency].get("selected_asset"), dict)
         ]
-        result = executor.reconcile_attempt(request_context, attempt, temporary)
+        reconciliation_attempt = _hydrate_attempt_external_poll_evidence(
+            paths, request_id, attempt
+        )
+        result = executor.reconcile_attempt(request_context, reconciliation_attempt, temporary)
         if not isinstance(result, dict) or result.get("state") != "REMAINS_AMBIGUOUS":
             raise FlowError("GENERATION_RECONCILIATION_ORDER_BLOCKED")
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+        if isinstance(evidence.get("provider_poll_evidence_ref"), dict):
+            prior_reference = _verified_embedded_poll_evidence_reference(
+                paths, request_id, attempt
+            )
+            merged_settings = copy.deepcopy(attempt.get("provider_settings")) \
+                if isinstance(attempt.get("provider_settings"), dict) else {}
+            merged_settings.update(evidence)
+            attempt["provider_settings"] = _persisted_provider_settings(merged_settings)
+            attempt["provider_poll_evidence_ref"] = copy.deepcopy(
+                evidence["provider_poll_evidence_ref"]
+            )
+            _append_poll_evidence_history(attempt, prior_reference)
         event = {"at": _now(), "state": "REMAINS_AMBIGUOUS", "prior_status": attempt.get("status"),
-                 "evidence": result.get("evidence") if isinstance(result.get("evidence"), dict) else {}}
+                 "evidence": _persisted_provider_settings(evidence)}
         attempt.setdefault("reconciliation_events", []).append(event)
         entry.setdefault("reconciliation_events", []).append({
             "at": event["at"], "attempt": attempt.get("attempt"), "state": event["state"],

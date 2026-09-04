@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import base64
+import copy
+import difflib
 import hashlib
 import io
 import json
@@ -40,13 +42,17 @@ _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}))
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
 PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.2.0"
-POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.3.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.4.0"
 SUPPORTED_POLL_EVIDENCE_SCHEMAS = {
     "story-auto-flow-poll-evidence/1.2.0": "flow-provider-surface/2.1.0",
+    "story-auto-flow-poll-evidence/1.3.0": PROVIDER_SURFACE_EXTRACTOR_VERSION,
     POLL_EVIDENCE_VERSION: PROVIDER_SURFACE_EXTRACTOR_VERSION,
 }
 MAX_POLL_OBSERVATIONS = 2048
-MAX_PROVIDER_IDENTITIES_PER_POLL = 256
+# The complete provider model is captured once and then delta encoded.  The
+# ceiling remains structural and fail-closed, but now accommodates the observed
+# 257-card owner surface without multiplying it by every poll.
+MAX_PROVIDER_IDENTITIES_PER_POLL = 512
 MAX_CANDIDATE_IDENTITIES_PER_POLL = 64
 MAX_QUARANTINED_IDENTITIES_PER_POLL = 64
 MAX_POLL_EVIDENCE_BYTES = 16 * 1024 * 1024
@@ -58,6 +64,7 @@ _PROVIDER_IDENTITY_FIELDS = {
     "pre_dispatch_provider_model_identity_set", "provider_model_identity_set",
     "provider_model_delta", "causal_card_ids", "historical_alias_card_ids",
 }
+_COMPACT_COLLECTION_FIELDS = tuple(sorted(_PROVIDER_IDENTITY_FIELDS))
 
 def records_for_media(records, media_type: str):
     if any("media_type" in item for item in records):
@@ -134,6 +141,31 @@ def _provider_model_projection(surface: dict) -> list[dict] | None:
             "is_archived": bool(tile.get("is_archived")),
         }
     return [projected[key] for key in sorted(projected)]
+
+
+def _exact_lineage_terminal_failure(records: list[dict], durable_identity: str | None) -> dict | None:
+    """Return one structurally terminal record only for the bound lineage."""
+    if not isinstance(durable_identity, str) or ":" not in durable_identity:
+        return None
+    kind, identity = durable_identity.split(":", 1)
+    if kind not in {"card", "job"} or not identity:
+        return None
+    key = "card_id" if kind == "card" else "provider_job_id"
+    matches = [
+        record for record in records
+        if isinstance(record, dict) and str(record.get(key) or "") == identity
+    ]
+    terminal = [
+        record for record in matches
+        if record.get("state") == "FAILED"
+        and record.get("failure_class") == "PROVIDER_VISIBLE_TERMINAL_FAILURE"
+        and set(record.get("terminal_structural_signals") or [])
+        >= {"warning", "refresh", "delete_forever"}
+        and not record.get("asset_id")
+    ]
+    if len(matches) != 1 or len(terminal) != 1:
+        return None
+    return terminal[0]
 
 
 class ProviderPollEvidenceTimeline:
@@ -300,6 +332,7 @@ class ProviderPollEvidenceTimeline:
         return len(json.dumps(self.snapshot(), ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
 
     def snapshot(self, *, observations: list[dict] | None = None) -> dict:
+        full_observations = list(self.observations if observations is None else observations)
         snapshot = {
             "schema_version": self.poll_evidence_version,
             "parser_extractor_version": self.parser_extractor_version,
@@ -308,30 +341,222 @@ class ProviderPollEvidenceTimeline:
             "max_candidate_identities_per_poll": self.max_candidate_identities,
             "max_quarantined_identities_per_poll": self.max_quarantined_identities,
             "max_serialized_bytes": self.max_serialized_bytes,
-            "observation_count": len(self.observations if observations is None else observations),
+            "observation_count": len(full_observations),
             "decision_binding_count": len(self.decision_bindings),
             "decision_bindings_sha256": _json_sha256(self.decision_bindings),
             "decision_bindings": list(self.decision_bindings),
             "complete": self.complete,
             "evidence_complete": self.evidence_complete,
             "terminal_state": self.terminal_state,
-            "timeline_sha256": _json_sha256(self.observations if observations is None else observations),
-            "observations": list(self.observations if observations is None else observations),
+            "timeline_sha256": _json_sha256(full_observations),
+            "observations": full_observations,
         }
+        if self.poll_evidence_version == POLL_EVIDENCE_VERSION:
+            return self._compact_snapshot(snapshot)
         snapshot["evidence_head_sha256"] = self._head_sha256(snapshot)
         return snapshot
 
     @staticmethod
+    def _sequence_operations(previous: list, current: list) -> list[dict]:
+        previous_keys = [json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":")) for item in previous]
+        current_keys = [json.dumps(item, ensure_ascii=True, sort_keys=True, separators=(",", ":")) for item in current]
+        matcher = difflib.SequenceMatcher(a=previous_keys, b=current_keys, autojunk=False)
+        operations = [
+            {"start": left_start, "delete_count": left_end - left_start,
+             "items": current[right_start:right_end]}
+            for tag, left_start, left_end, right_start, right_end in matcher.get_opcodes()
+            if tag != "equal"
+        ]
+        # Reverse-order edits keep every index anchored to the prior sequence.
+        return list(reversed(operations))
+
+    @classmethod
+    def _compact_snapshot(cls, snapshot: dict, *, legacy_import: dict | None = None) -> dict:
+        full_observations = snapshot.get("observations", [])
+        first = full_observations[0] if full_observations else {}
+        states: dict[str, tuple[bool, list]] = {}
+        baselines = {}
+        for field in _COMPACT_COLLECTION_FIELDS:
+            present = isinstance(first.get(field), list)
+            value = list(first.get(field, [])) if present else []
+            states[field] = (present, value)
+            baselines[field] = {
+                "present": present,
+                "count": len(value),
+                "sha256": _json_sha256(value),
+                "value": value,
+            }
+
+        compact_observations = []
+        previous_compact_hash = None
+        for observation in full_observations:
+            compact = {
+                key: value for key, value in observation.items()
+                if key not in _COMPACT_COLLECTION_FIELDS or not isinstance(value, list)
+            }
+            deltas = {}
+            for field in _COMPACT_COLLECTION_FIELDS:
+                previous_present, previous_value = states[field]
+                present = isinstance(observation.get(field), list)
+                current_value = (
+                    list(observation.get(field, []))
+                    if isinstance(observation.get(field), list) else []
+                )
+                if present != previous_present or current_value != previous_value:
+                    deltas[field] = {
+                        "previous_present": previous_present,
+                        "previous_count": len(previous_value),
+                        "previous_sha256": _json_sha256(previous_value),
+                        "present": present,
+                        "count": len(current_value),
+                        "sha256": _json_sha256(current_value),
+                        "operations": cls._sequence_operations(previous_value, current_value),
+                    }
+                    states[field] = (present, current_value)
+            compact["collection_deltas"] = deltas
+            compact["previous_compact_observation_sha256"] = previous_compact_hash
+            unsigned = dict(compact)
+            compact["compact_observation_sha256"] = _json_sha256(unsigned)
+            previous_compact_hash = compact["compact_observation_sha256"]
+            compact_observations.append(compact)
+
+        encoded = {
+            key: value for key, value in snapshot.items()
+            if key not in {"observations", "evidence_head_sha256"}
+        }
+        encoded.update({
+            "schema_version": POLL_EVIDENCE_VERSION,
+            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "collection_baselines": baselines,
+            "collection_baselines_sha256": _json_sha256(baselines),
+            "compact_timeline_sha256": _json_sha256(compact_observations),
+            "observations": compact_observations,
+        })
+        if legacy_import is not None:
+            encoded["legacy_import"] = legacy_import
+        encoded["evidence_head_sha256"] = cls._head_sha256(encoded)
+        return encoded
+
+    @classmethod
+    def compact_legacy_snapshot(cls, snapshot: dict) -> dict:
+        """Convert verified legacy evidence without altering its source bytes."""
+        source_schema = snapshot.get("schema_version") if isinstance(snapshot, dict) else None
+        if source_schema == POLL_EVIDENCE_VERSION:
+            cls.verify_snapshot(snapshot)
+            return copy.deepcopy(snapshot)
+        verified = cls.verify_snapshot(snapshot)
+        legacy_import = {
+            "source_schema_version": source_schema,
+            "source_parser_extractor_version": snapshot.get("parser_extractor_version"),
+            "source_evidence_head_sha256": snapshot.get("evidence_head_sha256"),
+            "source_timeline_sha256": snapshot.get("timeline_sha256"),
+        }
+        full = copy.deepcopy(verified)
+        full["schema_version"] = source_schema
+        full["parser_extractor_version"] = snapshot.get("parser_extractor_version")
+        compact = cls._compact_snapshot(full, legacy_import=legacy_import)
+        cls.verify_snapshot(compact)
+        return compact
+
+    @staticmethod
     def _head_sha256(snapshot: dict) -> str:
-        return _json_sha256({
-            key: snapshot.get(key) for key in (
+        keys = [
                 "schema_version", "parser_extractor_version", "max_observations",
                 "max_provider_identities_per_poll", "max_candidate_identities_per_poll",
                 "max_quarantined_identities_per_poll", "max_serialized_bytes",
                 "observation_count", "complete", "evidence_complete", "terminal_state",
                 "timeline_sha256", "decision_binding_count", "decision_bindings_sha256",
-            )
-        })
+        ]
+        if snapshot.get("schema_version") == POLL_EVIDENCE_VERSION:
+            keys.extend((
+                "collection_baselines_sha256", "compact_timeline_sha256", "legacy_import",
+            ))
+        return _json_sha256({key: snapshot.get(key) for key in keys})
+
+    @classmethod
+    def _reconstruct_compact_observations(cls, snapshot: dict) -> list[dict]:
+        baselines = snapshot.get("collection_baselines")
+        compact_observations = snapshot.get("observations")
+        if (not isinstance(baselines, dict)
+                or set(baselines) != set(_COMPACT_COLLECTION_FIELDS)
+                or snapshot.get("collection_baselines_sha256") != _json_sha256(baselines)
+                or not isinstance(compact_observations, list)
+                or snapshot.get("compact_timeline_sha256") != _json_sha256(compact_observations)):
+            raise ValueError("compact_envelope")
+        states: dict[str, tuple[bool, list]] = {}
+        for field in _COMPACT_COLLECTION_FIELDS:
+            baseline = baselines.get(field)
+            if not isinstance(baseline, dict) or not isinstance(baseline.get("present"), bool):
+                raise ValueError("compact_baseline")
+            value = baseline.get("value")
+            if (not isinstance(value, list) or baseline.get("count") != len(value)
+                    or baseline.get("sha256") != _json_sha256(value)):
+                raise ValueError("compact_baseline")
+            states[field] = (baseline["present"], list(value))
+
+        reconstructed = []
+        previous_compact_hash = None
+        for compact in compact_observations:
+            if not isinstance(compact, dict):
+                raise ValueError("compact_observation")
+            stored_compact_hash = compact.get("compact_observation_sha256")
+            unsigned_compact = dict(compact)
+            unsigned_compact.pop("compact_observation_sha256", None)
+            if (not isinstance(stored_compact_hash, str)
+                    or compact.get("previous_compact_observation_sha256") != previous_compact_hash
+                    or _json_sha256(unsigned_compact) != stored_compact_hash):
+                raise ValueError("compact_chain")
+            if any(
+                field in compact and isinstance(compact.get(field), list)
+                for field in _COMPACT_COLLECTION_FIELDS
+            ):
+                raise ValueError("compact_repetition")
+            deltas = compact.get("collection_deltas")
+            if not isinstance(deltas, dict) or any(field not in states for field in deltas):
+                raise ValueError("compact_delta")
+            for field, delta in deltas.items():
+                if not isinstance(delta, dict):
+                    raise ValueError("compact_delta")
+                previous_present, value = states[field]
+                if (delta.get("previous_present") is not previous_present
+                        or delta.get("previous_count") != len(value)
+                        or delta.get("previous_sha256") != _json_sha256(value)
+                        or not isinstance(delta.get("present"), bool)
+                        or not isinstance(delta.get("operations"), list)):
+                    raise ValueError("compact_delta_previous")
+                next_value = list(value)
+                previous_start = len(next_value) + 1
+                for operation in delta["operations"]:
+                    if not isinstance(operation, dict):
+                        raise ValueError("compact_operation")
+                    start = operation.get("start")
+                    delete_count = operation.get("delete_count")
+                    items = operation.get("items")
+                    if (not isinstance(start, int) or start < 0
+                            or not isinstance(delete_count, int) or delete_count < 0
+                            or not isinstance(items, list)
+                            or start + delete_count > len(next_value)
+                            or start + delete_count > previous_start):
+                        raise ValueError("compact_operation")
+                    next_value[start:start + delete_count] = items
+                    previous_start = start
+                if (delta.get("count") != len(next_value)
+                        or delta.get("sha256") != _json_sha256(next_value)):
+                    raise ValueError("compact_delta_result")
+                states[field] = (delta["present"], next_value)
+            observation = {
+                key: value for key, value in compact.items()
+                if key not in {
+                    "collection_deltas", "previous_compact_observation_sha256",
+                    "compact_observation_sha256",
+                }
+            }
+            for field, (present, value) in states.items():
+                if present:
+                    observation[field] = list(value)
+            reconstructed.append(observation)
+            previous_compact_hash = stored_compact_hash
+        return reconstructed
 
     @classmethod
     def verify_snapshot(cls, snapshot: dict) -> dict:
@@ -343,7 +568,12 @@ class ProviderPollEvidenceTimeline:
             parser_version = snapshot.get("parser_extractor_version")
             if SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(schema_version) != parser_version:
                 raise ValueError("extractor")
-            observations = snapshot.get("observations")
+            persisted_observations = snapshot.get("observations")
+            observations = (
+                cls._reconstruct_compact_observations(snapshot)
+                if schema_version == POLL_EVIDENCE_VERSION
+                else persisted_observations
+            )
             bindings = snapshot.get("decision_bindings")
             if not isinstance(observations, list) or not isinstance(bindings, list):
                 raise ValueError("observations")
@@ -375,6 +605,18 @@ class ProviderPollEvidenceTimeline:
                 raise ValueError("timeline_hash")
             if snapshot.get("evidence_head_sha256") != cls._head_sha256(snapshot):
                 raise ValueError("head_hash")
+            legacy_import = snapshot.get("legacy_import")
+            expected_observation_schema = schema_version
+            expected_observation_parser = parser_version
+            if legacy_import is not None:
+                if (schema_version != POLL_EVIDENCE_VERSION or not isinstance(legacy_import, dict)
+                        or legacy_import.get("source_schema_version") not in SUPPORTED_POLL_EVIDENCE_SCHEMAS
+                        or legacy_import.get("source_parser_extractor_version")
+                        != SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(legacy_import.get("source_schema_version"))
+                        or legacy_import.get("source_timeline_sha256") != snapshot.get("timeline_sha256")):
+                    raise ValueError("legacy_import")
+                expected_observation_schema = legacy_import["source_schema_version"]
+                expected_observation_parser = legacy_import["source_parser_extractor_version"]
             previous = None
             incomplete_seen = False
             for index, observation in enumerate(observations, start=1):
@@ -383,8 +625,8 @@ class ProviderPollEvidenceTimeline:
                 unsigned = dict(observation); unsigned.pop("observation_sha256", None)
                 if (not isinstance(stored_hash, str) or _json_sha256(unsigned) != stored_hash
                         or observation.get("poll_sequence") != index
-                        or observation.get("poll_evidence_version") != schema_version
-                        or observation.get("parser_extractor_version") != parser_version
+                        or observation.get("poll_evidence_version") != expected_observation_schema
+                        or observation.get("parser_extractor_version") != expected_observation_parser
                         or observation.get("previous_observation_sha256") != previous):
                     raise ValueError("chain")
                 if observation.get("evidence_complete") is False:
@@ -450,7 +692,9 @@ class ProviderPollEvidenceTimeline:
             serialized = len(json.dumps(snapshot, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8"))
             if serialized > limits["max_serialized_bytes"]:
                 raise ValueError("serialized_bound")
-            return snapshot
+            verified = copy.deepcopy(snapshot)
+            verified["observations"] = observations
+            return verified
         except FlowError:
             raise
         except Exception as error:
@@ -959,9 +1203,26 @@ class LiveFlowGenerator:
         if not isinstance(self.last_settings, dict):
             self.last_settings = {}
         snapshot = self._poll_timeline.snapshot()
-        ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+        evidence_ref = None
+        evidence_parent = self._poll_timeline.path.parent.name if self._poll_timeline.path is not None else ""
+        if (self._poll_timeline.path is not None and self._poll_timeline.path.is_file()
+                and evidence_parent.startswith("attempt_")
+                and evidence_parent.removeprefix("attempt_").isdigit()):
+            evidence_ref = {
+                "schema_version": snapshot["schema_version"],
+                "path_scope": "ATTEMPT_DIRECTORY",
+                "path": self._poll_timeline.path.name,
+                "sha256": sha256_file(self._poll_timeline.path),
+                "evidence_head_sha256": snapshot["evidence_head_sha256"],
+                "timeline_sha256": snapshot["timeline_sha256"],
+                "observation_count": snapshot["observation_count"],
+                "terminal_state": snapshot["terminal_state"],
+                "evidence_complete": snapshot["evidence_complete"],
+            }
         self.last_settings.update({
             "provider_poll_evidence": snapshot,
+            "provider_poll_evidence_ref": evidence_ref,
             "provider_poll_decision_bindings": snapshot["decision_bindings"],
             "provider_poll_authoritative_binding": (
                 snapshot["decision_bindings"][-1] if snapshot["decision_bindings"] else None
@@ -978,7 +1239,7 @@ class LiveFlowGenerator:
             "provider_poll_timeline_sha256": snapshot["timeline_sha256"],
             "provider_poll_timeline_complete": snapshot["complete"],
             "provider_poll_terminal_state": snapshot["terminal_state"],
-            "provider_poll_timeline": snapshot["observations"],
+            "provider_poll_timeline": verified["observations"],
         })
 
     def _finish_poll_evidence(self, terminal_state: str) -> None:
@@ -991,7 +1252,8 @@ class LiveFlowGenerator:
             key: self.last_settings.get(key)
             for key in (
                 "poll_evidence_version", "provider_surface_extractor_version",
-                "provider_poll_evidence", "provider_poll_max_observations",
+                "provider_poll_evidence", "provider_poll_evidence_ref",
+                "provider_poll_max_observations",
                 "provider_poll_decision_bindings", "provider_poll_authoritative_binding",
                 "provider_poll_max_identities_per_observation",
                 "provider_poll_max_candidates_per_observation",
@@ -1727,7 +1989,9 @@ class LiveFlowGenerator:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
         try:
             verified_evidence = self._verify_persisted_poll_evidence(settings)
-            verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(verified_evidence)
+            verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(
+                settings["provider_poll_evidence"]
+            )
         except FlowError as error:
             # Never reuse a baseline, durable dispatch identity, or attribution
             # detail from evidence that cannot verify exactly as persisted.
@@ -1768,11 +2032,54 @@ class LiveFlowGenerator:
                         pass
             deadline = time.monotonic() + 12.0
             last = None
+            terminal_fingerprint = None
+            terminal_stable_polls = 0
             while time.monotonic() < deadline:
                 self._ensure_poll_capacity()
                 surface = dom.provider_surface()
                 records = surface.get("records", []) if isinstance(surface, dict) else []
                 busy = bool(int((surface or {}).get("global_pending_count", 0)))
+                terminal = _exact_lineage_terminal_failure(records, prior_durable_identity)
+                if terminal is not None and not busy:
+                    current_terminal_fingerprint = _json_sha256(terminal)
+                    terminal_stable_polls = (
+                        terminal_stable_polls + 1
+                        if terminal_fingerprint == current_terminal_fingerprint else 1
+                    )
+                    terminal_fingerprint = current_terminal_fingerprint
+                    persisted_terminal = self._record_poll(
+                        phase="RECONCILIATION", media_type=request["media_type"],
+                        baseline=baseline, current=records, surface=surface,
+                        stable_polls=terminal_stable_polls, dispatch=dispatch,
+                        activation=activation, bind_authoritative_output=False,
+                    )
+                    self._sync_dispatch_state(dispatch)
+                    if terminal_stable_polls >= 2:
+                        binding = self._poll_timeline.append_decision_binding(
+                            persisted_terminal,
+                            dispatch_state="CONFIRMED",
+                            dispatch_signal="exact_lineage_terminal_failure",
+                            dispatch_signal_state="DISPATCH_CONFIRMED",
+                            attribution_state="TERMINAL_NO_OUTPUT_PROVEN",
+                            durable_identity=prior_durable_identity,
+                        )
+                        self._sync_poll_evidence()
+                        self._sync_bound_decision(binding)
+                        self._finish_poll_evidence("TERMINAL_NO_OUTPUT_PROVEN")
+                        return {"state": "TERMINAL_NO_OUTPUT_PROVEN", "evidence": {
+                            "terminal_no_output_proven": True,
+                            "terminal_provider_observation": terminal,
+                            "terminal_stable_polls": terminal_stable_polls,
+                            "dispatch_confirmation_state": "CONFIRMED",
+                            "dispatch_confirmation_signal": "exact_lineage_terminal_failure",
+                            "durable_dispatch_identity": prior_durable_identity,
+                            "attribution_state": "TERMINAL_NO_OUTPUT_PROVEN",
+                            **self._poll_evidence_fields(),
+                        }}
+                    time.sleep(.5)
+                    continue
+                terminal_fingerprint = None
+                terminal_stable_polls = 0
                 last = tracker.observe(
                     records, provider_busy=busy
                 )
