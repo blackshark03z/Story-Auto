@@ -132,7 +132,7 @@ class ProjectConfig:
             flow = provider_binding.get("flow")
             required = {"state", "project_url", "project_identity", "created_for_story_project_id",
                         "project_name", "activation_state", "created_at"}
-            optional = {"activation_started_at", "created_at_provider", "bound_at"}
+            optional = {"activation_started_at", "created_at_provider", "bound_at", "last_setup_failure", "last_setup_failure_at"}
             if (not isinstance(flow, dict) or not required.issubset(flow)
                     or not set(flow).issubset(required | optional)
                     or flow.get("state") not in {"CREATE_INTENT", "CREATED", "BOUND"}

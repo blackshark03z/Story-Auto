@@ -198,9 +198,14 @@ class FlowConnectionService:
         current = self.get_current_connection()
         if managed is not None:
             if managed.get("state") != "BOUND":
+                base = self.get_connection_status(required_capabilities=required_capabilities)
+                if managed.get("last_setup_failure") == "FLOW_AUTH_REQUIRED":
+                    return None, {**base, "status":"AUTH_REQUIRED", "code":"FLOW_AUTH_REQUIRED",
+                                  "message":"Sign in to Google Flow in the dedicated Story Auto browser, then continue project setup.",
+                                  "project_url":managed.get("project_url"), "project_identity":managed.get("project_identity")}
                 code = ("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED"
                         if managed.get("activation_state") == "STARTED" else "FLOW_PROJECT_SETUP_REQUIRED")
-                return None, {**self.get_connection_status(required_capabilities=required_capabilities),
+                return None, {**base,
                               "status":"PROJECT_SETUP_REQUIRED", "code":code,
                               "message":"Story Auto must finish creating this project's Flow project before media can be created.",
                               "project_url":managed.get("project_url"), "project_identity":managed.get("project_identity")}

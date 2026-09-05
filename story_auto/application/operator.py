@@ -39,7 +39,7 @@ from story_auto.providers.flow.service import (queue_regeneration, replay_unreso
 from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
-from story_auto.providers.flow.project_binding import (FlowProjectBindingError, FlowProjectBindingService,
+from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
 
@@ -874,6 +874,11 @@ class OperatorService:
     def open_flow_sign_in(self, project_id: str) -> dict[str, str]:
         _paths, config = self._project(project_id)
         managed = managed_binding(config)
+        if managed is not None and managed.get("state") != "BOUND":
+            runtime = FlowRuntime(self.runtime.flow_profile, "http://127.0.0.1:9222",
+                                  FLOW_MIGRATED_HOME_URL + "/about", FLOW_MIGRATED_HOME_URL)
+            launch_dedicated_session(runtime)
+            return {"status":"OPENED","message":"Complete Google sign-in in the Story Auto Flow window, then return and try again."}
         if managed is not None and managed.get("state") == "BOUND":
             reference = managed
         else:

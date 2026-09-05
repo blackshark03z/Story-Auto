@@ -354,7 +354,7 @@ function friendlyError(error) {
   const known = {
     FLOW_AUTH_REQUIRED: ['Google sign-in required','Sign in to Google Flow, then return here and choose Try again.','open_flow_sign_in','Open Flow sign-in'],
     FLOW_CDP_UNAVAILABLE: ['Google Flow is not open','Open the dedicated Story Auto Flow window, sign in if needed, then try again.','open_flow_sign_in','Open Flow sign-in'],
-    FLOW_PROJECT_MISMATCH: ['Choose the Story Auto Flow project','The active Flow project does not match. Paste the intended project URL on the project page, validate it, and save the confirmed connection.','open_project','Open project'],
+    FLOW_PROJECT_MISMATCH: ['Flow project does not match','Story Auto could not confirm this video’s exact Flow project. Open the expected project and try again; no manual URL copy is required.','open_flow_project','Open expected Flow project'],
     FLOW_HOST_MIGRATED_RETRY_REQUIRED: ['Google Flow is switching interfaces','Google routed this session to the new Flow interface. Story Auto did not send a generation request; choose Try again so it can retry the compatible Flow workspace.','retry','Try again'],
     FLOW_NOT_CONFIGURED: ['Flow is not configured','Open this project and choose a Flow project URL. Validation does not create images or videos.','open_project','Open project'],
     FLOW_CONNECTION_STALE: ['Flow connection needs validation','The project points to an older Flow connection. Open the project and validate or update it before creating visuals.','open_project','Open project'],

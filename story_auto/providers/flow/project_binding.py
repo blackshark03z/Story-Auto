@@ -118,6 +118,8 @@ class FlowProjectBindingService:
         if exact["project_name"] != binding["project_name"]:
             raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
         created = {**binding, **exact, "state": "CREATED", "created_at_provider": _now()}
+        created.pop("last_setup_failure", None)
+        created.pop("last_setup_failure_at", None)
         self._save(project_id, created)
         observed = adapter.open_project(exact["project_url"], exact["project_identity"], exact["project_name"])
         if not self._same(exact, observed):
@@ -145,7 +147,13 @@ class FlowProjectBindingService:
                 return self._bind(project_id, binding, binding, adapter)
             if binding.get("state") != "CREATE_INTENT":
                 raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
-            matches = [canonical_project(item) for item in adapter.find_projects(binding["project_name"])]
+            try:
+                matches = [canonical_project(item) for item in adapter.find_projects(binding["project_name"])]
+            except FlowProjectBindingError as error:
+                if error.failure_class == "FLOW_AUTH_REQUIRED":
+                    binding.update({"last_setup_failure": "FLOW_AUTH_REQUIRED", "last_setup_failure_at": _now()})
+                    self._save(project_id, binding)
+                raise
             matches = [item for item in matches if item["project_name"] == binding["project_name"]]
             if len(matches) == 1:
                 return self._bind(project_id, binding, matches[0], adapter)
@@ -175,6 +183,24 @@ class LiveFlowProjects:
         # reconnect to the page after we navigate it back to labs.google.
         migrated = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_MIGRATED_HOME_URL, FLOW_MIGRATED_HOME_URL)
         page = CdpPage.open(migrated)
+        # The new flow.google.com landing page hydrates after the DevTools
+        # target is already attachable. Give its account control a short,
+        # bounded window to appear before deciding this is merely a host
+        # migration. This is read-only and occurs before any provider action.
+        deadline = time.monotonic() + 4.0
+        signed_out = False
+        while time.monotonic() < deadline:
+            signed_out = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('a')).some(a=>visible(a)&&/accounts\\.google\\.com\\/ServiceLogin/i.test(a.href||''))})()""") is True
+            if signed_out:
+                break
+            if page.evaluate("document.readyState") == "complete":
+                # One extra turn lets Angular mount header/account controls.
+                time.sleep(.25)
+            else:
+                time.sleep(.2)
+        if signed_out:
+            page.close()
+            raise FlowProjectBindingError("FLOW_AUTH_REQUIRED")
         page.runtime = legacy
         return page
 

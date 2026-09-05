@@ -115,6 +115,27 @@ class FlowProjectBindingTests(unittest.TestCase):
                     service.ensure("prj_1234567890abcdef", adapter)
                 self.assertEqual(adapter.created, [])
 
+    def test_auth_required_before_provider_activation_stays_retryable_and_surfaces_auth_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, service = self.make_project(root)
+
+            class SignedOutProjects(FakeProjects):
+                def find_projects(self, _name):
+                    raise FlowProjectBindingError("FLOW_AUTH_REQUIRED")
+
+            adapter = SignedOutProjects()
+            with self.assertRaisesRegex(FlowProjectBindingError, "FLOW_AUTH_REQUIRED"):
+                service.ensure("prj_1234567890abcdef", adapter)
+            saved = read_json(runtime.projects / "prj_1234567890abcdef" / "project.json")
+            binding = saved["settings"]["provider_binding"]["flow"]
+            self.assertEqual(binding["activation_state"], "NOT_ATTEMPTED")
+            self.assertEqual(binding["last_setup_failure"], "FLOW_AUTH_REQUIRED")
+            connection, status = service.connections.connection_for_project(
+                "prj_1234567890abcdef", required_capabilities=["IMAGE"])
+            self.assertIsNone(connection)
+            self.assertEqual((status["status"], status["code"]), ("AUTH_REQUIRED", "FLOW_AUTH_REQUIRED"))
+            self.assertEqual(adapter.created, [])
+
     def test_wrong_active_project_fails_closed(self):
         with tempfile.TemporaryDirectory() as root:
             _runtime, service = self.make_project(root)
