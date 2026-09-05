@@ -100,6 +100,18 @@ class ProductionQueries:
         state = self.reconciler.reconcile(paths, config).to_dict()
         state["run"] = {"run_id": run_id, "status": status}
         atomic_write_json(self.reconciler.state_path(paths), state)
+        self.reconciler.reconcile(paths, config)
+
+    def record_planning_failure(self, project_id: str, run_id: str, reason_code: str) -> None:
+        """Bind the failed run to its current evidence in the existing state file."""
+        from story_auto.core.project import load_project
+        paths, config = load_project(self.runtime, project_id)
+        state = self.reconciler.reconcile(paths, config).to_dict()
+        state["run"] = {"run_id": run_id, "status": "SAFETY_BLOCKED", "failure": {
+            "stage": "PLAN", "reason_code": reason_code,
+            "evidence_fingerprint": state["evidence_fingerprint"]}}
+        atomic_write_json(self.reconciler.state_path(paths), state)
+        self.reconciler.reconcile(paths, config)
 
     def project_list_item(self, project_id: str) -> dict:
         """Return a compact card without opening any generation manifest."""

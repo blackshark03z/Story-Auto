@@ -653,13 +653,21 @@ class OperatorService:
     def _production_commands(self) -> ProductionCommands:
         return ProductionCommands(self.production_query, {
             "prepare": lambda project_id: self.start_or_resume(project_id),
-            "plan": lambda project_id: self.plan_visuals(project_id),
+            "plan": lambda project_id: self._plan_for_production(project_id),
             "approve_plan": lambda project_id: self.approve_planning(project_id),
             "approve_shots": lambda project_id: self.approve_planning(project_id, shots=True),
             "visuals": lambda project_id: self._run_visuals_for_production(project_id),
             "quality": lambda project_id: self.apply_qc_policy(project_id),
             "render": lambda project_id: self.render(project_id),
-        }, self.production_queries.record_run)
+        }, self.production_queries.record_run, self.production_queries.record_planning_failure)
+
+    def _plan_for_production(self, project_id: str) -> Any:
+        paths, _ = self._project(project_id)
+        if not all(paths.artifact_path(f"output/{name}").is_file()
+                   for name in ("story_timeline.json", "continuity_bible.json")):
+            run_planning_stages(self.runtime.root, project_id)
+            return self.planning_review(project_id)
+        return self.plan_visuals(project_id)
 
     def _run_visuals_for_production(self, project_id: str) -> Any:
         state=self.production_query(project_id)

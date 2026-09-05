@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,7 @@ from story_auto.core.visual import (
 )
 from .ambient import (AmbientPlanningPolicyError, plan_visual_chapters,
                       reference_visual_brief, validate_visual_brief)
+from .timeline_recovery import repair_grouping, defect_feedback
 from story_auto.providers.llm import (GeminiProvider, GeminiProviderError,
                                       GeminiReasoningRouter, LLMRequest,
                                       RoutedGeminiProvider)
@@ -93,6 +95,8 @@ def _resolve_timeline(project_id: str, alignment: dict[str, Any], grouping: dict
         used.update(ids); first, last = lookup[ids[0]], lookup[ids[-1]]
         scenes.append({"scene_id": f"scn_{index:04d}", "start": first["start"], "end": last["end"], "narration_segment_ids": ids, "narration_text": "".join(lookup[item]["text"] for item in ids), "story_role": group.get("story_role", "story_beat"), "summary": group.get("summary", ""), "entity_ids": group.get("entity_ids", [])})
     if used != set(lookup): raise PlanningError("STORY_TIMELINE_INVALID", "all narration must be covered exactly once")
+    if [item for group in groups for item in group["segment_ids"]] != [s["segment_id"] for s in segments]:
+        raise PlanningError("STORY_TIMELINE_INVALID", "groups must follow canonical order")
     # Spoken spans may leave canonical leading/trailing/inter-segment silence.
     # Assign silence deterministically to adjacent visual scenes so coverage
     # tiles the full narration master without changing alignment timestamps.
@@ -108,6 +112,8 @@ def validate_timeline(value: Any, alignment: dict[str, Any]) -> None:
     try: scenes = value["scenes"]; segments = {s["segment_id"]: s for s in alignment["segments"]}
     except (KeyError, TypeError): raise PlanningError("STORY_TIMELINE_INVALID")
     if value.get("schema_version") != TIMELINE_SCHEMA_VERSION or not isinstance(scenes, list) or not scenes: raise PlanningError("STORY_TIMELINE_INVALID")
+    if [item for scene in scenes for item in scene.get("narration_segment_ids", [])] != [s["segment_id"] for s in alignment["segments"]]:
+        raise PlanningError("STORY_TIMELINE_INVALID", "exact canonical coverage and order required")
     used, previous = set(), 0.0
     for index, scene in enumerate(scenes, 1):
         ids = scene.get("narration_segment_ids") if isinstance(scene, dict) else None
@@ -957,6 +963,39 @@ def _default_provider(paths) -> RoutedGeminiProvider:
         cache_dir=paths.runtime.cache / "gemini_reasoning",
         ledger_path=paths.runtime.evidence / "gemini_reasoning_ledger.json"))
 
+def _timeline_acceptance(project_id, alignment, alignment_sha):
+    canonical = [segment["segment_id"] for segment in alignment["segments"]]
+    def accept(value):
+        def validate(candidate):
+            timeline = _resolve_timeline(project_id, alignment, candidate, {"direct_input_hashes": {"alignment_sha256": alignment_sha}})
+            validate_timeline(timeline, alignment)
+        try:
+            validate(value)
+            return
+        except PlanningError as original:
+            try:
+                repaired = repair_grouping(value, canonical)
+                validate(repaired)
+            except (ValueError, TypeError, KeyError) as error:
+                raise PlanningError("STORY_TIMELINE_INVALID", defect_feedback(value, canonical, f"{original}; {error}")) from error
+            value.clear()
+            value.update(repaired)
+    return accept
+
+
+def _request_timeline(active, request):
+    # The production router owns acceptance before caching. Injected providers
+    # use the same two-response bound, without multiplying router retries.
+    for attempt in range(2):
+        response = active.generate_structured(request)
+        try:
+            request.acceptance_validator(response.value)
+            return response
+        except PlanningError as error:
+            if attempt == 1: raise
+            request = replace(request, prompt=request.prompt + "\nCorrective feedback:\n" + str(error))
+
+
 def run_planning_stages(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> tuple[str, str]:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id); model, settings = _settings(config)
     narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration; narration_sha = narration_hash(narration)
@@ -973,11 +1012,13 @@ def run_planning_stages(runtime_root: Path | str, project_id: str, *, provider: 
             timeline_settings = dict(settings)
             timeline_settings["maxOutputTokens"] = max(int(settings.get("maxOutputTokens", 4096)),
                 min(16384, 2048 + len(alignment["segments"]) * 24))
-            response = active.generate_structured(LLMRequest(model,
+            response = _request_timeline(active, LLMRequest(model,
                 f"{TIMELINE_PROMPT_VERSION}\nGroup every alignment segment exactly once by segment_id. "
                 f"Groups must be ordered, contiguous, and concise. Do not create timestamps. "
                 f"Keep each summary under 20 words.\nSegments:\n{alignment['segments']}",
-                _timeline_schema(), timeline_settings, _hash_text(timeline_fp)[:24], "story_timeline"))
+                _timeline_schema(), timeline_settings, _hash_text(timeline_fp)[:24], "story_timeline",
+                acceptance_validator=_timeline_acceptance(project_id, alignment, alignment_sha),
+                acceptance_max_rejections=2))
             timeline = _resolve_timeline(project_id, alignment, response.value, _provenance(model, "story_timeline", TIMELINE_PROMPT_VERSION, {"alignment_sha256":alignment_sha,"narration_sha256":narration_sha}, response)); validate_timeline(timeline, alignment); atomic_write_json(timeline_path, timeline); checkpoints.record("story_timeline", fingerprint=timeline_fp, status="SUCCESS", outputs=["output/story_timeline.json"], producer_version=TIMELINE_PROMPT_VERSION); timeline_action = "RUN"
         timeline_sha = sha256_file(timeline_path)
         continuity_fp = fingerprint(stage_name="continuity", producer_version=CONTINUITY_PROMPT_VERSION, artifact_schema_version=CONTINUITY_SCHEMA_VERSION, direct_inputs={"timeline_sha256":timeline_sha,"narration_sha256":narration_sha,"model":model}, settings={k:v for k,v in settings.items() if k != "api_key"})

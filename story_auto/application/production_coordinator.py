@@ -7,14 +7,18 @@ from typing import Callable
 
 
 class ProductionCoordinator:
-    def __init__(self, query: Callable[[str], dict], operations: dict[str, Callable[[str], object]], record_run: Callable[[str, str, str], None] | None = None):
+    def __init__(self, query: Callable[[str], dict], operations: dict[str, Callable[[str], object]], record_run: Callable[[str, str, str], None] | None = None, record_failure=None):
         self.query = query
         self.operations = operations
         self.record_run = record_run
+        self.record_failure = record_failure
 
     def _result(self, project_id: str, run_id: str, outcome: str, invoked: list[str], state: dict, **extra) -> dict:
         if self.record_run:
             self.record_run(project_id, run_id, outcome)
+        if self.record_failure and outcome == "SAFETY_BLOCKED" and extra.get("stage") == "PLAN" and extra.get("reason_code"):
+            self.record_failure(project_id, run_id, extra["reason_code"])
+            state = self.query(project_id)
         return {"outcome": outcome, "run_id": run_id, "invoked_stages": invoked, "production": state, **extra}
 
     @staticmethod
@@ -100,7 +104,7 @@ class ProductionCoordinator:
                 except Exception as error:
                     code = getattr(error, "failure_class", type(error).__name__)
                     return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id),
-                                        error=str(error), reason_code=code)
+                                        error=str(error), reason_code=code, stage="PLAN")
             if state["pipeline_status"] in {"RUNNING", "RECOVERING", "RECOVERY_READY", "NEEDS_ATTENTION", "STUCK_PENDING", "BLOCKED",
                                             "OWNER_DECISION_REQUIRED", "AUTH_RECOVERY_REQUIRED", "SAFETY_BLOCKED", "PAUSED_BY_OWNER"}:
                 if state["pipeline_status"] in {"RUNNING", "RECOVERING", "NEEDS_ATTENTION", "STUCK_PENDING", "BLOCKED"}:
@@ -128,5 +132,6 @@ class ProductionCoordinator:
                 code = getattr(error, "failure_class", type(error).__name__)
                 flow = self.query(project_id).get("flow", {})
                 outcome = flow.get("status") if str(code).startswith("FLOW_") and flow.get("status") != "CONNECTED" else "SAFETY_BLOCKED"
-                return self._result(project_id, run_id, outcome, invoked, self.query(project_id), error=str(error), reason_code=code)
+                failed_stage = "PLAN" if code == "STORY_TIMELINE_INVALID" else stage
+                return self._result(project_id, run_id, outcome, invoked, self.query(project_id), error=str(error), reason_code=code, stage=failed_stage)
         return self._result(project_id, run_id, "SAFETY_BLOCKED", invoked, self.query(project_id), reason_code="COORDINATOR_BOUND_EXCEEDED")

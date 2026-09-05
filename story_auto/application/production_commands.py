@@ -5,8 +5,8 @@ from story_auto.application.production_coordinator import ProductionCoordinator
 
 
 class ProductionCommands:
-    def __init__(self, query, operations, record_run=None):
-        self.coordinator = ProductionCoordinator(query, operations, record_run)
+    def __init__(self, query, operations, record_run=None, record_failure=None):
+        self.coordinator = ProductionCoordinator(query, operations, record_run, record_failure)
 
     def run_to_final(self, project_id: str) -> dict:
         return self.coordinator.run_until(project_id, "FINAL_VIDEO")

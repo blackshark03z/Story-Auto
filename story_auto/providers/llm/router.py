@@ -99,7 +99,8 @@ class GeminiReasoningRouter:
                media: tuple[LLMMedia, ...] = (), prompt_version: str,
                schema_version: str, qc_policy_version: str = "NONE",
                confidence_field: str | None = None, settings: dict[str, Any] | None = None,
-               acceptance_validator: Callable[[dict[str, Any]], None] | None = None) -> ReasoningResult:
+               acceptance_validator: Callable[[dict[str, Any]], None] | None = None,
+               acceptance_max_rejections: int | None = None) -> ReasoningResult:
         if tier not in {"HARD", "BULK"}: raise ValueError("tier must be HARD or BULK")
         media_hashes = [{"label": m.label, "mime_type": m.mime_type,
                          "sha256": hashlib.sha256(m.data).hexdigest()} for m in media]
@@ -109,10 +110,20 @@ class GeminiReasoningRouter:
                     "router_version": ROUTER_VERSION}
         input_hash = hashlib.sha256(_canonical(identity)).hexdigest()
         cache = self.cache_dir / f"{input_hash}.json"
+        corrective_feedback = ""
+        semantic_rejections = 0
         if cache.is_file():
             saved = read_json(cache); _validate(saved["value"], schema)
+            original = _canonical(saved["value"])
             rejection = self._acceptance_rejection(saved["value"], acceptance_validator)
             if rejection is None:
+                if acceptance_validator is not None:
+                    repaired = original != _canonical(saved["value"])
+                    saved["semantic_acceptance"] = {"status": "REPAIRED" if repaired else "ACCEPTED"}
+                    if repaired:
+                        saved["original_value"] = json.loads(original)
+                        self._record({"input_hash": input_hash, "task": task, "status": "REPAIRED", "source": "CACHE"})
+                    atomic_write_json(cache, saved)
                 return ReasoningResult(saved["value"], saved["model"], saved["credential_alias"],
                                        saved["project_alias"], True, saved.get("fallback_count", 0), 0, input_hash)
             self._record({"input_hash": input_hash, "task": task, "tier": tier,
@@ -120,6 +131,10 @@ class GeminiReasoningRouter:
                           "failure_class": rejection.failure_class,
                           "prompt_version": prompt_version, "schema_version": schema_version,
                           "qc_policy_version": qc_policy_version})
+            saved["semantic_acceptance"] = {"status": "REJECTED", "failure_class": rejection.failure_class}
+            atomic_write_json(cache, saved)
+            if acceptance_max_rejections is not None:
+                corrective_feedback = str(rejection)
         models = list(HARD_MODELS if tier == "HARD" else BULK_MODELS)
         attempted: list[dict[str, str]] = []; request_count = 0
         last_rejection: Exception | None = None
@@ -144,16 +159,18 @@ class GeminiReasoningRouter:
                 request_count += 1
                 try:
                     response = self.provider_factory([credential.key]).generate_structured(LLMRequest(
-                        model, prompt, schema, settings or {"max_attempts": 2, "timeout_seconds": 180,
+                        model, prompt + ("\nCorrective feedback:\n" + corrective_feedback if corrective_feedback else ""), schema, settings or {"max_attempts": 2, "timeout_seconds": 180,
                         "temperature": .1, "maxOutputTokens": 4096}, input_hash[:24], task, media))
                     _validate(response.value, schema)
                     if tier == "BULK" and confidence_field and str(response.value.get(confidence_field, "")).upper() in {"LOW", "UNCERTAIN"}:
                         hard = self.reason(task=task, prompt=prompt, schema=schema, tier="HARD", media=media,
                             prompt_version=prompt_version, schema_version=schema_version,
                             qc_policy_version=qc_policy_version, confidence_field=None, settings=settings,
-                            acceptance_validator=acceptance_validator)
+                            acceptance_validator=acceptance_validator,
+                            acceptance_max_rejections=acceptance_max_rejections)
                         return ReasoningResult(hard.value, hard.model, hard.credential_alias, hard.project_alias,
                                                hard.cache_hit, len(attempted) + hard.fallback_count, request_count + hard.request_count, input_hash)
+                    original = _canonical(response.value)
                     rejection = self._acceptance_rejection(response.value, acceptance_validator)
                     if rejection is not None:
                         last_rejection = rejection
@@ -167,10 +184,21 @@ class GeminiReasoningRouter:
                                       "qc_policy_version": qc_policy_version})
                         attempted.append({"model": model, "project_alias": credential.project_alias,
                                           "failure_class": failure})
+                        semantic_rejections += 1
+                        if acceptance_max_rejections is not None:
+                            corrective_feedback = str(rejection)
+                            if semantic_rejections >= acceptance_max_rejections:
+                                self._record({"input_hash": input_hash, "task": task, "status": "FAILED",
+                                              "failure_class": failure, "semantic_rejections": semantic_rejections})
+                                raise rejection
                         continue
                     saved = {"value": response.value, "model": response.model,
                              "credential_alias": credential.alias, "project_alias": credential.project_alias,
                              "fallback_count": len(attempted), "identity": identity}
+                    if acceptance_validator is not None:
+                        repaired = original != _canonical(response.value)
+                        saved["semantic_acceptance"] = {"status": "REPAIRED" if repaired else "ACCEPTED"}
+                        if repaired: saved["original_value"] = json.loads(original)
                     self.cache_dir.mkdir(parents=True, exist_ok=True); atomic_write_json(cache, saved)
                     self._record({"input_hash": input_hash, "task": task, "tier": tier, "model": response.model,
                                   "credential_alias": credential.alias, "project_alias": credential.project_alias,
@@ -244,7 +272,9 @@ class RoutedGeminiProvider(GeminiProvider):
             prompt_version=f"{request.stage}-routed/1.0.0",
             schema_version="story-auto-routed-structured-output/1.0.0",
             qc_policy_version="DETERMINISTIC_PLANNING_CONTRACT",
-            settings={**request.settings, "max_attempts":1})
+            settings={**request.settings, "max_attempts":1},
+            acceptance_validator=request.acceptance_validator,
+            acceptance_max_rejections=request.acceptance_max_rejections)
         return LLMResponse(result.value, result.model, request.request_id,
             max(1, result.request_count), round((time.monotonic() - started) * 1000),
             {"router_input_hash":result.input_hash, "credential_alias":result.credential_alias,

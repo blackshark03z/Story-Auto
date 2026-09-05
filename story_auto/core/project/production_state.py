@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.6"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.7"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 DEFAULT_STUCK_PENDING_SECONDS = 900
 
@@ -259,8 +259,17 @@ class ProductionStateReconciler:
         stages["RENDER"] = self._stage("COMPLETE" if final_present else ("BLOCKED" if policy["render"].action == "BLOCK" else "READY"), policy["render"].action, policy["render"].reason)
 
         blocker = None
+        planning_failure = old_run.get("failure", {})
+        current_planning_failure = (old_run.get("status") == "SAFETY_BLOCKED"
+            and planning_failure.get("stage") == "PLAN"
+            and planning_failure.get("evidence_fingerprint") == fingerprint
+            and self._first_incomplete(stages) == "PLAN")
         if control.get("pause_requested") is True:
             blocker = self._blocker("PAUSED_BY_OWNER", "Production is paused by the owner.", "Continue production", True, False)
+        elif current_planning_failure:
+            blocker = self._blocker(planning_failure["reason_code"],
+                "Story Auto couldn't produce a complete visual plan. Your audio and timing are saved. Try again.",
+                "Retry planning", True, False, "PLAN")
         elif stages["PLAN"]["status"] == "BLOCKED" and qc_policy != AUTO_ACCEPT:
             blocker = self._blocker("OWNER_DECISION_REQUIRED", "Review and approve the production plan before visuals are created.", "Review plan", True, True, "PLAN")
         elif recovery["status"] == "BLOCKED":
@@ -294,6 +303,9 @@ class ProductionStateReconciler:
             active_stage = self._first_incomplete(stages)
             pipeline_status = recovery["status"] if active_stage == "VISUALS" and recovery["status"] in {"RUNNING", "RECOVERY_READY"} else "READY"
             next_action = {"action": "run_to_final", "label": "Create video" if active_stage == "SOURCE" else "Continue production"}
+        if current_planning_failure and blocker and blocker.get("stage") == "PLAN" and not final_present:
+            pipeline_status = "SAFETY_BLOCKED"
+            next_action = {"action": "run_to_final", "label": "Retry planning"}
         revision = int(existing.get("state_revision", 0)) + 1 if isinstance(existing, dict) else 1
         if isinstance(existing, dict) and existing.get("evidence_fingerprint") == fingerprint:
             revision = int(existing.get("state_revision", 1))
@@ -301,7 +313,7 @@ class ProductionStateReconciler:
             "schema_version": PRODUCTION_STATE_SCHEMA_VERSION, "project_id": paths.project_id, "state_revision": revision,
             "intent": execution_mode(config.settings), "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
             "pipeline_status": pipeline_status, "active_stage": active_stage,
-            "run": {"run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality, "planning": planning,
+            "run": {**old_run, "run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality, "planning": planning,
             "recovery": recovery, "blocker": blocker, "next_action": next_action,
             "visual_asset_evidence": [item for item in evidence if item["path"].startswith("assets/")],
             "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},

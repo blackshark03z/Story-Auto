@@ -35,6 +35,8 @@ class LLMRequest:
     request_id: str
     stage: str
     media: tuple["LLMMedia", ...] = ()
+    acceptance_validator: Callable[[dict[str, Any]], None] | None = None
+    acceptance_max_rejections: int | None = None
 
 
 @dataclass(frozen=True)
