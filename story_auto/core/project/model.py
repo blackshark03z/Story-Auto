@@ -132,7 +132,10 @@ class ProjectConfig:
             flow = provider_binding.get("flow")
             required = {"state", "project_url", "project_identity", "created_for_story_project_id",
                         "project_name", "activation_state", "created_at"}
-            optional = {"activation_started_at", "created_at_provider", "bound_at", "last_setup_failure", "last_setup_failure_at"}
+            optional = {"activation_started_at", "activation_baseline_project_ids",
+                        "activation_baseline_observed_at", "created_at_provider", "bound_at",
+                        "last_setup_failure", "last_setup_failure_at", "last_setup_failure_phase",
+                        "name_confirmation_pending"}
             if (not isinstance(flow, dict) or not required.issubset(flow)
                     or not set(flow).issubset(required | optional)
                     or flow.get("state") not in {"CREATE_INTENT", "CREATED", "BOUND"}
@@ -141,6 +144,20 @@ class ProjectConfig:
                     or not isinstance(flow.get("project_name"), str) or not flow["project_name"].strip()
                     or not isinstance(flow.get("created_at"), str) or not flow["created_at"].strip()):
                 raise ProjectValidationError("settings.provider_binding.flow is invalid")
+            if "name_confirmation_pending" in flow and (flow["name_confirmation_pending"] is not True or flow["state"] != "CREATED"):
+                raise ProjectValidationError("settings.provider_binding.flow pending name is invalid")
+            baseline = flow.get("activation_baseline_project_ids")
+            baseline_at = flow.get("activation_baseline_observed_at")
+            if ((baseline is None) != (baseline_at is None)
+                    or (baseline is not None and
+                        (not isinstance(baseline, list)
+                         or any(not isinstance(item, str) or not item.strip() for item in baseline)
+                         or len(set(baseline)) != len(baseline)
+                         or not isinstance(baseline_at, str) or not baseline_at.strip()))):
+                raise ProjectValidationError("settings.provider_binding.flow activation baseline is invalid")
+            if ("last_setup_failure_phase" in flow and flow["last_setup_failure_phase"] not in
+                    {"PRE_ACTIVATION", "MAY_HAVE_ACTIVATED", "VERIFY_BINDING"}):
+                raise ProjectValidationError("settings.provider_binding.flow failure phase is invalid")
             if flow["state"] in {"CREATED", "BOUND"}:
                 if (not isinstance(flow.get("project_url"), str) or not flow["project_url"].strip()
                         or not isinstance(flow.get("project_identity"), str) or not flow["project_identity"].strip()):

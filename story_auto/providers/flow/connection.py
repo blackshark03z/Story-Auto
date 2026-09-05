@@ -43,7 +43,11 @@ def normalize_project_url(value: str) -> str:
     if parsed.query or parsed.fragment:
         raise FlowConnectionError("FLOW_URL_INVALID")
     path = parsed.path.rstrip("/")
-    if not path or "/flow" not in path.lower():
+    if parsed.netloc.lower() == "flow.google.com":
+        from .project_surface import CURRENT_PROJECT_PATH
+        if parsed.scheme.lower() != "https" or not CURRENT_PROJECT_PATH.fullmatch(path):
+            raise FlowConnectionError("FLOW_URL_INVALID")
+    elif not path or "/flow" not in path.lower():
         raise FlowConnectionError("FLOW_URL_INVALID")
     return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
 
@@ -204,10 +208,14 @@ class FlowConnectionService:
                                   "message":"Sign in to Google Flow in the dedicated Story Auto browser, then continue project setup.",
                                   "project_url":managed.get("project_url"), "project_identity":managed.get("project_identity")}
                 code = ("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED"
-                        if managed.get("activation_state") == "STARTED" else "FLOW_PROJECT_SETUP_REQUIRED")
+                        if managed.get("activation_state") == "STARTED" else
+                        managed.get("last_setup_failure") or "FLOW_PROJECT_SETUP_REQUIRED")
                 return None, {**base,
                               "status":"PROJECT_SETUP_REQUIRED", "code":code,
                               "message":"Story Auto must finish creating this project's Flow project before media can be created.",
+                              "last_setup_failure":managed.get("last_setup_failure"),
+                              "setup_failure_phase":managed.get("last_setup_failure_phase"),
+                              "creation_retryable":managed.get("activation_state") == "NOT_ATTEMPTED",
                               "project_url":managed.get("project_url"), "project_identity":managed.get("project_identity")}
             if current is None:
                 return None, {**self.get_connection_status(required_capabilities=required_capabilities),

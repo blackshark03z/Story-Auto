@@ -434,15 +434,24 @@ class OperatorService:
                     if temporary_dir.exists(): temporary_dir.rmdir()
             except Exception:
                 raise
-        if self.auto_flow_projects and mode!="RENDER_ONLY" and connection is not None:
+        if self.auto_flow_projects and mode!="RENDER_ONLY":
             try:
                 self.flow_project_bindings.ensure(ident,self.flow_projects)
             except (FlowProjectBindingError, FlowSessionError):
-                # The Story Auto project and its pre-activation intent remain
-                # durable. Provider/session setup is recoverable from the
-                # project page and must not make project creation look failed.
+                # Local creation succeeded. The binding service durably records
+                # the exact setup failure; snapshot returns that status with the
+                # saved project ID so clients cannot mistake this for BOUND.
                 pass
-        return self.snapshot(paths.project_id)
+        result = self.snapshot(paths.project_id)
+        if self.auto_flow_projects and mode!="RENDER_ONLY":
+            _, saved_config = self._project(ident)
+            binding = managed_binding(saved_config)
+            result["flow_setup"] = {"state":binding["state"],
+                                    "failure_class":binding.get("last_setup_failure"),
+                                    "activation_state":binding["activation_state"],
+                                    "project_url":binding.get("project_url"),
+                                    "project_identity":binding.get("project_identity")}
+        return result
 
     def _project(self, project_id: str): return load_project(self.runtime,project_id)
 

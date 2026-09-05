@@ -18,6 +18,7 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from .cdp import CdpPage
 from .session import FlowRuntime, FlowSessionError
+from .project_surface import CURRENT_PROJECT_PATH, LIST_DOM, observed_project_list, list_agrees_with_dom
 
 
 FLOW_HOME_URL = "https://labs.google/fx/vi/tools/flow"
@@ -69,10 +70,12 @@ def canonical_project(value: dict[str, Any]) -> dict[str, str]:
     if not all(isinstance(item, str) and item.strip() for item in (name, url, identity)):
         raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
     parsed = urlsplit(url.strip())
-    match = _PROJECT_PATH.fullmatch(parsed.path.rstrip("/"))
-    if parsed.scheme != "https" or parsed.netloc.lower() != "labs.google" or parsed.query or parsed.fragment or not match:
+    host = parsed.netloc.lower()
+    pattern = CURRENT_PROJECT_PATH if host == "flow.google.com" else _PROJECT_PATH
+    match = pattern.fullmatch(parsed.path.rstrip("/"))
+    if parsed.scheme != "https" or host not in {"labs.google", "flow.google.com"} or parsed.query or parsed.fragment or not match:
         raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
-    normalized = urlunsplit(("https", "labs.google", parsed.path.rstrip("/"), "", ""))
+    normalized = urlunsplit(("https", host, parsed.path.rstrip("/"), "", ""))
     if identity.strip() not in {match.group(1), normalized}:
         raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
     return {"project_name": name.strip(), "project_url": normalized, "project_identity": identity.strip()}
@@ -111,7 +114,8 @@ class FlowProjectBindingService:
             actual = canonical_project(observed)
         except FlowProjectBindingError:
             return False
-        return actual == expected
+        return (actual["project_name"] == expected["project_name"] and
+                actual["project_url"].rsplit("/", 1)[-1] == expected["project_url"].rsplit("/", 1)[-1])
 
     def _bind(self, project_id: str, binding: dict[str, Any], provider: dict[str, Any], adapter) -> dict[str, Any]:
         exact = canonical_project(provider)
@@ -120,15 +124,17 @@ class FlowProjectBindingService:
         created = {**binding, **exact, "state": "CREATED", "created_at_provider": _now()}
         created.pop("last_setup_failure", None)
         created.pop("last_setup_failure_at", None)
+        created.pop("last_setup_failure_phase", None)
+        created.pop("name_confirmation_pending", None)
         self._save(project_id, created)
         observed = adapter.open_project(exact["project_url"], exact["project_identity"], exact["project_name"])
         if not self._same(exact, observed):
             raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
-        bound = {**created, "state": "BOUND", "bound_at": _now()}
+        bound = {**created, **canonical_project(observed), "state": "BOUND", "bound_at": _now()}
         return self._save(project_id, bound)
 
     def ensure(self, project_id: str, adapter) -> dict[str, Any]:
-        with ProjectLock(self.runtime, project_id):
+        with ProjectLock(self.runtime, "flow-project-binding-session"), ProjectLock(self.runtime, project_id):
             _paths, config = load_project(self.runtime, project_id)
             binding = managed_binding(config)
             if binding is None:
@@ -142,27 +148,83 @@ class FlowProjectBindingService:
                 observed = adapter.open_project(exact["project_url"], exact["project_identity"], exact["project_name"])
                 if not self._same(exact, observed):
                     raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
+                if canonical_project(observed) != exact:
+                    return self._save(project_id, {**binding, **canonical_project(observed)})
                 return binding
             if binding.get("state") == "CREATED":
+                if binding.get("name_confirmation_pending"):
+                    resume = getattr(adapter, "resume_created_project", None)
+                    if not callable(resume):
+                        raise FlowProjectBindingError("FLOW_PROJECT_NAME_NOT_CONFIRMED")
+                    provider = resume(binding["project_url"], binding["project_identity"], binding["project_name"])
+                    return self._bind(project_id, binding, provider, adapter)
                 return self._bind(project_id, binding, binding, adapter)
             if binding.get("state") != "CREATE_INTENT":
                 raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
             try:
                 matches = [canonical_project(item) for item in adapter.find_projects(binding["project_name"])]
-            except FlowProjectBindingError as error:
-                if error.failure_class == "FLOW_AUTH_REQUIRED":
-                    binding.update({"last_setup_failure": "FLOW_AUTH_REQUIRED", "last_setup_failure_at": _now()})
+                matches = [item for item in matches if item["project_name"] == binding["project_name"]]
+                if len(matches) == 1:
+                    return self._bind(project_id, binding, matches[0], adapter)
+                if binding.get("activation_state") == "STARTED":
+                    reconcile = getattr(adapter, "reconcile_started", None)
+                    recovered = reconcile(binding) if callable(reconcile) else None
+                    if recovered is not None:
+                        return self._bind(project_id, binding, recovered, adapter)
+                    raise FlowProjectBindingError("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED")
+                if matches:
+                    # A missing row is not proof of mutation absence (creation
+                    # may have succeeded before the deterministic rename).
+                    raise FlowProjectBindingError("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED")
+
+                def before_activation(evidence=None):
+                    if binding.get("activation_state") != "NOT_ATTEMPTED":
+                        raise FlowProjectBindingError("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED")
+                    binding.update({"activation_state": "STARTED", "activation_started_at": _now()})
+                    if evidence is not None:
+                        ids = evidence.get("project_ids") if isinstance(evidence, dict) else None
+                        observed_at = evidence.get("observed_at") if isinstance(evidence, dict) else None
+                        if (not isinstance(ids, list) or any(not isinstance(item, str) or not item for item in ids)
+                                or len(set(ids)) != len(ids) or not isinstance(observed_at, str) or not observed_at):
+                            raise FlowProjectBindingError("FLOW_PROJECT_LIST_UNVERIFIED")
+                        binding.update({"activation_baseline_project_ids":sorted(ids),
+                                        "activation_baseline_observed_at":observed_at})
                     self._save(project_id, binding)
+
+                def record_created(provider):
+                    exact = canonical_project(provider)
+                    if binding.get("activation_state") != "STARTED" or exact["project_name"] != binding["project_name"]:
+                        raise FlowProjectBindingError("FLOW_PROJECT_BINDING_INVALID")
+                    binding.update({**exact, "state":"CREATED", "name_confirmation_pending":True,
+                                    "created_at_provider":_now()})
+                    self._save(project_id, binding)
+
+                receipt_create = getattr(adapter, "create_project_with_receipt", None)
+                controlled_create = getattr(adapter, "create_project_with_activation", None)
+                if callable(receipt_create):
+                    created = receipt_create(binding["project_name"], before_activation, record_created)
+                elif callable(controlled_create):
+                    # The adapter calls this after read-only preparation, just
+                    # before its single mutation input. Exceptions never reset it.
+                    created = controlled_create(binding["project_name"], before_activation)
+                else:
+                    # Older injected adapters do not report a boundary; retain
+                    # their conservative at-most-once contract.
+                    before_activation()
+                    created = adapter.create_project(binding["project_name"])
+                return self._bind(project_id, binding, created, adapter)
+            except Exception as error:
+                # Reload: _bind may already have persisted CREATED. Do not
+                # replace that durable provider identity with the original intent.
+                _paths, current = load_project(self.runtime, project_id)
+                saved = managed_binding(current)
+                phase = ("VERIFY_BINDING" if saved.get("state") == "CREATED" else
+                         "MAY_HAVE_ACTIVATED" if saved.get("activation_state") == "STARTED" else "PRE_ACTIVATION")
+                saved.update({"last_setup_failure": getattr(error, "failure_class", type(error).__name__),
+                              "last_setup_failure_at": _now(), "last_setup_failure_phase": phase})
+                self._save(project_id, saved)
                 raise
-            matches = [item for item in matches if item["project_name"] == binding["project_name"]]
-            if len(matches) == 1:
-                return self._bind(project_id, binding, matches[0], adapter)
-            if matches or binding.get("activation_state") != "NOT_ATTEMPTED":
-                raise FlowProjectBindingError("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED")
-            binding.update({"activation_state": "STARTED", "activation_started_at": _now()})
-            self._save(project_id, binding)  # durable before the external activation
-            created = adapter.create_project(binding["project_name"])
-            return self._bind(project_id, binding, created, adapter)
+
 
 
 class LiveFlowProjects:
@@ -171,38 +233,69 @@ class LiveFlowProjects:
         self.runtime, self.cdp_url = runtime, cdp_url
 
     def _page(self) -> CdpPage:
-        legacy = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_HOME_URL, FLOW_HOME_URL)
-        try:
-            return CdpPage.open(legacy)
-        except FlowSessionError as error:
-            if error.failure_class != "FLOW_PROJECT_MISMATCH":
-                raise
-        # Google is rolling Flow from labs.google to flow.google.com. Attach to
-        # either host, then drive only the still-supported legacy surface. The
-        # runtime is restored to the legacy prefix so trusted locator clicks
-        # reconnect to the page after we navigate it back to labs.google.
-        migrated = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_MIGRATED_HOME_URL, FLOW_MIGRATED_HOME_URL)
-        page = CdpPage.open(migrated)
-        # The new flow.google.com landing page hydrates after the DevTools
-        # target is already attachable. Give its account control a short,
-        # bounded window to appear before deciding this is merely a host
-        # migration. This is read-only and occurs before any provider action.
-        deadline = time.monotonic() + 4.0
-        signed_out = False
-        while time.monotonic() < deadline:
-            signed_out = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('a')).some(a=>visible(a)&&/accounts\\.google\\.com\\/ServiceLogin/i.test(a.href||''))})()""") is True
-            if signed_out:
-                break
-            if page.evaluate("document.readyState") == "complete":
-                # One extra turn lets Angular mount header/account controls.
-                time.sleep(.25)
-            else:
-                time.sleep(.2)
-        if signed_out:
-            page.close()
-            raise FlowProjectBindingError("FLOW_AUTH_REQUIRED")
-        page.runtime = legacy
-        return page
+        if not (self.runtime.flow_profile / "Local State").is_file():
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "dedicated Flow profile has not been initialized")
+        for url in (FLOW_MIGRATED_HOME_URL, FLOW_HOME_URL):
+            runtime = FlowRuntime(self.runtime.flow_profile, self.cdp_url, url, url)
+            try:
+                return CdpPage.open(runtime)
+            except FlowSessionError as error:
+                if error.failure_class != "FLOW_PROJECT_MISMATCH":
+                    raise
+        raise FlowSessionError("FLOW_PROJECT_MISMATCH", "expected one dedicated Flow tab")
+
+    def _current_list(self) -> list[dict[str, str]]:
+        """Fresh, complete provider UI response plus matching hydrated DOM."""
+        from playwright.sync_api import sync_playwright
+        if not (self.runtime.flow_profile / "Local State").is_file():
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE")
+        with sync_playwright() as pw:
+            browser = pw.chromium.connect_over_cdp(self.cdp_url)
+            try:
+                pages = [p for c in browser.contexts for p in c.pages
+                         if urlsplit(p.url).hostname in {"flow.google.com", "labs.google"}]
+                if len(pages) != 1:
+                    raise FlowSessionError("FLOW_PROJECT_MISMATCH", "expected one dedicated Flow tab")
+                page = pages[0]
+                lists, auth_failures = [], []
+
+                def observe(response):
+                    if (urlsplit(response.url).hostname != "flow.google.com" or
+                            response.request.resource_type not in {"xhr", "fetch"}):
+                        return
+                    if response.status == 401:
+                        auth_failures.append(401)
+                    if response.status != 200:
+                        return
+                    try:
+                        rows = observed_project_list(response.text())
+                        if rows is not None:
+                            lists.append(rows)
+                    except Exception:
+                        pass  # unreadable response is never absence proof
+
+                page.on("response", observe)
+                page.goto(FLOW_MIGRATED_HOME_URL + "/", wait_until="domcontentloaded", timeout=20000)
+                deadline = time.monotonic() + 25
+                entered = False
+                while time.monotonic() < deadline:
+                    if auth_failures or urlsplit(page.url).hostname == "accounts.google.com":
+                        raise FlowProjectBindingError("FLOW_AUTH_REQUIRED")
+                    if lists and list_agrees_with_dom(lists[-1], page.evaluate(LIST_DOM)):
+                        self.last_list_evidence = {"source":"provider-ui-UpteDb-and-projects-grid",
+                                                   "observed_at":_now(), "count":len(lists[-1]),
+                                                   "projects":lists[-1]}
+                        return lists[-1]
+                    if urlsplit(page.url).path == "/about" and not entered:
+                        entry = page.locator('button[aria-label="Create with Google Flow"]')
+                        if entry.count() == 1 and entry.is_visible():
+                            page.bring_to_front()
+                            entry.click(timeout=5000)
+                            entered = True
+                    page.wait_for_timeout(200)
+                raise FlowProjectBindingError("FLOW_PROJECT_LIST_UNVERIFIED")
+            finally:
+                browser.close()  # disconnect from CDP; never close the owner browser
 
     @staticmethod
     def _navigate_legacy_surface(page: CdpPage, target_url: str, *, ready_expression: str,
@@ -227,18 +320,18 @@ class LiveFlowProjects:
         raise FlowProjectBindingError("FLOW_HOST_MIGRATED_RETRY_REQUIRED")
 
     @staticmethod
-    def _wait_project(page: CdpPage, timeout: float = 20.0) -> str:
+    def _wait_project(page: CdpPage, timeout: float = 20.0, expected_url: str | None = None) -> str:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             url = page.evaluate("location.href")
-            if isinstance(url, str) and _PROJECT_PATH.fullmatch(urlsplit(url).path.rstrip("/")):
+            if isinstance(url, str) and urlsplit(url).hostname == "flow.google.com" and CURRENT_PROJECT_PATH.fullmatch(urlsplit(url).path.rstrip("/")) and (expected_url is None or url == expected_url):
                 return url
             time.sleep(.2)
         raise FlowProjectBindingError("FLOW_PROJECT_CREATE_OUTCOME_UNKNOWN")
 
     @staticmethod
     def _title(page: CdpPage) -> str | None:
-        return page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value);return xs.length===1?xs[0].value:null})()""")
+        return page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll(location.hostname==='flow.google.com'?'flow-navigation-header input.editable-text-input':'input[type=text]')).filter(e=>visible(e)&&e.value);return xs.length===1?xs[0].value:null})()""")
 
     @classmethod
     def _set_title(cls, page: CdpPage, name: str) -> None:
@@ -248,7 +341,7 @@ class LiveFlowProjects:
         deadline = time.monotonic() + 10
         focused = False
         while time.monotonic() < deadline:
-            focused = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value);if(xs.length!==1)return false;xs[0].focus();xs[0].select();return true})()""")
+            focused = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const xs=Array.from(document.querySelectorAll(location.hostname==='flow.google.com'?'flow-navigation-header input.editable-text-input':'input[type=text]')).filter(e=>visible(e)&&e.value);if(xs.length!==1)return false;xs[0].focus();xs[0].select();return true})()""")
             if focused is True:
                 break
             time.sleep(.2)
@@ -265,72 +358,99 @@ class LiveFlowProjects:
             raise FlowProjectBindingError("FLOW_PROJECT_NAME_NOT_CONFIRMED")
 
     def find_projects(self, name: str) -> list[dict[str, str]]:
-        page = self._page()
-        try:
-            self._navigate_legacy_surface(page, FLOW_HOME_URL, ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};return Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2')).length===1})()""")
-            rows = page.evaluate("""(()=>Array.from(document.querySelectorAll('a[href*="/flow/project/"]')).map(a=>({project_url:a.href,project_name:(a.innerText||a.getAttribute('aria-label')||a.parentElement?.innerText||'').trim()})))()""") or []
-            found = []
-            for row in rows:
-                text = str(row.get("project_name", "")).splitlines()
-                if name not in text and str(row.get("project_name", "")).strip() != name:
-                    continue
-                parsed = urlsplit(str(row.get("project_url", "")))
-                match = _PROJECT_PATH.fullmatch(parsed.path.rstrip("/"))
-                if match:
-                    found.append({"project_name": name, "project_url": str(row["project_url"]), "project_identity": match.group(1)})
-            unique = {(item["project_url"], item["project_identity"]): item for item in found}
-            return list(unique.values())
-        finally:
-            page.close()
+        return [row for row in self._current_list() if row["project_name"] == name]
 
     def create_project(self, name: str) -> dict[str, str]:
+        return self.create_project_with_activation(name, lambda: None)
+
+    def create_project_with_activation(self, name: str, before_activation) -> dict[str, str]:
+        return self.create_project_with_receipt(name, before_activation, lambda provider: None)
+
+    def create_project_with_receipt(self, name: str, before_activation, record_created) -> dict[str, str]:
+        # Recheck authoritative absence on this same page immediately before
+        # resolving the one create control. This navigation is pre-activation.
+        matches = self.find_projects(name)
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            raise FlowProjectBindingError("FLOW_PROJECT_CREATION_RECONCILIATION_REQUIRED")
         page = self._page()
         try:
-            self._navigate_legacy_surface(page, FLOW_HOME_URL, ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};return Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2')).length===1})()""")
-            # Keep project creation on the already-verified legacy CDP page.
-            # Reattaching through Playwright creates a race with Google's host
-            # migration redirect; native DevTools mouse events are trusted and
-            # avoid acting on a different page after that reconnect.
-            control = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const xs=Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2'));return xs.map(b=>{const r=b.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})})()""") or []
+            page.command("Page.bringToFront")
+            control = page.evaluate("""(()=>Array.from(document.querySelectorAll('flow-projects-page button.new-project-button')).filter(b=>{const r=b.getBoundingClientRect(),s=getComputedStyle(b);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&!b.disabled}).map(b=>{const r=b.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;return b.contains(document.elementFromPoint(x,y))?{x,y}:null}).filter(Boolean))()""") or []
             current_url = page.evaluate("location.href")
-            if not isinstance(current_url, str) or not current_url.startswith("https://labs.google/"):
-                raise FlowProjectBindingError("FLOW_HOST_MIGRATED_RETRY_REQUIRED")
-            if not isinstance(control, list) or len(control) != 1:
+            if urlsplit(current_url).hostname != "flow.google.com" or urlsplit(current_url).path != "/":
+                raise FlowProjectBindingError("FLOW_PROJECT_LIST_UNVERIFIED")
+            if len(control) != 1:
                 raise FlowProjectBindingError("FLOW_PROJECT_CREATE_CONTROL_AMBIGUOUS")
+            evidence = getattr(self, "last_list_evidence", None)
+            projects = evidence.get("projects") if isinstance(evidence, dict) else None
+            if not isinstance(projects, list):
+                raise FlowProjectBindingError("FLOW_PROJECT_LIST_UNVERIFIED")
+            before_activation({"project_ids":[row["project_identity"] for row in projects],
+                               "observed_at":evidence["observed_at"]})
             page.click(float(control[0]["x"]), float(control[0]["y"]))
             url = self._wait_project(page)
+            provider = {"project_name":name, "project_url":url, "project_identity":url.rsplit("/",1)[-1]}
+            record_created(provider)  # recover the exact new project even if rename crashes
             self._set_title(page, name)
-            match = _PROJECT_PATH.fullmatch(urlsplit(url).path.rstrip("/"))
-            return {"project_name": name, "project_url": url, "project_identity": match.group(1)}
         finally:
             page.close()
+        self._confirm_saved_title(provider)
+        return provider
+
+    def reconcile_started(self, binding: dict[str, Any]) -> dict[str, str] | None:
+        """Recover a post-click crash only from an exact persisted list delta."""
+        baseline = binding.get("activation_baseline_project_ids")
+        if not isinstance(baseline, list):
+            return None
+        rows = self._current_list()
+        new_rows = [row for row in rows if row["project_identity"] not in set(baseline)]
+        if len(new_rows) != 1:
+            return None
+        candidate = {"project_name":binding["project_name"],
+                     "project_url":new_rows[0]["project_url"],
+                     "project_identity":new_rows[0]["project_identity"]}
+        return self.resume_created_project(candidate["project_url"], candidate["project_identity"],
+                                           candidate["project_name"])
+
+    def _confirm_saved_title(self, provider: dict) -> None:
+        matches = self.find_projects(provider["project_name"])
+        if len(matches) != 1 or not FlowProjectBindingService._same(provider, matches[0]):
+            raise FlowProjectBindingError("FLOW_PROJECT_NAME_NOT_CONFIRMED")
+
+    def resume_created_project(self, project_url: str, project_identity: str, project_name: str) -> dict[str, str]:
+        exact = canonical_project({"project_url":project_url, "project_identity":project_identity, "project_name":project_name})
+        page = self._page()
+        try:
+            page.command("Page.navigate", {"url":exact["project_url"]})
+            actual = self._wait_project(page, expected_url=exact["project_url"])
+            if actual != exact["project_url"]:
+                raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
+            self._set_title(page, project_name)
+        finally:
+            page.close()
+        self._confirm_saved_title(exact)
+        return exact
 
     def open_project(self, project_url: str, project_identity: str, project_name: str) -> dict[str, str]:
-        exact = canonical_project({"project_name": project_name, "project_url": project_url, "project_identity": project_identity})
+        exact = canonical_project({"project_name":project_name, "project_url":project_url, "project_identity":project_identity})
         page = self._page()
         try:
             current_url = page.evaluate("location.href")
-            if current_url == exact["project_url"]:
-                # Re-navigating the exact active Flow project clears the SPA's
-                # currently rendered provider surface.  Preserve that live
-                # surface across bounded Continue calls; only navigate when a
-                # different project/home is actually active.
-                deadline = time.monotonic() + 8
-                title = self._title(page)
-                while time.monotonic() < deadline and title is None:
-                    time.sleep(.2); title = self._title(page)
-                observed = {"project_name": title or "", "project_url": current_url,
-                            "project_identity": urlsplit(current_url).path.rstrip("/").split("/")[-1]}
-                if not FlowProjectBindingService._same(exact, observed):
-                    raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
-                return observed
-            self._navigate_legacy_surface(page, exact["project_url"], ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value).length===1})()""")
-            actual_url = self._wait_project(page)
-            deadline = time.monotonic() + 8
+            if current_url != exact["project_url"]:
+                # Legacy IDs are identical on the observed migrated host.
+                # Navigate directly to the current route, then verify ID/name.
+                target = FLOW_MIGRATED_HOME_URL + "/project/" + exact["project_url"].rsplit("/",1)[-1]
+                page.command("Page.navigate", {"url":target})
+                current_url = self._wait_project(page, expected_url=target)
+            deadline = time.monotonic() + 10
             title = self._title(page)
-            while time.monotonic() < deadline and title is None:
-                time.sleep(.2); title = self._title(page)
-            observed = {"project_name": title or "", "project_url": actual_url, "project_identity": urlsplit(actual_url).path.rstrip("/").split("/")[-1]}
+            while time.monotonic() < deadline and title != project_name:
+                time.sleep(.2)
+                title = self._title(page)
+            observed = {"project_name":title or "", "project_url":current_url,
+                        "project_identity":current_url.rstrip("/").rsplit("/",1)[-1]}
             if not FlowProjectBindingService._same(exact, observed):
                 raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
             return observed
