@@ -38,6 +38,7 @@ from story_auto.providers.flow.service import (queue_regeneration, replay_unreso
                                                supersede_ambiguous_request, reconcile_unresolved_flow_attempt)
 from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
+from story_auto.providers.flow.session import FlowSessionError
 from story_auto.providers.flow.project_binding import (FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -436,9 +437,10 @@ class OperatorService:
         if self.auto_flow_projects and mode!="RENDER_ONLY" and connection is not None:
             try:
                 self.flow_project_bindings.ensure(ident,self.flow_projects)
-            except FlowProjectBindingError:
+            except (FlowProjectBindingError, FlowSessionError):
                 # The Story Auto project and its pre-activation intent remain
-                # durable.  The project page exposes the fail-closed recovery.
+                # durable. Provider/session setup is recoverable from the
+                # project page and must not make project creation look failed.
                 pass
         return self.snapshot(paths.project_id)
 

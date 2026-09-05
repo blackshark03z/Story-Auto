@@ -11,6 +11,7 @@ from story_auto.providers.flow.service import FlowError
 from story_auto.providers.flow.project_binding import (
     FlowProjectBindingError,
     FlowProjectBindingService,
+    FLOW_HOME_URL,
     LiveFlowProjects,
     managed_flow_settings,
 )
@@ -159,6 +160,29 @@ class FlowProjectBindingTests(unittest.TestCase):
             observed = adapter.open_project(url, "exact-one", name)
             self.assertEqual(observed, {"project_name": name, "project_url": url, "project_identity": "exact-one"})
             self.assertEqual(page.commands, [])
+
+    def test_migrated_flow_host_is_retried_until_legacy_surface_is_ready(self):
+        class FakePage:
+            def __init__(self):
+                self.navigate_count = 0
+                self.current = "https://flow.google.com/project/example"
+            def command(self, method, params=None):
+                self.navigate_count += 1
+                self.current = ("https://flow.google.com/project/example" if self.navigate_count == 1
+                                else FLOW_HOME_URL)
+                return {}
+            def evaluate(self, expression):
+                if expression == "location.href": return self.current
+                if expression == "document.querySelectorAll('i').length > 0": return self.current.startswith("https://labs.google/")
+                raise AssertionError(expression)
+
+        page = FakePage()
+        reached = LiveFlowProjects._navigate_legacy_surface(
+            page, FLOW_HOME_URL,
+            ready_expression="document.querySelectorAll('i').length > 0",
+            attempts=2, timeout_per_attempt=.05)
+        self.assertEqual(reached, FLOW_HOME_URL)
+        self.assertEqual(page.navigate_count, 2)
 
     def test_known_empty_managed_project_can_supply_one_empty_provider_model_baseline(self):
         resolved, authority = _resolve_pre_dispatch_provider_model(

@@ -17,10 +17,11 @@ from story_auto.core.artifacts import atomic_write_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from .cdp import CdpPage
-from .session import FlowRuntime
+from .session import FlowRuntime, FlowSessionError
 
 
 FLOW_HOME_URL = "https://labs.google/fx/vi/tools/flow"
+FLOW_MIGRATED_HOME_URL = "https://flow.google.com"
 _PROJECT_PATH = re.compile(r"^/fx/vi/tools/flow/project/([A-Za-z0-9-]+)$")
 
 
@@ -162,8 +163,42 @@ class LiveFlowProjects:
         self.runtime, self.cdp_url = runtime, cdp_url
 
     def _page(self) -> CdpPage:
-        bootstrap = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_HOME_URL, FLOW_HOME_URL)
-        return CdpPage.open(bootstrap)
+        legacy = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_HOME_URL, FLOW_HOME_URL)
+        try:
+            return CdpPage.open(legacy)
+        except FlowSessionError as error:
+            if error.failure_class != "FLOW_PROJECT_MISMATCH":
+                raise
+        # Google is rolling Flow from labs.google to flow.google.com. Attach to
+        # either host, then drive only the still-supported legacy surface. The
+        # runtime is restored to the legacy prefix so trusted locator clicks
+        # reconnect to the page after we navigate it back to labs.google.
+        migrated = FlowRuntime(self.runtime.flow_profile, self.cdp_url, FLOW_MIGRATED_HOME_URL, FLOW_MIGRATED_HOME_URL)
+        page = CdpPage.open(migrated)
+        page.runtime = legacy
+        return page
+
+    @staticmethod
+    def _navigate_legacy_surface(page: CdpPage, target_url: str, *, ready_expression: str,
+                                 attempts: int = 4, timeout_per_attempt: float = 6.0) -> str:
+        """Reach one exact legacy Flow surface during the host-migration rollout.
+
+        Hostname alone is insufficient: labs.google can remain visible while
+        the old SPA is still loading or is about to redirect. Require the
+        caller's exact supported control before any external activation.
+        """
+        for _attempt in range(attempts):
+            page.command("Page.navigate", {"url": target_url})
+            deadline = time.monotonic() + timeout_per_attempt
+            while time.monotonic() < deadline:
+                current = page.evaluate("location.href")
+                if isinstance(current, str) and current.startswith(FLOW_MIGRATED_HOME_URL):
+                    break
+                if isinstance(current, str) and current.startswith("https://labs.google/"):
+                    if page.evaluate(ready_expression) is True:
+                        return current
+                time.sleep(.25)
+        raise FlowProjectBindingError("FLOW_HOST_MIGRATED_RETRY_REQUIRED")
 
     @staticmethod
     def _wait_project(page: CdpPage, timeout: float = 20.0) -> str:
@@ -206,8 +241,7 @@ class LiveFlowProjects:
     def find_projects(self, name: str) -> list[dict[str, str]]:
         page = self._page()
         try:
-            page.command("Page.navigate", {"url": FLOW_HOME_URL})
-            time.sleep(2)
+            self._navigate_legacy_surface(page, FLOW_HOME_URL, ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};return Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2')).length===1})()""")
             rows = page.evaluate("""(()=>Array.from(document.querySelectorAll('a[href*="/flow/project/"]')).map(a=>({project_url:a.href,project_name:(a.innerText||a.getAttribute('aria-label')||a.parentElement?.innerText||'').trim()})))()""") or []
             found = []
             for row in rows:
@@ -226,13 +260,18 @@ class LiveFlowProjects:
     def create_project(self, name: str) -> dict[str, str]:
         page = self._page()
         try:
-            page.command("Page.navigate", {"url": FLOW_HOME_URL})
-            time.sleep(1)
-            # Flow's project-create control requires the same trusted browser
-            # activation path used by media generation.  A synthetic DOM
-            # element.click() can be ignored by the current Flow UI even when
-            # the control is uniquely visible.
-            page.locator_click('button:has(i:text-is("add_2"))', timeout_ms=5000)
+            self._navigate_legacy_surface(page, FLOW_HOME_URL, ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};return Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2')).length===1})()""")
+            # Keep project creation on the already-verified legacy CDP page.
+            # Reattaching through Playwright creates a race with Google's host
+            # migration redirect; native DevTools mouse events are trusted and
+            # avoid acting on a different page after that reconnect.
+            control = page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const xs=Array.from(document.querySelectorAll('button')).filter(b=>visible(b)&&Array.from(b.querySelectorAll('i')).some(i=>(i.textContent||'').trim()==='add_2'));return xs.map(b=>{const r=b.getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})})()""") or []
+            current_url = page.evaluate("location.href")
+            if not isinstance(current_url, str) or not current_url.startswith("https://labs.google/"):
+                raise FlowProjectBindingError("FLOW_HOST_MIGRATED_RETRY_REQUIRED")
+            if not isinstance(control, list) or len(control) != 1:
+                raise FlowProjectBindingError("FLOW_PROJECT_CREATE_CONTROL_AMBIGUOUS")
+            page.click(float(control[0]["x"]), float(control[0]["y"]))
             url = self._wait_project(page)
             self._set_title(page, name)
             match = _PROJECT_PATH.fullmatch(urlsplit(url).path.rstrip("/"))
@@ -259,7 +298,7 @@ class LiveFlowProjects:
                 if not FlowProjectBindingService._same(exact, observed):
                     raise FlowProjectBindingError("FLOW_PROJECT_BINDING_MISMATCH")
                 return observed
-            page.command("Page.navigate", {"url": exact["project_url"]})
+            self._navigate_legacy_surface(page, exact["project_url"], ready_expression="""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('input[type=text]')).filter(e=>visible(e)&&e.value).length===1})()""")
             actual_url = self._wait_project(page)
             deadline = time.monotonic() + 8
             title = self._title(page)
