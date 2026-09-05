@@ -33,20 +33,35 @@ from .validation import validate_image
 
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
-_EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>({i,text:e.value??e.innerText??'',is_empty:e.tagName==='TEXTAREA'?!e.value:!!e.querySelector('[data-slate-zero-width][data-slate-length="0"]'),tag:e.tagName})))()"""
-_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
+_EDITOR_JS = """(()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}).map((e,i)=>{const clone=e.cloneNode(true);clone.querySelectorAll('[contenteditable="false"],.ProseMirror-widget,img,br').forEach(x=>x.remove());const text=e.value??clone.textContent??'';return {i,text,is_empty:!text.trim()||!!e.querySelector('[data-slate-zero-width][data-slate-length="0"]'),tag:e.tagName}}))()"""
+_CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);if(!editor)return [];let p=editor.parentElement;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&(e.matches('flow-generate-icon-button button.generate-icon-button,button.generate-icon-button')||Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='arrow_forward')));if(xs.length===1){const e=xs[0],r=e.getBoundingClientRect();return [{label:(e.innerText+' '+(e.getAttribute('aria-label')||'')).trim(),enabled:!e.disabled&&e.getAttribute('aria-disabled')!=='true',x:r.left+r.width/2,y:r.top+r.height/2}]}if(xs.length>1)return xs.map(e=>({label:e.innerText,enabled:!e.disabled&&e.getAttribute('aria-disabled')!=='true'}));p=p.parentElement}return []})()"""
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);parsed.hash='';key=parsed.href}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0})}}return out})()"""
 _PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]')),locale=document.documentElement.lang||null;for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),provider_job_id=tile.getAttribute('data-job-id')||tile.getAttribute('data-job')||null,hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,provider_job_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,terminal_structural_signals:terminalFailure?['warning','refresh','delete_forever']:[],raw_message:(tile.innerText||'').trim(),locale,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));let best=null;for(const tile of tiles){const key=Object.getOwnPropertyNames(tile).find(x=>x.startsWith('__reactFiber$'));let fiber=key?tile[key]:null;for(let depth=0;fiber&&depth<64;depth++,fiber=fiber.return){for(const props of [fiber.memoizedProps,fiber.pendingProps]){const xs=props&&Array.isArray(props.tiles)?props.tiles:null;if(!xs||!xs.length||!xs.every(x=>x&&typeof x.id==='string'))continue;const unique=new Map();for(const x of xs){const iso=v=>v instanceof Date?v.toISOString():(v&&typeof v.toDate==='function'?v.toDate().toISOString():(typeof v==='string'?v:null));unique.set(x.id,{card_id:x.id,media_type:x.type==null?null:String(x.type),created_at:iso(x.createdTime),modified_at:iso(x.modifiedTime),is_archived:!!x.isArchived})}if(!best||unique.size>best.length)best=Array.from(unique.values())}}}const provider_model_complete=Array.isArray(best)&&best.length>0;const provider_model_tiles=provider_model_complete?best:[];const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count,locale,provider_model_complete,provider_model_tiles}})()"""
+_CURRENT_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const locale=document.documentElement.lang||null,records=[],provider_model_tiles=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('flow-grid-tile-container')),viewport=document.querySelector('cdk-virtual-scroll-viewport.tiles-container');let identified=0;for(const tile of tiles){const video=tile.querySelector('flow-video-tile video[src],flow-video-tile source[src]'),image=tile.querySelector('flow-image-tile img[data-media-id],flow-image-tile img[src]'),media=video||image;if(!media)continue;const url=media.currentSrc||media.src||media.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const asset_id=media.getAttribute('data-media-id')||assetId(url),media_type=video?'VIDEO':'IMAGE',card_id='current:'+asset_id,key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);identified++;provider_model_tiles.push({card_id,media_type,created_at:null,modified_at:null,is_archived:false});const usable=media_type==='VIDEO'||(media.naturalWidth||0)>=512;if(usable)records.push({card_id,asset_id,media_type,state:'READY',url,kind:media.tagName,width:media.naturalWidth||media.videoWidth||0,height:media.naturalHeight||media.videoHeight||0})}const completeViewport=!!viewport&&Math.abs(viewport.scrollTop)<1&&viewport.scrollHeight<=viewport.clientHeight+1;const provider_model_complete=tiles.length>0&&completeViewport&&identified===tiles.length;const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records,global_pending_count,locale,provider_model_complete,provider_model_tiles:provider_model_complete?provider_model_tiles:[],contract_version:'flow-current-angular-surface/1.0.0'}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
-PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.2.0"
-POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.4.0"
+CURRENT_EDITOR_CONTRACT_VERSION = "flow-current-editor/1.0.0"
+
+
+def _settings_contract_js(action: str, *, media_type: str | None = None,
+                          ratio: str | None = None, count: int | None = None) -> str:
+    request = json.dumps({"action": action, "media_type": media_type,
+                          "ratio": ratio, "count": count})
+    return """(async()=>{const request=%s;const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const wait=()=>new Promise(r=>setTimeout(r,250));const editors=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(visible);if(editors.length!==1)return {reason:'editor',count:editors.length};const editor=editors[0],composer=editor.closest('flow-prompt-box,flow-base-prompt-box')||editor.parentElement;const trigger=()=>{const current=Array.from(composer.querySelectorAll('button.settings-trigger-button')).filter(visible);if(current.length===1)return current[0];let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1)return xs[0];if(xs.length>1)return null;p=p.parentElement}return null};const root=()=>Array.from(document.querySelectorAll('flow-prompt-box-settings')).find(visible)||null;const open=async()=>{if(root())return true;const t=trigger();if(!t)return false;activate(t);await wait();return !!root()||t.getAttribute('aria-expanded')==='true'};const icon=e=>Array.from(e.querySelectorAll('mat-icon,i')).map(x=>(x.textContent||'').trim());const aliases={IMAGE:'image',VIDEO:'videocam',LANDSCAPE:'crop_16_9',LANDSCAPE_4_3:'crop_4_3',SQUARE:'crop_square',PORTRAIT_3_4:'crop_3_4',PORTRAIT:'crop_9_16'};const controls=()=>{const scope=root()||document;return Array.from(scope.querySelectorAll('button[role=\"radio\"],button[aria-controls]')).filter(visible)};const matches=(e,value)=>{const legacy=(e.getAttribute('aria-controls')||'').endsWith('content-'+value);if(legacy)return true;if(['1','2','3','4'].includes(value))return (e.innerText||'').trim()==='x'+value;return icon(e).includes(aliases[value])};const find=value=>controls().filter(e=>matches(e,value));const selected=e=>e.getAttribute('aria-checked')==='true'||e.getAttribute('aria-selected')==='true';const choose=async value=>{if(!await open())return {ok:false,reason:'settings_trigger'};let xs=find(value);if(xs.length!==1)return {ok:false,reason:'setting:'+value,count:xs.length};let changed=!selected(xs[0]);if(changed){activate(xs[0]);await wait();if(!await open())return {ok:false,reason:'settings_reopen'};xs=find(value)}return {ok:xs.length===1&&selected(xs[0]),changed,count:xs.length}};const close=async()=>{if(root()){const t=trigger();if(!t)return false;activate(t);await wait()}return !root()&&trigger()?.getAttribute('aria-expanded')!=='true'};if(!await open())return {reason:'settings_trigger'};if(request.action==='capabilities'){const generate=Array.from(composer.querySelectorAll('flow-generate-icon-button button.generate-icon-button,button.generate-icon-button,button[type=\"submit\"]')).filter(e=>e.matches('button.generate-icon-button')||icon(e).includes('arrow_forward'));const add=Array.from(composer.querySelectorAll('button.add-menu-trigger')).filter(visible);const image=find('IMAGE').length===1,video=find('VIDEO').length===1;const known=image||video;const out={known,image,video,reference_image:image&&add.length===1,frame_video:video&&add.length===1,prompt_editor:true,generate_control:generate.length===1,settings_trigger:!!trigger(),contract_version:'%s'};out.menu_closed=await close();return out}const mode=await choose(request.media_type);if(!mode.ok)return mode;if(request.action==='choose_mode'){const out={ok:true,media:true,mode_mutated:mode.changed};out.menu_closed=await close();return out}if(request.action==='inspect_count'){const xs=controls().filter(selected).filter(e=>['1','2','3','4'].some(v=>matches(e,v)));const out={media:true,count:xs.length===1?Number((xs[0].innerText||'').trim().slice(1)):null};out.menu_closed=await close();return out}if(request.action==='configure_count'){const setting=await choose(String(request.count));const out={ok:setting.ok,media:true,count:request.count,count_mutated:setting.changed};out.menu_closed=await close();return out}const aspect=await choose(request.ratio);if(!aspect.ok)return aspect;if(!await open())return {reason:'settings_reopen'};const counts=controls().filter(selected).filter(e=>['1','2','3','4'].some(v=>matches(e,v)));const t=trigger(),out={media:find(request.media_type).filter(selected).length===1,ratio:find(request.ratio).filter(selected).length===1,actual_output_count:counts.length===1?Number((counts[0].innerText||'').trim().slice(1)):null,model:(t?.innerText||'').trim().split(/\\n/)[0],mode_mutated:mode.changed,ratio_mutated:aspect.changed,contract_version:'%s'};out.menu_closed=await close();return out})()""" % (request, CURRENT_EDITOR_CONTRACT_VERSION, CURRENT_EDITOR_CONTRACT_VERSION)
+
+PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.3.0"
+POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.5.0"
 SUPPORTED_POLL_EVIDENCE_SCHEMAS = {
     "story-auto-flow-poll-evidence/1.2.0": "flow-provider-surface/2.1.0",
-    "story-auto-flow-poll-evidence/1.3.0": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+    "story-auto-flow-poll-evidence/1.3.0": "flow-provider-surface/2.2.0",
+    "story-auto-flow-poll-evidence/1.4.0": "flow-provider-surface/2.2.0",
     POLL_EVIDENCE_VERSION: PROVIDER_SURFACE_EXTRACTOR_VERSION,
+}
+COMPACT_POLL_EVIDENCE_SCHEMAS = {
+    "story-auto-flow-poll-evidence/1.4.0",
+    POLL_EVIDENCE_VERSION,
 }
 MAX_POLL_OBSERVATIONS = 2048
 # The complete provider model is captured once and then delta encoded.  The
@@ -498,7 +513,7 @@ class ProviderPollEvidenceTimeline:
                 "observation_count", "complete", "evidence_complete", "terminal_state",
                 "timeline_sha256", "decision_binding_count", "decision_bindings_sha256",
         ]
-        if snapshot.get("schema_version") == POLL_EVIDENCE_VERSION:
+        if snapshot.get("schema_version") in COMPACT_POLL_EVIDENCE_SCHEMAS:
             keys.extend((
                 "collection_baselines_sha256", "compact_timeline_sha256", "legacy_import",
             ))
@@ -602,7 +617,7 @@ class ProviderPollEvidenceTimeline:
             persisted_observations = snapshot.get("observations")
             observations = (
                 cls._reconstruct_compact_observations(snapshot)
-                if schema_version == POLL_EVIDENCE_VERSION
+                if schema_version in COMPACT_POLL_EVIDENCE_SCHEMAS
                 else persisted_observations
             )
             bindings = snapshot.get("decision_bindings")
@@ -850,7 +865,7 @@ class _Control:
             raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate was not uniquely ready at activation")
         receipt["target_resolved_at_activation"] = True
         activation_token = secrets.token_hex(16)
-        installed = self.dom.page.evaluate("""(()=>{const token=%s;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);if(!editor)return false;let p=editor.parentElement,control=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&e.querySelector('i')?.textContent.trim()==='arrow_forward');if(xs.length===1){control=xs[0];break}if(xs.length>1)return false;p=p.parentElement}if(!control)return false;control.setAttribute('data-story-auto-flow-activation',token);window.__storyAutoFlowActivationV3=[];for(const name of ['pointerdown','mousedown','pointerup','mouseup','click'])control.addEventListener(name,e=>window.__storyAutoFlowActivationV3.push({type:e.type,isTrusted:e.isTrusted,button:e.button,buttons:e.buttons,pointerType:e.pointerType||null,defaultPrevented:e.defaultPrevented}),true);return true})()""" % __import__('json').dumps(activation_token))
+        installed = self.dom.page.evaluate("""(()=>{const token=%s;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);if(!editor)return false;let p=editor.parentElement,control=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.type==='submit'&&(e.matches('flow-generate-icon-button button.generate-icon-button,button.generate-icon-button')||Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='arrow_forward')));if(xs.length===1){control=xs[0];break}if(xs.length>1)return false;p=p.parentElement}if(!control)return false;control.setAttribute('data-story-auto-flow-activation',token);window.__storyAutoFlowActivationV3=[];for(const name of ['pointerdown','mousedown','pointerup','mouseup','click'])control.addEventListener(name,e=>window.__storyAutoFlowActivationV3.push({type:e.type,isTrusted:e.isTrusted,button:e.button,buttons:e.buttons,pointerType:e.pointerType||null,defaultPrevented:e.defaultPrevented}),true);return true})()""" % __import__('json').dumps(activation_token))
         if not installed:
             raise FlowError("FLOW_PRE_DISPATCH_ACTIVATION_FAILED", "Generate target changed before input")
         try:
@@ -960,26 +975,45 @@ class FlowBrowserDom:
     def reset_composer(self, *, timeout_seconds: int = 30) -> None:
         """Reloads a no-dispatch draft to clear stale UI state before an attempt."""
         self.page.command("Page.reload", {"ignoreCache":False})
+        # Page.reload acknowledges the command before the new document is
+        # necessarily active.  A single immediate editor read can therefore
+        # observe the outgoing document and let the next settings read race the
+        # replacement.  Require a complete document and three stable empty
+        # editor observations from the loaded project surface.
+        time.sleep(.5)
         deadline = time.monotonic() + timeout_seconds
+        stable = 0
         while time.monotonic() < deadline:
             try:
+                ready = self.page.evaluate(
+                    "(()=>({ready:document.readyState,url:location.href}))()") or {}
                 editors = self.page.evaluate(_EDITOR_JS) or []
-                if len(editors) == 1 and editors[0].get("is_empty"): return
+                exact_project = (
+                    ready.get("url", "").rstrip("/") == self.page.runtime.project_url.rstrip("/")
+                    if getattr(self.page, "runtime", None) is not None
+                    and getattr(self.page.runtime, "project_url", None)
+                    else True
+                )
+                if (ready.get("ready") == "complete" and exact_project
+                        and len(editors) == 1 and editors[0].get("is_empty")):
+                    stable += 1
+                    if stable >= 3:
+                        return
+                else:
+                    stable = 0
             except Exception: pass
             time.sleep(.25)
         raise FlowError("FLOW_UI_CHANGED", "Flow composer did not return to one empty editor")
     def choose_mode(self, media_type):
         token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
-        result = self.page.evaluate("""(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return {reason:'model_trigger'};if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}const xs=Array.from(document.querySelectorAll('button[aria-controls*=%s]')).filter(visible);if(xs.length!==1)return {reason:'mode',count:xs.length};(%s)(xs[0]);await new Promise(r=>setTimeout(r,250));return {ok:true}})()""" % (_ACTIVATE, __import__('json').dumps("content-" + token), _ACTIVATE))
-        if not isinstance(result, dict) or not result.get("ok"): raise FlowError("FLOW_UI_CHANGED", f"unable to resolve {media_type} mode: {result}")
+        result = self.page.evaluate(_settings_contract_js("choose_mode", media_type=token))
+        if (not isinstance(result, dict) or not result.get("ok")
+                or not result.get("media") or not result.get("menu_closed")):
+            raise FlowError("FLOW_UI_CHANGED", f"unable to resolve {media_type} mode: {result}")
     def inspect_generation_count(self, media_type: str) -> int:
         """Read Flow's count for one media type and leave the menu closed."""
         token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
-        # These provider-free UI transitions must not depend on animation
-        # frames: Chrome can throttle requestAnimationFrame for an occluded
-        # dedicated Flow tab while CDP itself remains connected.
-        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const selected=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;if(!selected(%s)){const xs=tab(%s);if(xs.length!==1)throw Error('mode:'+xs.length);activate(xs[0]);await new Promise(r=>setTimeout(r,0))}const media=selected(%s),count=[1,2,3,4].find(value=>selected(String(value)))||null;activate(trigger);await new Promise(r=>setTimeout(r,0));return {media,count,menu_closed:trigger.getAttribute('aria-expanded')!=='true'}})()""" % tuple(__import__('json').dumps(value) for value in (token, token, token))
-        actual = self.page.evaluate(script)
+        actual = self.page.evaluate(_settings_contract_js("inspect_count", media_type=token))
         if not isinstance(actual, dict) or not actual.get("media") or not actual.get("menu_closed"):
             raise FlowError("FLOW_UI_CHANGED", f"generation-count inspection failed: {actual}")
         if actual.get("count") not in {1, 2, 3, 4}:
@@ -987,19 +1021,22 @@ class FlowBrowserDom:
         return int(actual["count"])
     def configure_generation_count(self, media_type: str, count: int) -> None:
         """Mutate only the provider count setting, then let the caller verify it."""
-        token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
         if count not in {1, 2, 3, 4}:
             raise FlowError("FLOW_CAPABILITY_UNAVAILABLE", "unsupported Flow generation count")
-        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const selected=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;for(const value of [%s,%s]){if(!selected(value)){const xs=tab(value);if(xs.length!==1)throw Error('setting:'+value+':'+xs.length);activate(xs[0]);await new Promise(r=>setTimeout(r,0))}}activate(trigger);await new Promise(r=>setTimeout(r,0));return trigger.getAttribute('aria-expanded')!=='true'})()""" % tuple(__import__('json').dumps(value) for value in (token, str(count)))
-        if self.page.evaluate(script) is not True:
-            raise FlowError("FLOW_UI_CHANGED", "Flow generation-count settings menu did not close")
+        token = "IMAGE" if media_type == "IMAGE" else "VIDEO"
+        actual = self.page.evaluate(_settings_contract_js(
+            "configure_count", media_type=token, count=count))
+        if (not isinstance(actual, dict) or not actual.get("ok")
+                or not actual.get("media") or actual.get("count") != count
+                or not actual.get("menu_closed")):
+            raise FlowError("FLOW_UI_CHANGED", f"Flow generation-count setting failed: {actual}")
     def apply_request_settings(self, resolved: ResolvedFlowGenerationSettings) -> dict:
         """Apply request-specific mode and ratio without touching generation count."""
         token = "IMAGE" if resolved.media_type == "IMAGE" else "VIDEO"
         ratio = {"16:9":"LANDSCAPE", "4:3":"LANDSCAPE_4_3", "1:1":"SQUARE", "3:4":"PORTRAIT_3_4", "9:16":"PORTRAIT"}.get(resolved.aspect_ratio)
         if not ratio: raise FlowError("FLOW_CAPABILITY_UNAVAILABLE", "unsupported Flow aspect ratio")
-        script = """(async()=>{const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)throw Error('model_trigger');if(trigger.getAttribute('aria-expanded')!=='true'){activate(trigger);await new Promise(r=>setTimeout(r,0))}const tab=value=>Array.from(document.querySelectorAll('button[aria-controls]')).filter(e=>(e.getAttribute('aria-controls')||'').endsWith('content-'+value)&&visible(e));const choose=(value,reason)=>{const xs=tab(value);if(xs.length!==1)throw Error(reason+':'+xs.length);const changed=xs[0].getAttribute('aria-selected')!=='true';if(changed)activate(xs[0]);return changed};const mode_mutated=choose(%s,'mode');await new Promise(r=>setTimeout(r,0));const ratio_mutated=choose(%s,'ratio');await new Promise(r=>setTimeout(r,0));const active=value=>tab(value).filter(e=>e.getAttribute('aria-selected')==='true').length===1;const out={media:active(%s),ratio:active(%s),actual_output_count:[1,2,3,4].find(value=>active(String(value)))||null,model:trigger.innerText.trim(),mode_mutated,ratio_mutated};activate(trigger);await new Promise(r=>setTimeout(r,0));out.menu_closed=trigger.getAttribute('aria-expanded')!=='true';return out})()""" % tuple(__import__('json').dumps(value) for value in (token, ratio, token, ratio))
-        actual = self.page.evaluate(script)
+        actual = self.page.evaluate(_settings_contract_js(
+            "apply_settings", media_type=token, ratio=ratio))
         if not isinstance(actual, dict) or not all(actual.get(key) for key in ("media", "ratio")):
             raise FlowError("FLOW_UI_CHANGED", f"request settings readback mismatch: {actual}")
         if actual.get("actual_output_count") not in {1, 2, 3, 4}:
@@ -1034,18 +1071,27 @@ class FlowBrowserDom:
             states = [self.add_references([reference]) for reference in files]
             return {"expected": len(files), "committed": all(item.get("committed") for item in states),
                     "method": "library_hash_match_and_composer_attach"}
-        count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
-        if count != 1: raise FlowError("FLOW_UI_CHANGED", f"expected one reference input, found {count}")
         local = [str(Path(f).resolve()) for f in files]
-        self.page.set_input_files("input[type=file]", local)
+        count = self.page.evaluate("document.querySelectorAll('input[type=file]').length")
+        if count == 1:
+            self.page.set_input_files("input[type=file]", local)
+        elif count == 0:
+            opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const e=Array.from(document.querySelectorAll('flow-prompt-box button.add-menu-trigger')).filter(visible);if(e.length!==1)return false;e[0].click();return true})()""")
+            if not opened:
+                raise FlowError("FLOW_UI_CHANGED", "current Flow add-media control was ambiguous")
+            self.page.file_chooser_upload(
+                ".cdk-overlay-pane button.sidebar-upload-btn", local,
+            )
+        else:
+            raise FlowError("FLOW_UI_CHANGED", f"expected at most one reference input, found {count}")
         names = [Path(item).name for item in local]
         name = names[0]
-        opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&e.querySelector('i')?.textContent.trim()==='add_2');if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(visible);if(overlays.length===1)return true;const current=Array.from(document.querySelectorAll('flow-prompt-box button.add-menu-trigger')).filter(visible);if(current.length===1){current[0].click();return true}const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='add_2'));if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
         if not opened: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
         target_hash=validate_image(Path(local[0]))["dhash256"]
         deadline=time.monotonic()+25; matched_url=None; matched_alt=None
         while time.monotonic()<deadline and matched_url is None:
-            records=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return [];const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>e.querySelector('i')?.textContent.trim()==='drive_folder_upload');if(tab&&tab.getAttribute('aria-selected')!=='true')tab.click();return Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512).map(e=>({url:e.currentSrc||e.src,alt:e.alt||''})).filter(x=>x.url)})()""") or []
+            records=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return [];const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='drive_folder_upload'));if(tab&&tab.getAttribute('aria-selected')!=='true')tab.click();return Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512).map(e=>({url:e.currentSrc||e.src,alt:e.alt||''})).filter(x=>x.url)})()""") or []
             for record in records:
                 url=record.get("url")
                 payload=self.page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)return null;const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return btoa(s)})()""" % __import__('json').dumps(url))
@@ -1060,7 +1106,7 @@ class FlowBrowserDom:
         # option reports selected before exposing the Add control.
         deadline=time.monotonic()+10; selected=False
         while time.monotonic()<deadline:
-            state=self.page.evaluate("""(()=>{const url=%s,alt=%s,d=document.querySelector('[role=dialog]');if(!d)return {state:'DIALOG_MISSING'};const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512);const image=images.find(e=>(e.currentSrc||e.src)===url)||images.find(e=>(e.alt||'')===alt);if(!image)return {state:'WAITING_FOR_OPTION'};const option=image.closest('[role=option]');if(!option)return {state:'WAITING_FOR_OPTION'};if(option.getAttribute('aria-selected')!=='true'){(%s)(option);return {state:'SELECTING'}};return {state:'SELECTED'}})()""" % (__import__('json').dumps(matched_url), __import__('json').dumps(matched_alt), _ACTIVATE))
+            state=self.page.evaluate("""(()=>{const url=%s,alt=%s,visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'},d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return {state:'DIALOG_MISSING'};const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512);const image=images.find(e=>(e.currentSrc||e.src)===url)||images.find(e=>(e.alt||'')===alt);if(!image)return {state:'WAITING_FOR_OPTION'};const option=image.closest('[role=option],button.asset-item');if(!option)return {state:'WAITING_FOR_OPTION'};if(option.getAttribute('aria-selected')!=='true'&&!option.classList.contains('asset-item-active')){(%s)(option);return {state:'SELECTING'}};return {state:'SELECTED'}})()""" % (__import__('json').dumps(matched_url), __import__('json').dumps(matched_alt), _ACTIVATE))
             if isinstance(state,dict) and state.get("state")=="SELECTED":
                 selected=True; break
             if isinstance(state,dict) and state.get("state")=="DIALOG_MISSING": break
@@ -1068,19 +1114,26 @@ class FlowBrowserDom:
         if not selected: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference did not become selectable")
         deadline=time.monotonic()+5; attached=False
         while time.monotonic()<deadline:
-            attached=self.page.evaluate("""(()=>{const d=document.querySelector('[role=dialog]');if(!d)return null;const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled};const add=Array.from(d.querySelectorAll('button')).filter(visible).reverse().find(e=>!e.querySelector('i')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
+            attached=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled},d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return null;const exact=Array.from(d.querySelectorAll('button.detail-add-to-prompt-btn')).filter(visible);if(exact.length===1){exact[0].click();return true}const add=Array.from(d.querySelectorAll('button')).filter(visible).reverse().find(e=>!e.querySelector('i,mat-icon')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
             if attached is True: break
             time.sleep(.25)
         if not attached: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be attached")
         deadline=time.monotonic()+6
         while time.monotonic()<deadline:
-            if not self.page.evaluate("document.querySelector('[role=dialog]')!==null"):
+            if not self.page.evaluate("(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).some(visible)})()"):
                 return {"expected": 1, "committed": True, "method": "library_hash_match_and_composer_attach"}
             time.sleep(.2)
         raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
     def media_candidate_records(self): return self.page.evaluate(_CANDIDATE_RECORDS_JS) or []
-    def provider_surface(self): return self.page.evaluate(_PROVIDER_SURFACE_JS) or {"records": [], "global_pending_count": 0}
+    def provider_surface(self):
+        legacy = self.page.evaluate(_PROVIDER_SURFACE_JS) or {}
+        if legacy.get("provider_model_complete"):
+            return legacy
+        current = self.page.evaluate(_CURRENT_PROVIDER_SURFACE_JS) or {}
+        if current.get("provider_model_complete") or current.get("records"):
+            return current
+        return legacy or {"records": [], "global_pending_count": 0}
     def video_candidates(self): return self.page.evaluate("""(()=>Array.from(document.querySelectorAll('video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()""") or []
 
 
@@ -1095,21 +1148,27 @@ class FlowInspector:
             text = (state.get("text", "") + " " + state.get("title", "")).lower()
             marketing_landing = "your ai creative studio built with google" in text and "create with google flow" in text
             login = "accounts.google" in state.get("url", "") or "sign in" in text or marketing_landing
-            mode_script = """(async()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor,trigger=null;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1){trigger=xs[0];break}p=p.parentElement}if(!trigger)return [];if(trigger.getAttribute('aria-expanded')!=='true'){(%s)(trigger);await new Promise(r=>setTimeout(r,250));}return Array.from(document.querySelectorAll('button[aria-controls]')).filter(visible).map(e=>e.getAttribute('aria-controls')||'')})()""" % _ACTIVATE
-            modes = page.evaluate(mode_script) or []
-            if not modes and page.evaluate("document.querySelector('[role=dialog]')!==null"):
+            contract = page.evaluate(_settings_contract_js("capabilities")) or {}
+            if not contract.get("known") and page.evaluate("document.querySelector('[role=dialog]')!==null"):
                 # A failed reference-picker attempt can leave a modal overlay
                 # hiding otherwise available mode controls. Reload is a safe,
                 # no-dispatch composer reset during preflight.
                 page.command("Page.reload", {"ignoreCache":False}); time.sleep(3)
-                modes = page.evaluate(mode_script) or []
-            image = any("content-IMAGE" in value for value in modes)
-            video = any("content-VIDEO" in value for value in modes)
-            reference = bool(page.evaluate("document.querySelectorAll('input[type=file]').length"))
+                contract = page.evaluate(_settings_contract_js("capabilities")) or {}
+            if not login and (not isinstance(contract, dict) or not contract.get("known")
+                              or not contract.get("prompt_editor")
+                              or not contract.get("generate_control")
+                              or not contract.get("settings_trigger")
+                              or not contract.get("menu_closed")):
+                raise FlowError("FLOW_UI_CHANGED", f"Flow editor contract was not recognized: {contract}")
             # Project identity is provider runtime configuration, verified from
             # the active project URL rather than story text or current title.
             project_ok = self.runtime.project_identity in state.get("url", "") or state.get("url", "").rstrip("/") == self.runtime.project_url.rstrip("/")
-            return {"login_required":login, "project_identity":self.runtime.project_identity if project_ok else "", "image":image, "video":video, "reference_image":reference, "frame_video":reference}
+            return {"login_required":login, "project_identity":self.runtime.project_identity if project_ok else "",
+                    "image":bool(contract.get("image")), "video":bool(contract.get("video")),
+                    "reference_image":bool(contract.get("reference_image")),
+                    "frame_video":bool(contract.get("frame_video")),
+                    "editor_contract_version":contract.get("contract_version")}
         finally: page.close()
 
 
@@ -1589,6 +1648,39 @@ class LiveFlowGenerator:
             raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED", "persisted poll evidence is incomplete")
         return verified
 
+    @staticmethod
+    def _eligible_current_editor_migration_reconciliation(
+            settings: dict, attempt: dict, verified_evidence: dict) -> bool:
+        """Allow read-only recovery of the one old-extractor acceptance gap.
+
+        The 2.2 extractor could activate the current Angular editor but could
+        not name its tiles.  Recovery remains fail-closed unless the historical
+        evidence proves a managed empty baseline, a trusted single activation,
+        provider acceptance, and no prior decision binding.  This authority can
+        only inspect and bind the existing output; it never authorizes Generate.
+        """
+        activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {}
+        baseline = [
+            item for item in verified_evidence.get("observations", [])
+            if item.get("phase") == "PRE_DISPATCH_BASELINE"
+        ]
+        return (
+            settings.get("provider_surface_extractor_version") == "flow-provider-surface/2.2.0"
+            and settings.get("pre_dispatch_empty_provider_model_authority")
+            == "AUTO_MANAGED_BOUND_PROJECT_WITH_NO_PRIOR_DISPATCH"
+            and attempt.get("status") == "AMBIGUOUS"
+            and attempt.get("failure_class") == "OUTPUT_ATTRIBUTION_AMBIGUOUS"
+            and attempt.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"
+            and attempt.get("dispatch_confirmation_state") == "UNCERTAIN"
+            and all(activation.get(key) is True for key in (
+                "input_dispatched", "trusted_click_seen", "activation_verified",
+                "provider_acceptance_transition",
+            ))
+            and len(baseline) >= 3
+            and all(item.get("current_identity_set") in (None, []) for item in baseline)
+            and not verified_evidence.get("decision_bindings")
+        )
+
     def _record_observation(self, observation) -> None:
         self.last_settings.update({
             "attribution_method": observation.method,
@@ -2020,14 +2112,23 @@ class LiveFlowGenerator:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
         try:
             verified_evidence = self._verify_persisted_poll_evidence(settings)
-            verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(
-                settings["provider_poll_evidence"]
-            )
         except FlowError as error:
             # Never reuse a baseline, durable dispatch identity, or attribution
             # detail from evidence that cannot verify exactly as persisted.
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
-        if verified_binding.get("resulting_dispatch_state") != "CONFIRMED":
+        migration_reconciliation = self._eligible_current_editor_migration_reconciliation(
+            settings, attempt, verified_evidence,
+        )
+        try:
+            verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(
+                settings["provider_poll_evidence"]
+            )
+        except FlowError as error:
+            if not migration_reconciliation:
+                return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
+            verified_binding = None
+        if (verified_binding is not None
+                and verified_binding.get("resulting_dispatch_state") != "CONFIRMED"):
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
         baseline_observations = [
             observation for observation in verified_evidence["observations"]
@@ -2037,16 +2138,26 @@ class LiveFlowGenerator:
         history = request.get("_flow_provider_identity_history", [])
         if isinstance(history, list):
             baseline = _merge_surface_records(baseline if isinstance(baseline, list) else [], history)
-        if not isinstance(baseline, list) or not baseline:
+        if migration_reconciliation and history:
+            return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "MIGRATION_BASELINE_NOT_EMPTY"}}
+        if migration_reconciliation:
+            baseline = []
+        elif not isinstance(baseline, list) or not baseline:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"}}
         self._reset_poll_evidence(destination.parent / "reconciliation_poll_evidence.json")
         dispatch = DispatchEvidenceTracker()
         activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {"input_dispatched": True}
-        prior_durable_identity = verified_binding.get("durable_identity_used")
+        prior_durable_identity = verified_binding.get("durable_identity_used") if verified_binding else None
         if attempt.get("dispatch_confirmed") is True and isinstance(prior_durable_identity, str) and prior_durable_identity:
             dispatch.restore_verified_confirmation(prior_durable_identity)
         elif attempt.get("dispatch_confirmed") is True:
             dispatch.observe(input_dispatched=True, attributable_job=True)
+        elif migration_reconciliation:
+            dispatch.observe(
+                input_dispatched=True, trusted_click_seen=True,
+                activation_verified=True, provider_acceptance_transition=True,
+                prompt_transition=True,
+            )
         page = CdpPage.open(self.runtime)
         try:
             dom = FlowBrowserDom(page)

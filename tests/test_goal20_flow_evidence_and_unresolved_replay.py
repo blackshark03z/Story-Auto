@@ -232,7 +232,7 @@ class Goal20PollEvidenceTests(unittest.TestCase):
         ).encode("utf-8")
         verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
 
-        self.assertEqual(snapshot["schema_version"], "story-auto-flow-poll-evidence/1.4.0")
+        self.assertEqual(snapshot["schema_version"], "story-auto-flow-poll-evidence/1.5.0")
         self.assertLess(len(serialized), 2 * 1024 * 1024)
         self.assertEqual(verified["observation_count"], 149)
         self.assertEqual(verified["observations"][0]["provider_model_identity_set"], baseline)
@@ -304,6 +304,7 @@ class Goal20PollEvidenceTests(unittest.TestCase):
             max_observations=8,
             max_provider_identities=512,
             poll_evidence_version="story-auto-flow-poll-evidence/1.3.0",
+            parser_extractor_version="flow-provider-surface/2.2.0",
         )
         identities = self._provider_model(300)
         timeline.append({"phase": "BASELINE", "provider_model_identity_set": identities})
@@ -708,6 +709,7 @@ class Goal20UnresolvedReplayTests(unittest.TestCase):
                 max_observations=149,
                 max_provider_identities=512,
                 poll_evidence_version="story-auto-flow-poll-evidence/1.3.0",
+                parser_extractor_version="flow-provider-surface/2.2.0",
             )
             baseline = Goal20PollEvidenceTests._provider_model(257)
             for _ in range(20):

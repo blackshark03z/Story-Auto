@@ -222,8 +222,23 @@ class FlowConnectionService:
                               "status":"NOT_CONFIGURED", "code":"FLOW_NOT_CONFIGURED"}
             exact = canonical_project(managed)
             composed = replace(current, project_url=exact["project_url"], project_identity=exact["project_identity"])
-            status = self.get_connection_status(required_capabilities=required_capabilities)
-            return composed, {**status, "project_url":exact["project_url"], "project_identity":exact["project_identity"]}
+            # Stored capabilities describe the historical connection check.
+            # The exact bound project's live preflight is the execution-time
+            # authority, so a stale snapshot must neither allow nor block a
+            # managed request before that preflight runs.
+            required = _required(required_capabilities)
+            status = self.get_connection_status(required_capabilities=[])
+            if status.get("status") != "CONNECTED":
+                return None, status
+            historical = dict(status.get("observed_capabilities") or {})
+            return composed, {**status,
+                              "project_url":exact["project_url"],
+                              "project_identity":exact["project_identity"],
+                              "required_capabilities":required,
+                              "observed_capabilities":{},
+                              "historical_capabilities":historical,
+                              "capability_authority":"LIVE_BOUND_PROJECT_AT_EXECUTION",
+                              "live_validation_required":bool(required)}
         if isinstance(binding, dict):
             if current is None or binding.get("connection_id") != current.connection_id:
                 return None, {**self.get_connection_status(required_capabilities=required_capabilities), "status":"STALE", "code":"FLOW_CONNECTION_STALE", "message":"Flow connection needs confirmation before this project can create media."}

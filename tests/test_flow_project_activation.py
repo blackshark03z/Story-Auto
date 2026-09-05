@@ -1,6 +1,7 @@
 """Creation boundary regressions; no live providers or canonical runtime."""
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from story_auto.application.operator import OperatorService
@@ -9,7 +10,7 @@ from story_auto.providers.flow.project_binding import FlowProjectBindingError, F
 from story_auto.providers.flow.project_binding import canonical_project
 from story_auto.providers.flow.connection import normalize_project_url
 from story_auto.providers.flow.project_surface import list_agrees_with_dom, observed_project_list
-from story_auto.providers.flow.session import FlowSessionError
+from story_auto.providers.flow.session import FlowCapabilities, FlowSessionError
 from tests import test_flow_project_binding as fixtures
 from tests.test_flow_project_binding import FakeProjects, validated
 
@@ -104,6 +105,43 @@ class FlowProjectActivationTests(unittest.TestCase):
             self.assertEqual(self.binding(app.runtime)["state"], "BOUND")
             self.assertEqual(len(adapter.created), 1)
             self.assertEqual(app.runtime.flow_connection_file.read_bytes(), before)
+
+    def test_generation_reopens_bound_project_before_live_preflight_and_dispatch(self):
+        with tempfile.TemporaryDirectory() as root, patch("story_auto.application.operator._validate_new_project_narrator"):
+            adapter = BoundaryProjects()
+            app = OperatorService(root, flow_projects=adapter)
+            app.flow_connections.save_validated_candidate(validated())
+            app.create_project(project_id=PROJECT, render_mode="full_image",
+                               content="# Story\n\n## Narration\n\nA test story.")
+            connection, _ = app.flow_connections.connection_for_project(
+                PROJECT, required_capabilities=["IMAGE"])
+            events = []
+
+            def ensure(*_args):
+                events.append("exact_project_opened")
+                return canonical_project(self.binding(app.runtime))
+
+            def inspect(*_args):
+                self.assertEqual(events, ["exact_project_opened"])
+                events.append("live_preflight")
+                return FlowCapabilities(True, True, True, True, True, True)
+
+            def execute(*_args, **_kwargs):
+                self.assertEqual(events, ["exact_project_opened", "live_preflight"])
+                events.append("execute")
+                return {"new_submissions": 0}
+
+            with patch.object(app.flow_project_bindings, "ensure", side_effect=ensure), \
+                 patch.object(app.flow_connections, "connection_for_project",
+                              return_value=(connection, {"status":"CONNECTED"})), \
+                 patch.object(app.flow_connections, "runtime_for_connection",
+                              return_value=SimpleNamespace()), \
+                 patch.object(app, "_flow_capabilities_for_project", return_value=["IMAGE"]), \
+                 patch("story_auto.application.operator.preflight", side_effect=inspect), \
+                 patch("story_auto.application.operator.LiveFlowGenerator", return_value=object()), \
+                 patch("story_auto.application.operator.execute_generation", side_effect=execute):
+                app.generate(PROJECT, request_ids={"req_01"}, max_requests=1)
+            self.assertEqual(events, ["exact_project_opened", "live_preflight", "execute"])
 
     def test_missing_global_connection_does_not_silently_skip_setup(self):
         with tempfile.TemporaryDirectory() as root, patch("story_auto.application.operator._validate_new_project_narrator"):

@@ -594,10 +594,10 @@ class FlowTests(unittest.TestCase):
             def __init__(self): self.expressions = []
             def evaluate(self, expression):
                 self.expressions.append(expression)
-                if "return {media,count" in expression:
+                if '"action": "inspect_count"' in expression:
                     return {"media": True, "count": 1, "menu_closed": True}
-                if "return trigger.getAttribute" in expression:
-                    return True
+                if '"action": "configure_count"' in expression:
+                    return {"ok": True, "media": True, "count": 1, "menu_closed": True}
                 return {"media": True, "count": 1, "menu_closed": True,
                         "ratio": True, "actual_output_count": 1, "model": "Flow"}
         page = CapturingPage()

@@ -810,7 +810,13 @@ class OperatorService:
         provider=tts.get("provider")
         kokoro_settings=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
         llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
-        flow_status=self.flow_connections.get_connection_status(required_capabilities=["IMAGE"])
+        flow_status=self.flow_connections.get_connection_status(required_capabilities=[])
+        historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
+        flow_status={**flow_status,
+                     "observed_capabilities":{},
+                     "historical_capabilities":historical_capabilities,
+                     "capability_authority":"HISTORICAL_CONNECTION_EVIDENCE",
+                     "live_validation_required":True}
         usage=shutil.disk_usage(self.runtime.root)
         voice_id=str(defaults_payload["narrator"]["voice_id"])
         inventory_settings = latest_settings if provider == "kokoro_local" else _creation_settings({}, voice_id)
@@ -837,7 +843,7 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Visual generation","detail":"Google Flow","status":"Ready" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Visual generation","detail":"Google Flow · Live project readiness is checked before generation","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
@@ -871,8 +877,17 @@ class OperatorService:
             "creation_defaults":base_settings,
             "voice_options":voice_options,
             "voice_inventory_failure":inventory_failure,
-            "flow_connection":self.flow_connections.get_connection_status(required_capabilities=["IMAGE"]),
+            "flow_connection":self._flow_connection_overview(),
         }
+
+    def _flow_connection_overview(self) -> dict[str, Any]:
+        status=self.flow_connections.get_connection_status(required_capabilities=[])
+        historical_capabilities=dict(status.get("observed_capabilities") or {})
+        return {**status,
+                "observed_capabilities":{},
+                "historical_capabilities":historical_capabilities,
+                "capability_authority":"HISTORICAL_CONNECTION_EVIDENCE",
+                "live_validation_required":True}
 
     def runtime_attestation(self) -> dict[str, Any]:
         """Identify the Flow implementation loaded by this UI process."""

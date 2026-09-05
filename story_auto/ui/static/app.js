@@ -359,8 +359,7 @@ function friendlyError(error) {
     FLOW_HOST_MIGRATED_RETRY_REQUIRED: ['Google Flow is switching interfaces','Google routed this session to the new Flow interface. Story Auto did not send a generation request; choose Try again so it can retry the compatible Flow workspace.','retry','Try again'],
     FLOW_NOT_CONFIGURED: ['Flow is not configured','Open this project and choose a Flow project URL. Validation does not create images or videos.','open_project','Open project'],
     FLOW_CONNECTION_STALE: ['Flow connection needs validation','The project points to an older Flow connection. Open the project and validate or update it before creating visuals.','open_project','Open project'],
-    FLOW_CAPABILITY_UNAVAILABLE: ['Flow image capability is unavailable','Validate the configured Flow project and confirm that IMAGE generation is available before creating visuals.','open_project','Open project'],
-    FLOW_CAPABILITY_UNAVAILABLE: ['Visual setup needs attention','Review the Flow project and production mode in Settings before trying again.','settings','Open Settings'],
+    FLOW_CAPABILITY_UNAVAILABLE: ['Flow image generation is unavailable',"Story Auto could not confirm image generation in this video's live Flow editor. No request was sent.",'open_flow_project','Open Flow project'],
     STAGE_NO_PROGRESS: ['Production did not advance','Story Auto stopped before repeating the same stage. Refresh the project to review the saved recovery state before trying again.','open_project','Refresh project'],
     TIMELINE_ALIGNMENT_MISMATCH: ['Imported subtitle timing needs attention','Story Auto could not fit the imported subtitle timing to the narration timeline. Review the project before continuing.','review_project','Review project'],
     TTS_PROVIDER_CREDITS_REQUIRED: ["Voice generation can't continue",'The selected paid voice provider does not have enough credits. Choose another voice or update the provider account.','settings','Open settings'],
@@ -422,6 +421,7 @@ function bindErrorActions() {
     const action = button.dataset.errorAction;
     if (action === 'settings') return showSettings();
     if (action === 'open_flow_sign_in') return runAction('open_flow_sign_in','Opening the Story Auto Flow sign-in window…');
+    if (action === 'open_flow_project') return runAction('open_flow_project','Opening this video’s Flow project…');
     if (action === 'retry' && state.lastAction) return runAction(state.lastAction.action,state.lastAction.label);
     return state.project ? openProject(state.project) : showHome();
   }));

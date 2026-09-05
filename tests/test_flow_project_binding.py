@@ -159,6 +159,25 @@ class FlowProjectBindingTests(unittest.TestCase):
             self.assertEqual(service.connections.get_current_connection().project_identity,
                              "https://labs.google/fx/vi/tools/flow/project/legacy")
 
+    def test_managed_provider_path_defers_stale_capability_snapshot_to_live_bound_project(self):
+        with tempfile.TemporaryDirectory() as root:
+            runtime, service = self.make_project(root)
+            service.ensure("prj_1234567890abcdef", FakeProjects())
+            stale = validated()
+            stale["observed_capabilities"] = {
+                "IMAGE": False, "VIDEO": False,
+                "REFERENCE_IMAGE": False, "FRAME_VIDEO": False,
+            }
+            service.connections.save_validated_candidate(stale)
+            connection, status = service.connections.connection_for_project(
+                "prj_1234567890abcdef", required_capabilities=["IMAGE"])
+            self.assertIsNotNone(connection)
+            self.assertEqual(status["status"], "CONNECTED")
+            self.assertEqual(status["capability_authority"], "LIVE_BOUND_PROJECT_AT_EXECUTION")
+            self.assertEqual(status["observed_capabilities"], {})
+            self.assertFalse(status["historical_capabilities"]["IMAGE"])
+            self.assertTrue(status["live_validation_required"])
+
     def test_live_open_project_preserves_exact_active_project_without_navigation(self):
         with tempfile.TemporaryDirectory() as root:
             runtime = RuntimeLayout.from_root(root)

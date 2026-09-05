@@ -177,6 +177,25 @@ class OperatorApplicationTests(unittest.TestCase):
             self.assertEqual(settings["creation_defaults"]["tts"]["kokoro_local"]["voice_id"],"bm_george")
             self.assertNotIn("api_key",str(settings).lower())
 
+    def test_settings_labels_saved_flow_capabilities_as_historical_connection_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            app.flow_connections.save_validated_candidate({
+                "status":"CONNECTED",
+                "project_url":"https://labs.google/fx/tools/flow/project/historical",
+                "project_identity":"historical",
+                "observed_capabilities":{"IMAGE":True,"VIDEO":True,
+                                           "REFERENCE_IMAGE":True,"FRAME_VIDEO":True},
+            })
+            settings=app.settings_overview()
+            visual=next(item for item in settings["providers"] if item["name"]=="Visual generation")
+            self.assertEqual(visual["status"],"Connected")
+            self.assertIn("Live project readiness",visual["detail"])
+            self.assertEqual(settings["flow_connection"]["capability_authority"],
+                             "HISTORICAL_CONNECTION_EVIDENCE")
+            self.assertEqual(settings["flow_connection"]["observed_capabilities"],{})
+            self.assertTrue(settings["flow_connection"]["historical_capabilities"]["IMAGE"])
+
     def test_new_project_with_installed_default_is_ready_without_narration_generation(self):
         with tempfile.TemporaryDirectory() as root:
             app=OperatorService(root)

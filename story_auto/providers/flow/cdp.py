@@ -255,3 +255,39 @@ class CdpPage:
             # not this short Playwright client.  Let Playwright disconnect with
             # its context instead of closing the remote browser.
             del browser
+
+    def file_chooser_upload(self, selector: str, files: list[str], *, timeout_ms: int = 5000) -> None:
+        """Set files through one exact current-editor upload affordance."""
+        self.assert_locator_activation_available()
+        if self.runtime is None:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "file upload requires a Flow runtime")
+        browser = None
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.connect_over_cdp(self.runtime.cdp_url)
+                pages = [
+                    page
+                    for context in browser.contexts
+                    for page in context.pages
+                    if str(page.url).startswith(self.runtime.project_url)
+                ]
+                if len(pages) != 1:
+                    raise FlowSessionError(
+                        "FLOW_PROJECT_MISMATCH",
+                        f"expected one Flow project page for upload, found {len(pages)}",
+                    )
+                target = pages[0].locator(selector)
+                if target.count() != 1:
+                    raise FlowSessionError(
+                        "FLOW_UI_CHANGED", "exact Flow upload control did not resolve uniquely",
+                    )
+                with pages[0].expect_file_chooser(timeout=timeout_ms) as chooser:
+                    target.click(timeout=timeout_ms)
+                chooser.value.set_files(files)
+        except FlowSessionError:
+            raise
+        except Exception as error:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "Flow file chooser upload failed") from error
+        finally:
+            del browser
