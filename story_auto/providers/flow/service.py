@@ -48,6 +48,7 @@ from story_auto.core.visual.recovery_executor import (
 from story_auto.core.render import MediaError, derive_trim_retime_video
 from story_auto.core.visual import (
     CAPTION_SAFE_PROMPT_VERSION,
+    NATURALNESS_QC_FIELDS,
     MediaQualityError,
     ambient_prompt_directive,
     caption_safe_composition_intent,
@@ -104,6 +105,31 @@ def _prepared_transaction_sha256(transaction: dict) -> str:
     return value
 
 MANIFEST_VERSION = "story-auto-generation-manifest/1.0.0"
+AUTOMATIC_IMAGE_QC_VERSION = "story-auto-automatic-image-qc/1.0.0"
+AUTOMATIC_IMAGE_QC_SCHEMA = {
+    "type": "object",
+    "required": ["results", "visible_provider_watermark", "alignment_classification",
+                 "confidence", "observed", "contradictions"],
+    "properties": {
+        "results": {
+            "type": "object",
+            "required": list(NATURALNESS_QC_FIELDS),
+            "properties": {
+                field: {"type": "string", "enum": ["PASS", "FAIL", "NOT_APPLICABLE"]}
+                for field in NATURALNESS_QC_FIELDS
+            },
+        },
+        "visible_provider_watermark": {"type": "boolean"},
+        "alignment_classification": {
+            "type": "string",
+            "enum": ["PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC",
+                     "FAIL_MISMATCH", "UNCERTAIN"],
+        },
+        "confidence": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW", "UNCERTAIN"]},
+        "observed": {"type": "string"},
+        "contradictions": {"type": "array", "items": {"type": "string"}},
+    },
+}
 FINAL = {"SUCCEEDED", "FAILED_PERMANENT", "AUTH_REQUIRED", "CREDIT_BLOCKED", "CANCELLED"}
 UNRESOLVED_FLOW_FAILURES = {
     "FLOW_TIMEOUT",
@@ -2694,6 +2720,108 @@ def _technical_integrity_eligible(paths, entry: dict, request: dict | None) -> b
             and identity_matches and ownership_safe and _valid_selected(paths, entry))
 
 
+def _automatic_image_qc(paths, request: dict, entry: dict,
+                        router: GeminiReasoningRouter) -> tuple[dict, dict]:
+    """Evaluate exact selected IMAGE bytes against the production rubric and shot intent."""
+    selected = entry["selected_asset"]
+    asset_path = paths.artifact_path(selected["path"])
+    try:
+        shots = read_json(paths.artifact_path("output/shot_plan.json")).get("shots", [])
+    except Exception as error:
+        raise FlowError("AUTOMATIC_QC_CANONICAL_INPUT_INVALID") from error
+    shot = next((item for item in shots if isinstance(item, dict)
+                 and item.get("shot_id") == request.get("shot_id")), None)
+    if request.get("purpose") == "SHOT" and not isinstance(shot, dict):
+        raise FlowError("AUTOMATIC_QC_CANONICAL_INPUT_INVALID")
+    intent = {
+        "request_id": request.get("request_id"),
+        "shot_id": request.get("shot_id"),
+        "prompt": request.get("prompt"),
+        "shot": shot,
+    }
+    prompt = (
+        "Review this exact production image. Evaluate every naturalness field strictly from visible evidence. "
+        "Mark AI_POLISH FAIL for conspicuous synthetic, waxy, overprocessed, malformed, or implausible details. "
+        "Mark TECHNICAL_VALIDITY FAIL for corrupt, unusable, severely blurred, or compositionally broken output. "
+        "Detect any visible provider watermark. Compare the visible subject, action, location, critical props, "
+        "story beat, and continuity to the structured request and shot. PASS_ATMOSPHERIC is allowed only when "
+        "the shot explicitly has atmospheric=true. Use UNCERTAIN rather than guessing. Return structured JSON only.\n"
+        + json.dumps(intent, ensure_ascii=False, sort_keys=True)
+    )
+    result = router.reason(
+        task="automatic_image_qc", prompt=prompt, schema=AUTOMATIC_IMAGE_QC_SCHEMA,
+        tier="BULK", media=(LLMMedia(asset_path.read_bytes(), "image/png", "exact selected production image"),),
+        prompt_version="automatic-image-qc/1.0.0", schema_version=AUTOMATIC_IMAGE_QC_VERSION,
+        qc_policy_version="auto-accept-production/1.0.0", confidence_field="confidence",
+    )
+    value = result.value
+    report = {
+        "results": value.get("results"),
+        "visible_provider_watermark": value.get("visible_provider_watermark"),
+        "reviewer": "GeminiReasoningRouter",
+        "notes": str(value.get("observed", "")).strip(),
+    }
+    evaluation = {
+        "schema_version": AUTOMATIC_IMAGE_QC_VERSION,
+        "request_id": request.get("request_id"),
+        "selected_asset_path": selected.get("path"),
+        "selected_asset_sha256": selected.get("sha256"),
+        "model": result.model,
+        "credential_alias": result.credential_alias,
+        "project_alias": result.project_alias,
+        "cache_hit": result.cache_hit,
+        "fallback_count": result.fallback_count,
+        "request_count": result.request_count,
+        "input_hash": result.input_hash,
+        "report": {**report, "alignment_classification": value.get("alignment_classification"),
+                   "confidence": value.get("confidence"),
+                   "observed": str(value.get("observed", "")).strip(),
+                   "contradictions": list(value.get("contradictions") or [])},
+    }
+    try:
+        validated = validate_production_qc(report, provider=entry.get("provider"),
+                                           media_type=entry.get("media_type"))
+    except MediaQualityError as error:
+        if error.failure_class == "MEDIA_QC_INVALID":
+            raise FlowError("GEMINI_QC_UNCERTAIN") from error
+        error.automated_quality_evaluation = evaluation
+        raise
+    classification = value.get("alignment_classification")
+    contradictions = value.get("contradictions")
+    confidence = value.get("confidence")
+    if contradictions or classification == "FAIL_MISMATCH":
+        error = MediaQualityError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
+        error.automated_quality_evaluation = evaluation
+        raise error
+    if classification == "PASS_ATMOSPHERIC" and not (shot or {}).get("atmospheric"):
+        error = MediaQualityError("VISUAL_NARRATION_ALIGNMENT_MISMATCH")
+        error.automated_quality_evaluation = evaluation
+        raise error
+    if classification not in {"PASS_DIRECT", "PASS_SUPPORTIVE", "PASS_ATMOSPHERIC"} or confidence in {"LOW", "UNCERTAIN"}:
+        raise FlowError("GEMINI_QC_UNCERTAIN")
+    evaluation["report"] = {**validated, "alignment_classification": classification,
+                            "confidence": confidence, "observed": str(value.get("observed", "")).strip(),
+                            "contradictions": list(contradictions or [])}
+    return evaluation["report"], evaluation
+
+
+def _record_automatic_qc_rejection(entry: dict, error: MediaQualityError,
+                                   evaluation: dict | None = None) -> None:
+    selected = entry["selected_asset"]
+    at = _now()
+    rejection = {
+        "reviewed_at": at, "status": "REJECTED", "failure_class": error.failure_class,
+        "selected_asset_path": selected.get("path"),
+        "selected_asset_sha256": selected.get("sha256"),
+        "selected_attempt": selected.get("source_provider_attempt", selected.get("attempt")),
+    }
+    if evaluation is not None:
+        rejection["automated_quality_evaluation"] = evaluation
+    entry.setdefault("quality_reviews", []).append(rejection)
+    selected["production_qc"] = "REJECTED"
+    entry.update({"status": "FAILED_RETRYABLE", "failure_class": error.failure_class, "updated_at": at})
+
+
 def _record_editorial_acceptance(entry: dict, *, policy: str, actor: str, disposition: str,
                                  reason: str | None, scope: str) -> dict:
     selected = entry["selected_asset"]
@@ -2713,11 +2841,12 @@ def _record_editorial_acceptance(entry: dict, *, policy: str, actor: str, dispos
     return decision
 
 
-def apply_auto_accept_policy(runtime_root: Path | str, project_id: str) -> dict:
-    """Apply AUTO_ACCEPT only after the existing technical/provenance gate passes.
+def apply_auto_accept_policy(runtime_root: Path | str, project_id: str, *,
+                             router: GeminiReasoningRouter | None = None) -> dict:
+    """Apply AUTO_ACCEPT after technical/provenance and automated image QC pass.
 
-    This command has no provider boundary.  Failed, unreadable, wrong-type, or
-    ambiguous assets remain untouched and are returned as ineligible evidence.
+    This command has no Flow boundary. Failed, unreadable, wrong-type, ambiguous,
+    or uncertain assets are never accepted.
     """
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     policy, _explicit = effective_qc_policy(config.settings)
@@ -2730,7 +2859,8 @@ def apply_auto_accept_policy(runtime_root: Path | str, project_id: str) -> dict:
         except Exception as error:
             raise FlowError("GENERATION_REQUESTS_INVALID") from error
         by_id = {item.get("request_id"): item for item in requests if isinstance(item, dict)}
-        accepted = already_accepted = 0
+        active_router = router
+        accepted = already_accepted = rejected = 0
         ineligible: list[str] = []
         for entry in manifest["requests"]:
             if not isinstance(entry, dict):
@@ -2744,13 +2874,34 @@ def apply_auto_accept_policy(runtime_root: Path | str, project_id: str) -> dict:
             if not _technical_integrity_eligible(paths, entry, by_id.get(entry.get("request_id"))):
                 ineligible.append(str(entry.get("request_id", "")))
                 continue
-            _record_editorial_acceptance(entry, policy=AUTO_ACCEPT, actor="SYSTEM", disposition="AUTO_ACCEPTED",
-                                         reason=None, scope="ASSET")
+            request = by_id[entry["request_id"]]
+            if entry.get("media_type") != "IMAGE":
+                ineligible.append(str(entry.get("request_id", "")))
+                continue
+            if active_router is None:
+                active_router = GeminiReasoningRouter(
+                    cache_dir=paths.runtime.cache / "gemini_reasoning",
+                    ledger_path=paths.runtime.evidence / "gemini_reasoning_ledger.json",
+                )
+            try:
+                report, evaluation = _automatic_image_qc(paths, request, entry, active_router)
+            except MediaQualityError as error:
+                _record_automatic_qc_rejection(
+                    entry, error, getattr(error, "automated_quality_evaluation", None))
+                rejected += 1
+                continue
+            decision = _record_editorial_acceptance(
+                entry, policy=AUTO_ACCEPT, actor="SYSTEM", disposition="AUTO_ACCEPTED",
+                reason=None, scope="ASSET")
+            decision["automated_quality_evaluation"] = evaluation
+            entry["selected_asset"]["alignment_classification"] = report["alignment_classification"]
+            entry["selected_asset"]["alignment_observation"] = report["observed"]
             accepted += 1
-        if accepted:
+        if accepted or rejected:
             atomic_write_json(path, manifest)
         return {"status": "AUTO_ACCEPTED", "project_id": project_id, "accepted_assets": accepted,
                 "already_auto_accepted_assets": already_accepted, "ineligible_assets": ineligible,
+                "rejected_assets": rejected,
                 "provider_dispatch_delta": 0}
 
 
@@ -5037,6 +5188,11 @@ def _canonical_locked_corrective_core(old_request: dict, *, shot: dict, entities
         canonical_location = f"dim kitchen inside {location_name}"
     if not canonical_location:
         canonical_location = location_name
+    if not canonical_location:
+        # Abstract closing beats can intentionally omit a concrete location.
+        # Keep the correction runnable without inventing a story place or
+        # copying the rejected provider composition back into the prompt.
+        canonical_location = "a neutral, text-free cinematic setting consistent with the narrated moment"
     prop_names = [str(entities.get(prop_id, {}).get("name", "")).strip()
                   for prop_id in shot.get("prop_ids", []) if isinstance(prop_id, str)]
     prop_names = [item for item in prop_names if item]
@@ -5051,6 +5207,10 @@ def _canonical_locked_corrective_core(old_request: dict, *, shot: dict, entities
     if prop_names:
         continuity_requirements.append("Required props remain present: " + ", ".join(prop_names) + ".")
     canonical_exclusions = []
+    if not location_name:
+        canonical_exclusions.append(
+            "no readable words, letters, logos, screens, signs, title cards, captions, or interface elements"
+        )
     if "kitchen" in canonical_location.lower():
         canonical_exclusions.extend((
             "no lantern room",

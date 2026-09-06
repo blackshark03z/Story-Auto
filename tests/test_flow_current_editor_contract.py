@@ -13,6 +13,9 @@ from story_auto.providers.flow.live import (
     FlowBrowserDom,
     FlowInspector,
     LiveFlowGenerator,
+    PROVIDER_SURFACE_EXTRACTOR_VERSION,
+    ProviderPollEvidenceTimeline,
+    _CURRENT_PROVIDER_SURFACE_JS,
     _EDITOR_JS,
 )
 from story_auto.providers.flow.service import FlowError
@@ -188,6 +191,15 @@ class CurrentFlowEditorContractTests(unittest.TestCase):
         self.assertTrue(surface["provider_model_complete"])
         self.assertEqual(surface["records"][0]["asset_id"], "asset")
 
+    def test_current_surface_contract_uses_complete_top_virtual_viewport(self):
+        self.assertEqual(PROVIDER_SURFACE_EXTRACTOR_VERSION, "flow-provider-surface/2.5.0")
+        self.assertIn("flow-video-tile", _CURRENT_PROVIDER_SURFACE_JS)
+        self.assertIn("classified===tiles.length", _CURRENT_PROVIDER_SURFACE_JS)
+        self.assertIn("Math.abs(viewport.scrollTop)<1", _CURRENT_PROVIDER_SURFACE_JS)
+        self.assertNotIn("viewport.scrollHeight<=viewport.clientHeight", _CURRENT_PROVIDER_SURFACE_JS)
+        self.assertIn("TOP_VIRTUAL_VIEWPORT", _CURRENT_PROVIDER_SURFACE_JS)
+        self.assertIn("if(image)", _CURRENT_PROVIDER_SURFACE_JS)
+
     def test_current_reference_affordance_uses_file_chooser_and_structural_picker_controls(self):
         with tempfile.TemporaryDirectory() as root:
             reference = Path(root) / "reference.png"
@@ -243,6 +255,73 @@ class CurrentFlowEditorContractTests(unittest.TestCase):
             altered = {**settings, "activation":{**settings["activation"], key:False}}
             self.assertFalse(eligible(altered, attempt, evidence), key)
         self.assertFalse(eligible(settings, attempt, {**evidence, "observations":evidence["observations"][:2]}))
+
+    def test_23_surface_completeness_gap_allows_read_only_reconciliation_with_exact_baseline(self):
+        settings = {
+            "provider_surface_extractor_version":"flow-provider-surface/2.3.0",
+            "pre_dispatch_provider_model_identity_set":[
+                {"card_id":"current:old-image", "media_type":"IMAGE"},
+                {"card_id":"current:old-video", "media_type":"VIDEO"},
+            ],
+            "activation":{"input_dispatched":True,"trusted_click_seen":True,
+                          "activation_verified":True,"provider_acceptance_transition":True},
+        }
+        attempt = {
+            "status":"AMBIGUOUS", "failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS",
+            "provider_execution_state":"PROVIDER_BOUNDARY_ENTERED",
+            "dispatch_confirmation_state":"UNCERTAIN",
+            "baseline_provider_identities":[{
+                "card_id":"current:old-image", "asset_id":"old-image",
+                "identity":"asset:old-image", "media_type":"IMAGE", "state":"READY",
+            }],
+        }
+        evidence = {"observations":[
+            {"phase":"PRE_DISPATCH_BASELINE", "provider_model_complete":False,
+             "provider_surface_fingerprint":"stable-baseline"}
+            for _ in range(3)
+        ], "decision_bindings":[]}
+        eligible = LiveFlowGenerator._eligible_current_surface_completeness_reconciliation
+        self.assertTrue(eligible(settings, attempt, evidence))
+        self.assertFalse(eligible(settings, {**attempt, "baseline_provider_identities":[]}, evidence))
+        altered = {**evidence, "observations":[*evidence["observations"][:2], {
+            **evidence["observations"][2], "provider_surface_fingerprint":"different"}]}
+        self.assertFalse(eligible(settings, attempt, altered))
+
+    def test_current_poll_schema_keeps_verified_23_evidence_readable_after_24_upgrade(self):
+        timeline = ProviderPollEvidenceTimeline(
+            max_observations=8,
+            parser_extractor_version="flow-provider-surface/2.3.0",
+        )
+        timeline.append({"phase":"PRE_DISPATCH_BASELINE"})
+        timeline.finish("OUTPUT_ATTRIBUTION_AMBIGUOUS")
+        verified = ProviderPollEvidenceTimeline.verify_snapshot(timeline.snapshot())
+        self.assertEqual(verified["parser_extractor_version"], "flow-provider-surface/2.3.0")
+
+    def test_24_scroll_growth_gap_allows_read_only_reconciliation(self):
+        settings = {
+            "provider_surface_extractor_version":"flow-provider-surface/2.4.0",
+            "pre_dispatch_provider_model_identity_set":[
+                {"card_id":"current:old-image", "media_type":"IMAGE"},
+            ],
+            "activation":{"input_dispatched":True,"trusted_click_seen":True,
+                          "activation_verified":True,"provider_acceptance_transition":True},
+        }
+        attempt = {
+            "status":"AMBIGUOUS", "failure_class":"OUTPUT_ATTRIBUTION_AMBIGUOUS",
+            "provider_execution_state":"PROVIDER_BOUNDARY_ENTERED",
+            "dispatch_confirmation_state":"UNCERTAIN",
+            "baseline_provider_identities":[{
+                "card_id":"current:old-image", "asset_id":"old-image",
+                "identity":"asset:old-image", "media_type":"IMAGE", "state":"READY",
+            }],
+        }
+        evidence = {"observations":[
+            {"phase":"PRE_DISPATCH_BASELINE", "provider_model_complete":True,
+             "provider_surface_fingerprint":"stable-baseline"}
+            for _ in range(3)
+        ], "decision_bindings":[]}
+        eligible = LiveFlowGenerator._eligible_current_surface_completeness_reconciliation
+        self.assertTrue(eligible(settings, attempt, evidence))
 
 
 if __name__ == "__main__":

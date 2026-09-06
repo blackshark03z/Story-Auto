@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.7"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.8"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 DEFAULT_STUCK_PENDING_SECONDS = 900
 
@@ -174,9 +174,13 @@ class ProductionStateReconciler:
         threshold = recovery_settings.get("stuck_pending_seconds", DEFAULT_STUCK_PENDING_SECONDS) if isinstance(recovery_settings, dict) else DEFAULT_STUCK_PENDING_SECONDS
         if isinstance(threshold, bool) or not isinstance(threshold, int) or not 300 <= threshold <= 86400:
             threshold = DEFAULT_STUCK_PENDING_SECONDS
-        recovery = self._visual_recovery(paths, requests, manifest, entries, recovery_request_ids, generated_for_quality,
-                                         active_project_operation=active_project_operation, threshold_seconds=threshold)
         qc_policy, qc_policy_explicit = effective_qc_policy(config.settings)
+        recovery = self._visual_recovery(
+            paths, requests, manifest, entries, recovery_request_ids, generated_for_quality,
+            active_project_operation=active_project_operation,
+            threshold_seconds=threshold,
+            automatic_quality_recovery=qc_policy == AUTO_ACCEPT,
+        )
         quality = {
             "status": "NOT_STARTED", "policy": qc_policy, "policy_explicit": qc_policy_explicit,
             "technical_passed": sum(1 for entry in required_entries if entry.get("status") in {"QC_PENDING", "SUCCEEDED"}
@@ -242,7 +246,7 @@ class ProductionStateReconciler:
         elif qc_policy == MANUAL_REVIEW and quality["pending_review"]:
             quality_status = "BLOCKED"; quality.update({"requires_owner_decision": True, "human_message": "Generated visuals are ready for your review.", "next_action": "Review visuals"})
         elif qc_policy == AUTO_ACCEPT and quality["pending_review"]:
-            quality_status = "READY"; quality.update({"human_message": "Technical checks passed; Story Auto will accept eligible visuals automatically.", "next_action": "Continue production"})
+            quality_status = "READY"; quality.update({"human_message": "Eligible visuals will receive automatic quality and story-fit review.", "next_action": "Continue production"})
         elif qc_policy == AI_REVIEW:
             quality_status = "BLOCKED"; quality.update({"human_message": "AI review is reserved but is not available in this version.", "next_action": "Choose a supported quality review policy"})
         elif quality["rejected"] and recovery["status"] not in {"RECOVERY_READY", "RUNNING"}:
@@ -358,7 +362,8 @@ class ProductionStateReconciler:
 
     def _visual_recovery(self, paths, requests: dict[str, Any], manifest: dict[str, Any], entries: dict[str, dict[str, Any]],
                          request_ids: set[str], generated_for_quality: bool, *, active_project_operation: bool,
-                         threshold_seconds: int = DEFAULT_STUCK_PENDING_SECONDS) -> dict[str, Any]:
+                         threshold_seconds: int = DEFAULT_STUCK_PENDING_SECONDS,
+                         automatic_quality_recovery: bool = False) -> dict[str, Any]:
         """Project Slice 1-3 evidence without creating a second dispatch path."""
         base = {
             "status": "READY", "reason_code": "NO_VISUAL_RECOVERY_REQUIRED", "human_message": None,
@@ -460,6 +465,17 @@ class ProductionStateReconciler:
                         "human_message": "The selected visual is missing and no preserved raw result proves a local repair.",
                         "affected_request_id": request_id, "requires_owner_decision": True,
                         "next_action": "Review recovery"}
+            if automatic_quality_recovery and self._automatic_qc_corrective_ready(entry):
+                return {
+                    **base,
+                    "status": "RECOVERY_READY",
+                    "reason_code": "AUTO_QC_CORRECTIVE_REPLAN_READY",
+                    "human_message": "Automatic quality review found a correctable visual defect.",
+                    "affected_request_id": request_id,
+                    "automatic_recovery_available": True,
+                    "provider_dispatches_per_continue": 1,
+                    "next_action": "Continue production",
+                }
             # This local import deliberately reuses the exact Slice 3 durable
             # evidence normalization; it only reads evidence and cannot reach
             # the provider adapter from the compact projection.
@@ -495,6 +511,34 @@ class ProductionStateReconciler:
                 "human_message": "Visual recovery needs more durable evidence before production can continue.",
                 "affected_request_id": next(iter(request_ids)), "requires_owner_decision": True,
                 "next_action": "Review recovery"}
+
+    @staticmethod
+    def _automatic_qc_corrective_ready(entry: dict[str, Any]) -> bool:
+        """Recognize one exact, attributed AUTO_ACCEPT rejection lineage tip."""
+        if (not isinstance(entry, dict) or entry.get("status") != "FAILED_RETRYABLE"
+                or not isinstance(entry.get("failure_class"), str)
+                or not entry["failure_class"].endswith("_QC_REJECTED")):
+            return False
+        selected = entry.get("selected_asset")
+        reviews = entry.get("quality_reviews")
+        if (not isinstance(selected, dict) or selected.get("production_qc") != "REJECTED"
+                or not isinstance(reviews, list) or not reviews):
+            return False
+        latest = reviews[-1]
+        if (not isinstance(latest, dict) or latest.get("status") != "REJECTED"
+                or latest.get("failure_class") != entry.get("failure_class")
+                or latest.get("selected_asset_path") != selected.get("path")
+                or latest.get("selected_asset_sha256") != selected.get("sha256")):
+            return False
+        selected_attempt = selected.get("attempt")
+        return any(
+            isinstance(attempt, dict)
+            and attempt.get("attempt") == selected_attempt
+            and attempt.get("attribution_state") == "CONFIRMED"
+            and (attempt.get("dispatch_confirmation_state") == "CONFIRMED"
+                 or attempt.get("dispatch_confirmed") is True)
+            for attempt in entry.get("attempts", [])
+        )
 
     @staticmethod
     def _stage(status: str, execution: str, human_message: str | None = None) -> dict[str, Any]:

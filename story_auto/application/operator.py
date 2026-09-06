@@ -35,7 +35,8 @@ from story_auto.providers.flow import (
 )
 from story_auto.providers.flow.service import (queue_regeneration, replay_unresolved_request,
                                                 accept_pending_visuals_by_owner, accept_selected_assets_by_owner, apply_auto_accept_policy, reopen_false_positive_production_qc, review_production_asset,
-                                               supersede_ambiguous_request, reconcile_unresolved_flow_attempt)
+                                               qc_corrective_replan, supersede_ambiguous_request,
+                                               reconcile_unresolved_flow_attempt)
 from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
@@ -671,6 +672,16 @@ class OperatorService:
 
     def _run_visuals_for_production(self, project_id: str) -> Any:
         state=self.production_query(project_id)
+        recovery=state.get("recovery", {})
+        if (state.get("active_stage") == "VISUALS"
+                and recovery.get("status") == "RECOVERY_READY"
+                and recovery.get("reason_code") == "AUTO_QC_CORRECTIVE_REPLAN_READY"):
+            qc_corrective_replan(
+                self.runtime.root,
+                project_id,
+                recovery["affected_request_id"],
+                reason="Automatic quality review rejected the selected asset; compile a canonical correction from the persisted QC evidence.",
+            )
         if state["stages"]["VISUALS"]["status"] == "READY" and state["stages"]["PLAN"]["status"] == "COMPLETE":
             paths,_=self._project(project_id)
             if not paths.artifact_path("output/generation_requests.json").is_file():
@@ -1044,11 +1055,11 @@ class OperatorService:
     def query_qc_status(self, project_id: str) -> dict[str, Any]:
         return self.production_query(project_id)["quality"]
 
-    def apply_qc_policy(self, project_id: str) -> dict[str, Any]:
+    def apply_qc_policy(self, project_id: str, *, router=None) -> dict[str, Any]:
         paths, config = self._project(project_id)
         policy, _explicit = effective_qc_policy(config.settings)
         if policy == AUTO_ACCEPT:
-            return apply_auto_accept_policy(self.runtime.root, project_id)
+            return apply_auto_accept_policy(self.runtime.root, project_id, router=router)
         if policy == MANUAL_REVIEW:
             return self.query_qc_status(project_id)
         raise OperatorServiceError("AI_REVIEW_UNSUPPORTED")

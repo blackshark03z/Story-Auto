@@ -38,7 +38,7 @@ _CONTROL_JS = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=get
 _CANDIDATES_JS = """(()=>Array.from(document.querySelectorAll('img,video,video source')).map(e=>e.currentSrc||e.src||e.getAttribute('src')).filter(x=>typeof x==='string'&&x&&!x.startsWith('data:')).filter((x,i,a)=>a.indexOf(x)===i))()"""
 _CANDIDATE_RECORDS_JS = """(()=>{const seen=new Set(),out=[];for(const e of document.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;let key=url;try{const parsed=new URL(url,location.href);parsed.hash='';key=parsed.href}catch{}if(!seen.has(key)){seen.add(key);out.push({key,url,kind:e.tagName,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0})}}return out})()"""
 _PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const records=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('[data-tile-id]')),locale=document.documentElement.lang||null;for(const tile of tiles){const card_id=tile.getAttribute('data-tile-id'),provider_job_id=tile.getAttribute('data-job-id')||tile.getAttribute('data-job')||null,hasVideo=!!tile.querySelector('video,video source');let ready=0;for(const e of tile.querySelectorAll('img,video,video source')){const url=e.currentSrc||e.src||e.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const kind=e.tagName,thumbnail=/mediaUrlType=MEDIA_URL_TYPE_THUMBNAIL/.test(url)||/video/i.test(e.alt||''),media_type=(hasVideo||kind==='VIDEO'||kind==='SOURCE')?(thumbnail&&kind==='IMG'?'VIDEO_THUMBNAIL':'VIDEO'):'IMAGE',usable=media_type==='VIDEO'?(kind!=='IMG'):(kind==='IMG'&&(e.naturalWidth||0)>=512);if(!usable)continue;const asset_id=assetId(url),key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);records.push({card_id,asset_id,media_type,state:'READY',url,kind,width:e.naturalWidth||e.videoWidth||0,height:e.naturalHeight||e.videoHeight||0});ready++}if(!ready){const symbols=Array.from(tile.querySelectorAll('i')).map(e=>(e.textContent||'').trim()),terminalFailure=symbols.includes('warning')&&symbols.includes('refresh')&&symbols.includes('delete_forever');records.push({card_id,provider_job_id,asset_id:null,media_type:null,state:terminalFailure?'FAILED':'PENDING',failure_class:terminalFailure?'PROVIDER_VISIBLE_TERMINAL_FAILURE':null,terminal_structural_signals:terminalFailure?['warning','refresh','delete_forever']:[],raw_message:(tile.innerText||'').trim(),locale,url:null,kind:null,width:0,height:0})}}const readyCards=new Set(records.filter(x=>x.state==='READY').map(x=>x.card_id)),resolved=records.filter(x=>x.state==='READY'||!readyCards.has(x.card_id));let best=null;for(const tile of tiles){const key=Object.getOwnPropertyNames(tile).find(x=>x.startsWith('__reactFiber$'));let fiber=key?tile[key]:null;for(let depth=0;fiber&&depth<64;depth++,fiber=fiber.return){for(const props of [fiber.memoizedProps,fiber.pendingProps]){const xs=props&&Array.isArray(props.tiles)?props.tiles:null;if(!xs||!xs.length||!xs.every(x=>x&&typeof x.id==='string'))continue;const unique=new Map();for(const x of xs){const iso=v=>v instanceof Date?v.toISOString():(v&&typeof v.toDate==='function'?v.toDate().toISOString():(typeof v==='string'?v:null));unique.set(x.id,{card_id:x.id,media_type:x.type==null?null:String(x.type),created_at:iso(x.createdTime),modified_at:iso(x.modifiedTime),is_archived:!!x.isArchived})}if(!best||unique.size>best.length)best=Array.from(unique.values())}}}const provider_model_complete=Array.isArray(best)&&best.length>0;const provider_model_tiles=provider_model_complete?best:[];const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records:resolved,global_pending_count,locale,provider_model_complete,provider_model_tiles}})()"""
-_CURRENT_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const locale=document.documentElement.lang||null,records=[],provider_model_tiles=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('flow-grid-tile-container')),viewport=document.querySelector('cdk-virtual-scroll-viewport.tiles-container');let identified=0;for(const tile of tiles){const video=tile.querySelector('flow-video-tile video[src],flow-video-tile source[src]'),image=tile.querySelector('flow-image-tile img[data-media-id],flow-image-tile img[src]'),media=video||image;if(!media)continue;const url=media.currentSrc||media.src||media.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const asset_id=media.getAttribute('data-media-id')||assetId(url),media_type=video?'VIDEO':'IMAGE',card_id='current:'+asset_id,key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key))continue;seen.add(key);identified++;provider_model_tiles.push({card_id,media_type,created_at:null,modified_at:null,is_archived:false});const usable=media_type==='VIDEO'||(media.naturalWidth||0)>=512;if(usable)records.push({card_id,asset_id,media_type,state:'READY',url,kind:media.tagName,width:media.naturalWidth||media.videoWidth||0,height:media.naturalHeight||media.videoHeight||0})}const completeViewport=!!viewport&&Math.abs(viewport.scrollTop)<1&&viewport.scrollHeight<=viewport.clientHeight+1;const provider_model_complete=tiles.length>0&&completeViewport&&identified===tiles.length;const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records,global_pending_count,locale,provider_model_complete,provider_model_tiles:provider_model_complete?provider_model_tiles:[],contract_version:'flow-current-angular-surface/1.0.0'}})()"""
+_CURRENT_PROVIDER_SURFACE_JS = """(()=>{const assetId=url=>{try{const parsed=new URL(url,location.href);return parsed.searchParams.get('name')||parsed.origin+parsed.pathname}catch{return url}};const locale=document.documentElement.lang||null,records=[],provider_model_tiles=[],seen=new Set(),tiles=Array.from(document.querySelectorAll('flow-grid-tile-container')),viewport=document.querySelector('cdk-virtual-scroll-viewport.tiles-container');let classified=0;for(const tile of tiles){const image=tile.querySelector('flow-image-tile img[data-media-id],flow-image-tile img[src]'),videoTile=tile.querySelector('flow-video-tile');if(image){const url=image.currentSrc||image.src||image.getAttribute('src');if(typeof url!=='string'||!url||url.startsWith('data:'))continue;const asset_id=image.getAttribute('data-media-id')||assetId(url),media_type='IMAGE',card_id='current:'+asset_id,key=card_id+'|'+asset_id+'|'+media_type;if(seen.has(key)){classified++;continue}seen.add(key);classified++;provider_model_tiles.push({card_id,media_type,created_at:null,modified_at:null,is_archived:false});if((image.naturalWidth||0)>=512)records.push({card_id,asset_id,media_type,state:'READY',url,kind:image.tagName,width:image.naturalWidth||0,height:image.naturalHeight||0});continue}if(videoTile){classified++;continue}}const completeViewport=!!viewport&&Math.abs(viewport.scrollTop)<1;const provider_model_complete=tiles.length>0&&completeViewport&&classified===tiles.length;const global_pending_count=document.querySelectorAll('[aria-busy=true],[role=progressbar],[data-state=loading]').length;return {records,global_pending_count,locale,provider_model_complete,provider_model_tiles:provider_model_complete?provider_model_tiles:[],provider_model_scope:'TOP_VIRTUAL_VIEWPORT',contract_version:'flow-current-angular-surface/1.2.0'}})()"""
 _ACTIVATE = "e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()}"
 _MODEL_TRIGGER = """(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const editor=Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup="menu"]')).filter(visible);if(xs.length===1)return xs[0];p=p.parentElement}return null})()"""
 
@@ -51,7 +51,7 @@ def _settings_contract_js(action: str, *, media_type: str | None = None,
                           "ratio": ratio, "count": count})
     return """(async()=>{const request=%s;const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const activate=e=>{e.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mousedown',{bubbles:true}));e.dispatchEvent(new MouseEvent('mouseup',{bubbles:true}));e.click()};const wait=()=>new Promise(r=>setTimeout(r,250));const editors=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).filter(visible);if(editors.length!==1)return {reason:'editor',count:editors.length};const editor=editors[0],composer=editor.closest('flow-prompt-box,flow-base-prompt-box')||editor.parentElement;const trigger=()=>{const current=Array.from(composer.querySelectorAll('button.settings-trigger-button')).filter(visible);if(current.length===1)return current[0];let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button[aria-haspopup=\"menu\"]')).filter(visible);if(xs.length===1)return xs[0];if(xs.length>1)return null;p=p.parentElement}return null};const root=()=>Array.from(document.querySelectorAll('flow-prompt-box-settings')).find(visible)||null;const open=async()=>{if(root())return true;const t=trigger();if(!t)return false;activate(t);await wait();return !!root()||t.getAttribute('aria-expanded')==='true'};const icon=e=>Array.from(e.querySelectorAll('mat-icon,i')).map(x=>(x.textContent||'').trim());const aliases={IMAGE:'image',VIDEO:'videocam',LANDSCAPE:'crop_16_9',LANDSCAPE_4_3:'crop_4_3',SQUARE:'crop_square',PORTRAIT_3_4:'crop_3_4',PORTRAIT:'crop_9_16'};const controls=()=>{const scope=root()||document;return Array.from(scope.querySelectorAll('button[role=\"radio\"],button[aria-controls]')).filter(visible)};const matches=(e,value)=>{const legacy=(e.getAttribute('aria-controls')||'').endsWith('content-'+value);if(legacy)return true;if(['1','2','3','4'].includes(value))return (e.innerText||'').trim()==='x'+value;return icon(e).includes(aliases[value])};const find=value=>controls().filter(e=>matches(e,value));const selected=e=>e.getAttribute('aria-checked')==='true'||e.getAttribute('aria-selected')==='true';const choose=async value=>{if(!await open())return {ok:false,reason:'settings_trigger'};let xs=find(value);if(xs.length!==1)return {ok:false,reason:'setting:'+value,count:xs.length};let changed=!selected(xs[0]);if(changed){activate(xs[0]);await wait();if(!await open())return {ok:false,reason:'settings_reopen'};xs=find(value)}return {ok:xs.length===1&&selected(xs[0]),changed,count:xs.length}};const close=async()=>{if(root()){const t=trigger();if(!t)return false;activate(t);await wait()}return !root()&&trigger()?.getAttribute('aria-expanded')!=='true'};if(!await open())return {reason:'settings_trigger'};if(request.action==='capabilities'){const generate=Array.from(composer.querySelectorAll('flow-generate-icon-button button.generate-icon-button,button.generate-icon-button,button[type=\"submit\"]')).filter(e=>e.matches('button.generate-icon-button')||icon(e).includes('arrow_forward'));const add=Array.from(composer.querySelectorAll('button.add-menu-trigger')).filter(visible);const image=find('IMAGE').length===1,video=find('VIDEO').length===1;const known=image||video;const out={known,image,video,reference_image:image&&add.length===1,frame_video:video&&add.length===1,prompt_editor:true,generate_control:generate.length===1,settings_trigger:!!trigger(),contract_version:'%s'};out.menu_closed=await close();return out}const mode=await choose(request.media_type);if(!mode.ok)return mode;if(request.action==='choose_mode'){const out={ok:true,media:true,mode_mutated:mode.changed};out.menu_closed=await close();return out}if(request.action==='inspect_count'){const xs=controls().filter(selected).filter(e=>['1','2','3','4'].some(v=>matches(e,v)));const out={media:true,count:xs.length===1?Number((xs[0].innerText||'').trim().slice(1)):null};out.menu_closed=await close();return out}if(request.action==='configure_count'){const setting=await choose(String(request.count));const out={ok:setting.ok,media:true,count:request.count,count_mutated:setting.changed};out.menu_closed=await close();return out}const aspect=await choose(request.ratio);if(!aspect.ok)return aspect;if(!await open())return {reason:'settings_reopen'};const counts=controls().filter(selected).filter(e=>['1','2','3','4'].some(v=>matches(e,v)));const t=trigger(),out={media:find(request.media_type).filter(selected).length===1,ratio:find(request.ratio).filter(selected).length===1,actual_output_count:counts.length===1?Number((counts[0].innerText||'').trim().slice(1)):null,model:(t?.innerText||'').trim().split(/\\n/)[0],mode_mutated:mode.changed,ratio_mutated:aspect.changed,contract_version:'%s'};out.menu_closed=await close();return out})()""" % (request, CURRENT_EDITOR_CONTRACT_VERSION, CURRENT_EDITOR_CONTRACT_VERSION)
 
-PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.3.0"
+PROVIDER_SURFACE_EXTRACTOR_VERSION = "flow-provider-surface/2.5.0"
 POLL_EVIDENCE_VERSION = "story-auto-flow-poll-evidence/1.5.0"
 SUPPORTED_POLL_EVIDENCE_SCHEMAS = {
     "story-auto-flow-poll-evidence/1.2.0": "flow-provider-surface/2.1.0",
@@ -59,6 +59,17 @@ SUPPORTED_POLL_EVIDENCE_SCHEMAS = {
     "story-auto-flow-poll-evidence/1.4.0": "flow-provider-surface/2.2.0",
     POLL_EVIDENCE_VERSION: PROVIDER_SURFACE_EXTRACTOR_VERSION,
 }
+COMPATIBLE_POLL_EVIDENCE_PARSERS = {
+    schema: frozenset({parser}) for schema, parser in SUPPORTED_POLL_EVIDENCE_SCHEMAS.items()
+}
+COMPATIBLE_POLL_EVIDENCE_PARSERS[POLL_EVIDENCE_VERSION] = frozenset({
+    "flow-provider-surface/2.3.0", "flow-provider-surface/2.4.0",
+    PROVIDER_SURFACE_EXTRACTOR_VERSION,
+})
+
+
+def _supported_poll_parser(schema_version: str, parser_version: str) -> bool:
+    return parser_version in COMPATIBLE_POLL_EVIDENCE_PARSERS.get(schema_version, frozenset())
 COMPACT_POLL_EVIDENCE_SCHEMAS = {
     "story-auto-flow-poll-evidence/1.4.0",
     POLL_EVIDENCE_VERSION,
@@ -234,7 +245,7 @@ class ProviderPollEvidenceTimeline:
                 or max_candidate_identities < 1 or max_quarantined_identities < 1
                 or max_serialized_bytes <= POLL_EVIDENCE_OVERFLOW_RESERVE_BYTES):
             raise ValueError("poll evidence bounds must be positive and retain overflow reserve")
-        if SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(poll_evidence_version) != parser_extractor_version:
+        if not _supported_poll_parser(poll_evidence_version, parser_extractor_version):
             raise ValueError("unsupported poll evidence schema pair")
         self.path = path
         self.poll_evidence_version = poll_evidence_version
@@ -472,7 +483,10 @@ class ProviderPollEvidenceTimeline:
         }
         encoded.update({
             "schema_version": POLL_EVIDENCE_VERSION,
-            "parser_extractor_version": PROVIDER_SURFACE_EXTRACTOR_VERSION,
+            "parser_extractor_version": (
+                PROVIDER_SURFACE_EXTRACTOR_VERSION if legacy_import is not None
+                else snapshot.get("parser_extractor_version")
+            ),
             "collection_baselines": baselines,
             "collection_baselines_sha256": _json_sha256(baselines),
             "compact_timeline_sha256": _json_sha256(compact_observations),
@@ -612,7 +626,7 @@ class ProviderPollEvidenceTimeline:
                 raise ValueError("schema")
             schema_version = snapshot.get("schema_version")
             parser_version = snapshot.get("parser_extractor_version")
-            if SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(schema_version) != parser_version:
+            if not _supported_poll_parser(schema_version, parser_version):
                 raise ValueError("extractor")
             persisted_observations = snapshot.get("observations")
             observations = (
@@ -657,8 +671,10 @@ class ProviderPollEvidenceTimeline:
             if legacy_import is not None:
                 if (schema_version != POLL_EVIDENCE_VERSION or not isinstance(legacy_import, dict)
                         or legacy_import.get("source_schema_version") not in SUPPORTED_POLL_EVIDENCE_SCHEMAS
-                        or legacy_import.get("source_parser_extractor_version")
-                        != SUPPORTED_POLL_EVIDENCE_SCHEMAS.get(legacy_import.get("source_schema_version"))
+                        or not _supported_poll_parser(
+                            legacy_import.get("source_schema_version"),
+                            legacy_import.get("source_parser_extractor_version"),
+                        )
                         or legacy_import.get("source_timeline_sha256") != snapshot.get("timeline_sha256")):
                     raise ValueError("legacy_import")
                 expected_observation_schema = legacy_import["source_schema_version"]
@@ -1681,6 +1697,53 @@ class LiveFlowGenerator:
             and not verified_evidence.get("decision_bindings")
         )
 
+    @staticmethod
+    def _eligible_current_surface_completeness_reconciliation(
+            settings: dict, attempt: dict, verified_evidence: dict) -> bool:
+        """Recognize superseded current-grid completeness gaps without authorizing Generate."""
+        activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {}
+        baseline = attempt.get("baseline_provider_identities")
+        model = settings.get("pre_dispatch_provider_model_identity_set")
+        baseline_observations = [
+            item for item in verified_evidence.get("observations", [])
+            if item.get("phase") == "PRE_DISPATCH_BASELINE"
+        ]
+        fingerprints = {
+            item.get("provider_surface_fingerprint") for item in baseline_observations
+            if isinstance(item.get("provider_surface_fingerprint"), str)
+            and item.get("provider_surface_fingerprint")
+        }
+        model_cards = {
+            item.get("card_id") for item in model or []
+            if isinstance(item, dict) and isinstance(item.get("card_id"), str)
+        }
+        return (
+            settings.get("provider_surface_extractor_version") in {
+                "flow-provider-surface/2.3.0", "flow-provider-surface/2.4.0",
+            }
+            and attempt.get("status") == "AMBIGUOUS"
+            and attempt.get("failure_class") == "OUTPUT_ATTRIBUTION_AMBIGUOUS"
+            and attempt.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"
+            and attempt.get("dispatch_confirmation_state") == "UNCERTAIN"
+            and all(activation.get(key) is True for key in (
+                "input_dispatched", "trusted_click_seen", "activation_verified",
+                "provider_acceptance_transition",
+            ))
+            and isinstance(baseline, list) and bool(baseline)
+            and all(isinstance(item, dict)
+                    and isinstance(item.get("card_id"), str) and item["card_id"] in model_cards
+                    and isinstance(item.get("asset_id"), str) and item.get("media_type") == "IMAGE"
+                    and isinstance(item.get("identity"), str)
+                    for item in baseline)
+            and len(baseline_observations) >= 3
+            and len(fingerprints) == 1
+            and (
+                settings.get("provider_surface_extractor_version") == "flow-provider-surface/2.4.0"
+                or all(item.get("provider_model_complete") is False for item in baseline_observations)
+            )
+            and not verified_evidence.get("decision_bindings")
+        )
+
     def _record_observation(self, observation) -> None:
         self.last_settings.update({
             "attribution_method": observation.method,
@@ -2119,12 +2182,15 @@ class LiveFlowGenerator:
         migration_reconciliation = self._eligible_current_editor_migration_reconciliation(
             settings, attempt, verified_evidence,
         )
+        surface_completeness_reconciliation = self._eligible_current_surface_completeness_reconciliation(
+            settings, attempt, verified_evidence,
+        )
         try:
             verified_binding = ProviderPollEvidenceTimeline.verify_authoritative_binding(
                 settings["provider_poll_evidence"]
             )
         except FlowError as error:
-            if not migration_reconciliation:
+            if not (migration_reconciliation or surface_completeness_reconciliation):
                 return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
             verified_binding = None
         if (verified_binding is not None
@@ -2142,6 +2208,8 @@ class LiveFlowGenerator:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "MIGRATION_BASELINE_NOT_EMPTY"}}
         if migration_reconciliation:
             baseline = []
+        elif surface_completeness_reconciliation:
+            baseline = list(attempt["baseline_provider_identities"])
         elif not isinstance(baseline, list) or not baseline:
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "LEGACY_BASELINE_IDENTITIES_UNAVAILABLE"}}
         self._reset_poll_evidence(destination.parent / "reconciliation_poll_evidence.json")
@@ -2152,7 +2220,7 @@ class LiveFlowGenerator:
             dispatch.restore_verified_confirmation(prior_durable_identity)
         elif attempt.get("dispatch_confirmed") is True:
             dispatch.observe(input_dispatched=True, attributable_job=True)
-        elif migration_reconciliation:
+        elif migration_reconciliation or surface_completeness_reconciliation:
             dispatch.observe(
                 input_dispatched=True, trusted_click_seen=True,
                 activation_verified=True, provider_acceptance_transition=True,
