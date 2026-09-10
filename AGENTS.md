@@ -14,13 +14,20 @@ changing anything.
   approved task scope.
 - Preserve owner work. Do not reset, clean, overwrite, or silently stage it.
 
-## Normal development
+## CADS working model
 
 Normal development uses native Git, an editor, and the applicable tests.
-`TASK.md` supplies active working context; it is not lifecycle state. Use
-Simplified Build OS only when it is available, explicitly requested, and the
-work crosses a consequential boundary. It does not replace normal development
-or become repository-wide execution authority.
+`TASK.md` supplies active working context; it is not lifecycle state. Use five
+reasoning controls rather than a persisted lifecycle: **Reality -> Intent / Design
+-> Change -> Acceptance -> Consequence**. Make the minimum sufficient change and
+prefer `REUSE -> WIRE -> FIX -> REPLACE_AND_DELETE -> ADD`; abstract demonstrated
+volatility rather than hypothetical possibility.
+
+For multi-step user-facing work, define a representative Critical User Journey
+and prove the composed journey on the supported surface. Isolated feature or
+subsystem PASS does not establish Product Goal acceptance. Accepted material
+direction that could change a later session's approach belongs in
+`docs/decisions/`; chat memory and agent reports are not authority.
 
 The legacy `.buildos` records and historical authority files are provenance,
 not active authority. Do not reconstruct or migrate their lifecycle state.
