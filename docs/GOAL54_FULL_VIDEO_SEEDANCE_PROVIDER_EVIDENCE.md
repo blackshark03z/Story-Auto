@@ -305,8 +305,12 @@ Live MCP schema evidence adds:
 - `elyum_upload` accepts URL or base64 image/video and returns a provider media
   URL; provider description marks upload as free.
 
-Next safe action: implement one narrow research-only Elyum adapter preserving
-`clientRef` and durable `jobId`, with keep/kill explicit and never automatic.
-Do not change product routing yet. Prepare the fixed character/reference fixture
-and re-estimate immediately before R1; dispatch only after adapter recovery tests
-pass.
+Research-only adapter implementation is now present under
+`story_auto/providers/elyum_seedance/` and is intentionally not wired into
+production routing. The durable experiment ledger persists the stable
+`clientRef` before dispatch, persists `jobId` before waiting, resumes known jobs
+without another make call, and converts an uncertain create response into a
+same-`clientRef` replay path. Keep/kill remain separate explicit operations.
+Focused plus production-boundary regression: 58/58 PASS, JS syntax PASS, diff
+check PASS. Next safe action is selecting one fixed existing reference fixture,
+re-estimating Fast I2V, then dispatching at most R1 under the 44-Credit bound.

@@ -197,12 +197,14 @@ def _estimate_arguments(schema: dict[str, Any], model: str, duration: int, resol
     required = [str(item) for item in required] if isinstance(required, list) else []
     args: dict[str, Any] = {}
 
+    model_lower = model.lower()
+    inferred_mode = "i2v" if ("i2v" in model_lower or "reference" in model_lower) else "t2v"
     aliases = {
         "model": model, "modelslug": model, "model_slug": model, "modelid": model, "model_id": model,
         "duration": duration, "durationseconds": duration, "duration_seconds": duration, "seconds": duration,
         "resolution": resolution,
         "ratio": "16:9", "aspectratio": "16:9", "aspect_ratio": "16:9",
-        "kind": "video", "type": "video", "role": "video", "mode": "t2v",
+        "kind": "video", "type": "video", "role": "video", "mode": inferred_mode,
         "variants": 1, "count": 1, "quantity": 1,
     }
     for key, spec in properties.items():
@@ -288,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--duration", type=int, default=4)
     parser.add_argument("--resolution", default="480p")
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument("--summary-only", action="store_true",
+                        help="Print only sanitized account + estimate summary.")
     args = parser.parse_args(argv)
 
     try:
@@ -308,6 +312,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         key = ""
+    if args.summary_only:
+        result = {
+            "status": result.get("status"),
+            "account": result.get("account", {}),
+            "estimate": result.get("estimate", {}),
+            "protocol_version": result.get("protocol_version"),
+            "server": result.get("server", {}),
+        }
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0 if result.get("status") == "PASS" else 2
 

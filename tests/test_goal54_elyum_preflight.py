@@ -36,6 +36,24 @@ class ElyumPreflightToolTests(unittest.TestCase):
         self.assertEqual(missing, [])
         self.assertEqual(args, {"model": "seedance-2-mini", "duration": 4, "resolution": "480p", "mode": "t2v", "count": 1})
 
+    def test_estimate_args_infers_i2v_for_i2v_and_reference_models(self):
+        schema = {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+                "kind": {"type": "string", "enum": ["image", "video"]},
+                "mode": {"type": "string", "enum": ["t2v", "i2v", "ugc", "clone"]},
+                "model": {"type": "string"},
+                "duration": {"type": "integer"},
+            },
+        }
+        i2v, missing_i2v = _mod._estimate_arguments(schema, "seedance-2-fast-i2v", 4, "480p")
+        ref, missing_ref = _mod._estimate_arguments(schema, "seedance-2.5-reference", 4, "480p")
+        self.assertEqual(missing_i2v, [])
+        self.assertEqual(missing_ref, [])
+        self.assertEqual((i2v["kind"], i2v["mode"]), ("video", "i2v"))
+        self.assertEqual((ref["kind"], ref["mode"]), ("video", "i2v"))
+
     def test_account_sanitizer_drops_identity_and_secret_fields(self):
         result = _mod._safe_account({
             "email": "owner@example.invalid",
