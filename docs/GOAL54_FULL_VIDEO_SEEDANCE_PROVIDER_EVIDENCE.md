@@ -239,6 +239,10 @@ a stable first-party API baseline but does not publish a standard free Seedance
   refunds the hold; failed generations are documented as uncharged. Free-plan
   kill allowance is limited, so acceptance probes should avoid unnecessary
   rerolls.
+- Live-account evidence: the Owner's logged-in Free account shows 150 starter
+  Credits and one current-period kill, and the account allowed creation of an
+  API key stored outside the repository. This resolves API-key creation for this
+  account, but not yet the key's actual read/generate scopes or MCP runtime access.
 - Verdict: `FREE_STABLE_API_CANDIDATE_HIGH`. This is now the first candidate to
   preflight for a free Stage B path, while BytePlus remains the first-party
   stable fallback/baseline.

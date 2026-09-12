@@ -129,6 +129,10 @@ multi-scene Full Video fixture.
   process timeout only after pytest printed the complete PASS summary.
 - A zero-generation live BytePlus preflight is implemented at
   `tools/goal54_seedance_preflight.py`.
+- Elyum read-only MCP preflight is implemented at
+  `tools/goal54_elyum_preflight.py`. It can call only initialize/tools-list plus
+  `elyum_account`, `elyum_models`, and `elyum_estimate`; it has no generation,
+  keep, kill, upload, or mutation path. Offline sanitizer/protocol tests pass 4/4.
 - Free+stable provider verification is persisted in
   `docs/GOAL54_FULL_VIDEO_SEEDANCE_PROVIDER_EVIDENCE.md`: Elyum is
   `FREE_STABLE_API_CANDIDATE_HIGH`; Pollo is `STABLE_API / FREE_API_UNVERIFIED`;
@@ -160,12 +164,12 @@ multi-scene Full Video fixture.
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
 Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
-contract. Run a read-only Elyum preflight with the Owner-created out-of-repo key: account
-(balance/plan/scopes/cap), model catalog, and cost estimates for the bounded
-480p Shot Recipe experiment. Do not call generation/keep/kill in this preflight.
-Only after those reads PASS should Story Auto add one narrow Elyum adapter around
-`clientRef` + durable `jobId` and execute the bounded experiment. If API runtime
-access fails, do not upgrade automatically and do not build browser automation:
-use Studio only for bounded recipe research while BytePlus remains the production
-API baseline. Pollo stays deferred until its API wallet itself proves usable free
-credit.
+contract. Run `tools/goal54_elyum_preflight.py` locally with the Owner-created out-of-repo
+key and capture only its sanitized JSON: account (balance/plan/scopes/cap),
+Seedance model catalog, and a 4s/480p estimate. Do not call generation/keep/kill
+in this preflight. Only after those reads PASS should Story Auto add one narrow
+Elyum adapter around `clientRef` + durable `jobId` and execute the bounded
+experiment. If API runtime access fails, do not upgrade automatically and do not
+build browser automation: use Studio only for bounded recipe research while
+BytePlus remains the production API baseline. Pollo stays deferred until its API
+wallet itself proves usable free credit.
