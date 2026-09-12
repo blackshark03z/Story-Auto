@@ -30,13 +30,19 @@ volatility rather than hypothetical possibility.
 
 For multi-step user-facing work, define a representative Critical User Journey
 and prove the composed journey on the supported surface. Isolated feature or
-subsystem PASS does not establish Product Goal acceptance. When durable
-system/provider/runtime/data/deployment/trust shape is material, apply CADS
-Architecture Description conditionally: `ARCHITECTURE.md` describes current
-durable truth and concern-driven views, while accepted rationale that could
-change a later session's approach belongs in `docs/decisions/`. Architecture
-prose never outranks identified Git/runtime reality. Chat memory and agent
-reports are not authority.
+subsystem PASS does not establish Product Goal acceptance. When acceptance uses
+an observed surface (UI, preview, browser surface, downloaded media, packaged
+artifact, etc.), apply CADS Acceptance Surface Provenance: the material runtime,
+artifact/assets, configuration and data authorities affecting the claimed
+behavior must be traceably associated with the intended candidate. If that
+association is stale, materially ambiguous, conflicting or cannot be established,
+the affected evidence is `UNVERIFIED` and cannot support Product/Owner
+Acceptance. When durable system/provider/runtime/data/deployment/trust shape is
+material, apply CADS Architecture Description conditionally: `ARCHITECTURE.md`
+describes current durable truth and concern-driven views, while accepted
+rationale that could change a later session's approach belongs in
+`docs/decisions/`. Architecture prose never outranks identified Git/runtime
+reality. Chat memory and agent reports are not authority.
 
 The legacy `.buildos` records and historical authority files are provenance,
 not active authority. Do not reconstruct or migrate their lifecycle state.

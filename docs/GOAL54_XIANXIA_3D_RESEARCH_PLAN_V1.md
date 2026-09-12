@@ -103,6 +103,27 @@ fingerprint, provider/model/settings, durable `clientRef`/`jobId`, live estimate
 actual unlock price/final Credit consequence, output hash/technical metadata and
 manual rubric/critical flags.
 
+### Acceptance-surface provenance envelope
+
+Before any X1/X2/X3 preview or local file may support a PASS/Owner-review claim,
+record enough provenance to reconstruct the observed surface:
+
+- exact Story Auto source HEAD used for the adapter/runner;
+- recipe ID + prompt fingerprint + model/settings;
+- input/reference file SHA-256 and canonical evidence path;
+- research ledger path and durable `clientRef`/provider `jobId`/`genId` when
+  available;
+- provider surface state (`locked preview`, `kept original`, etc.);
+- acquired local artifact SHA-256 + technical metadata;
+- material account/config evidence such as live estimate/balance when it affects
+  the claim;
+- which concrete artifact/surface the human rubric evaluated.
+
+If a displayed/uploaded/reviewed artifact cannot be tied back to this envelope,
+its visual evidence is `UNVERIFIED`. A locked preview can prove preview quality;
+it does not automatically prove a later kept original or integrated Story Auto
+render without lineage/equivalence evidence.
+
 ## Shot sequence
 
 ### X1 — Style Lock + Camera

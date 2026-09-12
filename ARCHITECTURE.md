@@ -14,6 +14,7 @@ One modular production pipeline with mode-specific media policy and provider bou
 - **Operational stability:** Full Video production must prefer documented API task identity/polling over fragile browser/session automation.
 - **Cost observability:** generation cost/quota is an external consequence and must be estimable/bounded before scaled execution.
 - **Low-IT product journey:** the supported product path must remain understandable and recoverable without requiring provider implementation knowledge.
+- **Acceptance-surface provenance:** any preview/UI/downloaded artifact used as Product or Owner acceptance evidence must be traceably bound to the candidate source/runtime, material configuration/data authority, provider request/job/result identity and local artifact lineage that can affect the claimed behavior; materially ambiguous or stale surface evidence is `UNVERIFIED`.
 
 ```text
 content.md
@@ -227,6 +228,38 @@ Baseline: `gemini-3.5-flash`.
 Benchmark candidate: `gemini-3.6-flash`.
 
 Each planning stage validates structured output and writes a versioned artifact. Invalid JSON/schema is a stage failure, not silently accepted prose.
+
+## Acceptance-surface provenance
+
+Story Auto frequently evaluates behavior through observed surfaces that can drift
+from source or provider state: loopback UI pages, Google Flow browser surfaces,
+Elyum/BytePlus provider previews, downloaded media, locally postprocessed assets,
+and final renders. Evidence from such a surface is admissible only when the
+material factors affecting the claimed behavior can be reconstructed and tied to
+the intended candidate.
+
+For provider-backed visual evidence, the minimal provenance envelope is normally:
+
+- candidate Product HEAD/source state that produced the request/adapter behavior;
+- render/research mode and material generation configuration;
+- request or experiment identity plus provider/model;
+- provider task/job/result identity when available;
+- reference/input asset hash and lineage when material;
+- acquired local artifact path + cryptographic hash + relevant technical metadata;
+- applicable configuration/data authority (for example account/balance snapshot,
+  manifest/ledger entry, selected-asset binding or review state);
+- observed surface used for the claim, including whether it is a locked preview,
+  kept original, local derivative or final product surface.
+
+A provider preview can prove the identified preview candidate, but it does not by
+itself prove a later kept/original asset, integrated render or canonical product
+state when those materially differ. Likewise, Owner review of a local file is
+valid only when that file's lineage to the intended provider result/candidate is
+established. Self-reported version labels or UI text are supporting evidence, not
+sole identity proof.
+
+This is an acceptance invariant, not a deployment/promotion lifecycle. Record only
+material provenance needed to reconstruct the claim.
 
 ## Runtime isolation
 

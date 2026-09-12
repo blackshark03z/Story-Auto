@@ -40,6 +40,11 @@ remains release-supported and unchanged while this Goal is evaluated.
   second provider proves the abstraction is needed.
 - Acceptance is tied to an identified Product HEAD and runtime evidence; isolated
   tests alone are insufficient.
+- Any UI/preview/downloaded-media evidence used for Product or Owner acceptance
+  must satisfy CADS Acceptance Surface Provenance: the material runtime,
+  artifact/assets, configuration and data authorities affecting the claim must
+  be traceably associated with the intended candidate, otherwise the criterion
+  remains `UNVERIFIED`.
 
 ## Acceptance Fixture
 
@@ -104,10 +109,11 @@ multi-scene Full Video fixture.
 
 ## Progress
 
-- CADS refreshed from `origin/master` on 2026-09-12 at `432a19a`
-  (`Strengthen project architecture description`). The frozen Standard/Five
-  Controls remain unchanged; Story Auto now applies the new conditional
-  Architecture Description rule for material provider/runtime/trust shape.
+- CADS refreshed from `origin/master` on 2026-09-13 at `292bee9`
+  (`Require_acceptance_surface_provenance`). The frozen Standard/Five Controls
+  remain unchanged. Story Auto applies both the conditional Architecture
+  Description rule from `432a19a` and the new Acceptance Surface Provenance
+  invariant for observed UI/preview/artifact evidence.
 - Baseline before Goal 54: `48947dc` (`Clean accepted product baseline`).
 - Goal 54 SoT/CADS framing committed and pushed at
   `77b7bde9c257495a72c21aeee09c064797027182`.
