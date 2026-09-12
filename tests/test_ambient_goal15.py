@@ -202,7 +202,7 @@ class AmbientFailureAndReviewStateTests(unittest.TestCase):
             snapshot=app.snapshot(config.project_id)
             review=app.review_overview(config.project_id)
             self.assertEqual(snapshot["blocked"][0],"VISUAL_PLANNING_REGENERATION_REQUIRED")
-            self.assertEqual(snapshot["current_activity"],"Only Full Image is available in this release.")
+            self.assertEqual(snapshot["current_activity"],"This output mode is not available in the current release.")
             self.assertIsNone(snapshot["final_path"])
             self.assertEqual(next(item["status"] for item in review["quality"] if item["label"]=="Visual match"),"Not available yet")
             self.assertEqual(next(item["status"] for item in review["quality"] if item["label"]=="Final render"),"Waiting")

@@ -174,12 +174,34 @@ aggregators while the first-party BytePlus contract remains viable.
 - Completed results are downloaded to Story Auto-owned storage, validated with
   FFprobe, hashed, and enter the existing manifest as `QC_PENDING`.
 - Full Video quality remains manual until automated video QC is accepted.
-- Focused/regression evidence: 111/111 PASS plus `node --check` PASS before the
-  final full-suite run.
+- Implementation checkpoint: `d2c32745ef1f551f1ef924378b83628464bbde79`
+  (`Goal54-stable-api-first-Seedance-path`).
+- First-party contract cross-check:
+  - BytePlus ModelArk integration guide uses
+    `https://ark.ap-southeast.bytepluses.com/api/v3` as the default ModelArk
+    base URL and `BYTEPLUS_MODELARK_API_KEY` for image/video auth.
+  - BytePlus' official ModelArk MCP API reference exposes Seedance create-task,
+    get-task and list-task operations, with create treated as non-idempotent and
+    get/list as read-only/idempotent operations.
+  - BytePlus LAS documentation independently lists
+    `dreamina-seedance-2-5-260628`, async task identity, 4–30 second output and
+    480p/720p support. Story Auto uses the ModelArk `/api/v3` contract, not the
+    separate LAS operator `/api/v1` endpoint.
+- Focused post-implementation gate: 41/41 `unittest` tests PASS, `node --check`
+  PASS, and `git diff --check` PASS.
+- Full hermetic regression (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`) completed at
+  100% with 714 tests PASS and 283 subtests PASS. The ChatCode command wrapper
+  reached its timeout only after pytest emitted the complete PASS summary.
 - Credential-safe no-generation probe:
   `python tools/goal54_seedance_preflight.py`.
 - Live probe result on 2026-09-12: `BLOCKED / CREDENTIAL_MISSING`. No generation
   task was submitted and no provider credit was spent.
+
+First-party references retained for future verification:
+
+- https://github.com/byteplus-sa/modelark-mcp/blob/main/docs/integration-guide.md
+- https://github.com/byteplus-sa/modelark-mcp/blob/main/docs/api-reference.md
+- https://docs.byteplus.com/en/docs/Byteplus_LAS/video_gen_enhanced
 
 ### Next safe action
 

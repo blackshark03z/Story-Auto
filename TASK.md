@@ -110,8 +110,14 @@ multi-scene Full Video fixture.
   Flow reference-image dependencies. Full Image remains on Google Flow.
 - Full Video is exposed in New Video and uses `MANUAL_REVIEW` until automated
   temporal/video quality acceptance is separately proven.
-- Goal 54 focused + regression evidence currently passes 111/111 tests plus JS
-  syntax validation. A zero-generation live preflight is implemented at
+- API-first Full Video implementation checkpoint: `d2c32745ef1f551f1ef924378b83628464bbde79`
+  (`Goal54-stable-api-first-Seedance-path`).
+- Post-implementation focused gate passes 41/41 `unittest` tests plus JavaScript
+  syntax validation and `git diff --check`.
+- Full hermetic regression (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`) reaches 100% with
+  714 tests passed and 283 subtests passed. The ChatCode wrapper reported a
+  process timeout only after pytest printed the complete PASS summary.
+- A zero-generation live preflight is implemented at
   `tools/goal54_seedance_preflight.py`.
 
 ## Discoveries / Blockers
