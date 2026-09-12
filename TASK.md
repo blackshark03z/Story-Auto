@@ -319,3 +319,11 @@ A matched A/B sheet is at
 Supporting global image metrics show reduced highlight fraction (`0.096964 ->
 0.084539`) and mean luma (`0.535632 -> 0.499830`) in X1b, but they do not replace
 the Owner oracle for skin/material softness.
+
+Prompt Research V1 is now durable at `docs/GOAL54_SEEDANCE_PROMPT_RESEARCH_V1.md`.
+The research separates long-form Visual Constitution (anchor/reference creation)
+from short-form Seedance Shot Prompt (reference lock + one material/style delta +
+one subject motion + one camera move + 3–6 critical constraints). Candidate X1C
+is defined there as a concise reference-first/motion-first matte-soft prompt, but
+**is not yet dispatched**. X1B visual review remains the immediate Owner oracle;
+X2 remains blocked.
