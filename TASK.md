@@ -188,6 +188,12 @@ multi-scene Full Video fixture.
   branch is `XIANXIA_3D_V1`, which restarts visual-method evidence with one new
   canonical GPT Image anchor and one Fast-I2V X1 preview before any continuity
   expansion.
+- Canonical Xianxia anchor provenance is now complete locally: GPT Image source
+  generation `5eb96ca5-da11-4d7e-b615-7e1e9fef1726` was deterministically
+  normalized to `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`,
+  1280x720, SHA-256
+  `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`.
+  Source checkpoint before X1 dispatch: `1ca395254309de80b182fbed3566cf07de1ee016`.
 
 ## Historical Next Safe Action (superseded 2026-09-13)
 

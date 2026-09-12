@@ -89,6 +89,18 @@ Store the canonical image outside Git under:
 Record its SHA-256 and generation identity in Git evidence. The image bytes stay
 outside source control.
 
+Canonical anchor local evidence is now established:
+
+- GPT Image generation: `5eb96ca5-da11-4d7e-b615-7e1e9fef1726`;
+- local path: `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`;
+- normalized size: 1280x720;
+- SHA-256: `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`;
+- source checkpoint before live X1 work: `1ca395254309de80b182fbed3566cf07de1ee016`.
+
+This provenance binding satisfies the CADS acceptance-surface provenance rule for
+using the anchor as an X1 input candidate. Any later local replacement or hash
+mismatch makes the affected evidence `UNVERIFIED` until rebound.
+
 ### Canonical anchor candidate selected — provenance pending local import
 
 The selected GPT Image source is generation
