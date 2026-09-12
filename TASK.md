@@ -288,5 +288,13 @@ The exact acceptance surface for X1 is locally acquired at
 836x480, 24 fps, 97 frames, duration 4.041667 s. Contact-sheet evidence is
 `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_contact_sheet.png`, SHA-256
 `03589216d946f187b6792974fceae3738b7ff74188ab09e8829630883c3ca10f`.
-Technical acquisition/provenance is verified; human visual rubric and explicit
-Keep/Kill remain unresolved, so X1 is not yet accepted.
+Technical acquisition/provenance is verified. Owner visual review on 2026-09-13
+classified X1 as `PARTIAL_FAIL_STYLE_SURFACE`: identity/scene/camera evidence is
+useful, but skin and scene materials are too glossy/plastic for the intended 3D
+xianxia target. The requested correction is lower gloss/specular response and
+higher softness. X1 is preserved as evidence, **must not be Kept**, and need not
+consume the sole Kill allowance. X2 remains blocked. The next authorized provider
+experiment is X1b, which changes only the style-surface block while reusing the
+same anchor, Fast-I2V 4 s / 480p settings, slow push-in and micro-motion. Exact
+X1b prompt is frozen at `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_prompt.txt`,
+SHA-256 `a0886dfee4f36c4eb5f1d82c477d5545e1a8573fb1735f26b6d6a7d5d5d04cc9`.

@@ -65,8 +65,8 @@ question and creates a needless failure variable.
 Required:
 
 - high-quality 3D donghua / Chinese xianxia visual language;
-- stylized semi-real CG, polished skin/hair/fabric;
-- elegant and restrained rather than game-UI/fantasy spectacle.
+- stylized semi-real CG with **soft-matte skin/fabric/material response**, diffuse lighting and restrained specular highlights;
+- elegant, airy and restrained rather than glossy/plastic game-UI/fantasy spectacle.
 
 Reject:
 
@@ -245,7 +245,7 @@ Every xianxia shot prompt must be built in this order:
 
 1. **Identity block** — same named research character and immutable markers.
 2. **Environment block** — same pavilion and fixed scene anchors.
-3. **Style block** — 3D Chinese xianxia/donghua, semi-real polished CG.
+3. **Style block** — 3D Chinese xianxia/donghua, semi-real **soft-matte CG** with diffuse light, gentle atmospheric softness and restrained specular response.
 4. **One action block** — exactly one dominant subject action.
 5. **One camera block** — exactly one dominant camera behavior.
 6. **Continuity block** — preserve face, hair ornament, costume palette, jade,
@@ -352,10 +352,49 @@ Acceptance-surface provenance:
   `03589216d946f187b6792974fceae3738b7ff74188ab09e8829630883c3ca10f`.
 
 These artifacts are the exact Owner-review surface for X1. Technical validity and
-provenance are verified. The xianxia/style, identity/costume, environment,
-camera/action and anatomy/fabric/hair rubric dimensions remain pending direct
-visual review. X1 therefore remains `UNVERIFIED` for visual acceptance and no
-Keep/Kill action is authorized yet.
+provenance are verified.
+
+### X1 Owner visual verdict — 2026-09-13
+
+Owner review of the provenance-bound locked preview found the overall color/material
+response too glossy: skin and scene objects appear somewhat shiny/plastic. The
+requested correction is to **reduce gloss/specular response and increase softness**
+while preserving identity, scene, framing and camera behavior.
+
+Therefore X1 is `PARTIAL_FAIL_STYLE_SURFACE`:
+
+- provider transport/recovery/provenance: PASS;
+- identity/scene/camera baseline: useful evidence, not rejected;
+- style-surface acceptance: FAIL for V1 target;
+- Keep: **not authorized**;
+- Kill: **not required**; preserve the locked preview as evidence;
+- X2: remains blocked because X1 is not an accepted style anchor.
+
+The next authorized provider experiment is **X1b Matte-Soft Retry**, changing only
+the material/lighting style block. X1b must reuse the exact canonical anchor,
+Fast-I2V 4 s / 480p / 16:9 / audio-off settings, slow push-in and micro-motion.
+No continuity, head-turn, hand action, aura or other semantic variable may be
+introduced in X1b.
+
+#### X1b exact prompt V1
+
+Local mirror: `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_prompt.txt`
+
+SHA-256: `a0886dfee4f36c4eb5f1d82c477d5545e1a8573fb1735f26b6d6a7d5d5d04cc9`
+
+```text
+Same young adult Chinese female cultivator from the canonical reference image: refined oval face, dark-brown eyes, long black half-up hair, one silver-blue floral hairpin with restrained hanging ornaments, white and pale-blue layered xianxia hanfu, teal waist sash, one jade pendant, restrained silver drop earrings. Preserve the same ancient Chinese wooden mountain pavilion, misty layered peaks, one visible waterfall, one distant traditional pavilion, and the same soft dawn blue-white-gold palette.
+
+High-quality 3D Chinese xianxia/donghua with a soft-matte, airy and elegant material response. Use soft diffuse lighting, gentle atmospheric softness, matte natural skin, matte silk fabric, soft wood response and restrained specular highlights on skin, hair, fabric, wood, jade and ornaments. Preserve subtle depth and clarity without a waxy, wet, plastic or metallic sheen. Avoid harsh contrast, hard highlights, glossy fabric, glossy wood, overly reflective objects and overly sharp game-CG rendering.
+
+Keep the same medium eye-level framing and slight three-quarter pose inherited from the reference. The camera performs one slow smooth push-in only. The subject remains mostly still with natural breathing, one subtle blink, and slight hair and sleeve movement from a gentle breeze.
+
+Preserve exact identity, hairstyle, hairpin, costume palette, jade, pavilion layout, mountains, waterfall and lighting composition. No deliberate head turn, no hand gesture, no aura or spell effect, no scene change, no extra characters, no 2D anime drift, no photoreal live-action drift, no Western fantasy elements, no pan, no tilt, no orbit, no handheld shake, no cut, no deformed face, hands, body, hair or fabric. Silent visual only.
+```
+
+The intended A/B delta from X1 is only surface/light response: softer diffuse
+illumination, matte skin/fabric/wood and restrained specular highlights. Identity,
+environment, camera and subject-motion intent are held constant.
 
 ## Non-goals for V1
 
