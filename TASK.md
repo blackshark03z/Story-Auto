@@ -193,7 +193,11 @@ multi-scene Full Video fixture.
   normalized to `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`,
   1280x720, SHA-256
   `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`.
-  Source checkpoint before X1 dispatch: `1ca395254309de80b182fbed3566cf07de1ee016`.
+- Exact X1 prompt is frozen at
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_prompt.txt`, SHA-256
+  `e28c57c545a1c606c13df1637664ace5c9718304ca85bea3afcfa70d563592da`.
+  Anchor and prompt hash mismatches block dispatch under CADS acceptance-surface
+  provenance. Source checkpoint before X1 dispatch: `2d03bd065fa03d1cf112dfc9b33ac0b8bf2fe682`.
 
 ## Historical Next Safe Action (superseded 2026-09-13)
 

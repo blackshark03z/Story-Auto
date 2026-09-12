@@ -177,6 +177,16 @@ Settings:
 Allowed subject motion: breathing, subtle blink, small hair/sleeve response to
 wind. Do not combine X1 with a deliberate head turn, hand gesture or aura effect.
 
+Exact X1 prompt V1 is frozen before dispatch and mirrored locally at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_prompt.txt` (UTF-8, 1258 chars),
+SHA-256 `e28c57c545a1c606c13df1637664ace5c9718304ca85bea3afcfa70d563592da`:
+
+```text
+Same young adult Chinese female cultivator from the reference image: refined oval face, dark-brown eyes, long black half-up hair, one silver-blue floral hairpin with restrained hanging ornaments, white and pale-blue layered xianxia hanfu, teal waist sash, one jade pendant, restrained silver drop earrings. Preserve the same ancient Chinese wooden mountain pavilion, misty layered peaks, one visible waterfall, one distant traditional pavilion, and soft dawn blue-white-gold lighting. High-quality 3D Chinese xianxia/donghua, stylized semi-real polished CG. Medium eye-level framing with the slight three-quarter pose inherited from the reference. The camera performs one slow smooth push-in only. The subject remains mostly still with natural breathing, one subtle blink, and slight hair and sleeve movement from a gentle breeze. Preserve exact identity, hairstyle, hairpin, costume palette, jade, pavilion layout, mountains, waterfall, and lighting. No deliberate head turn, no hand gesture, no aura or spell effect, no scene change, no extra characters, no 2D anime drift, no photoreal live-action drift, no Western fantasy elements, no pan, no tilt, no orbit, no handheld shake, no cut, no deformed face, hands, body, hair, or fabric. Silent visual only.
+```
+
+A prompt-file hash mismatch blocks dispatch until provenance is rebound.
+
 X1 is the **only authorized next provider dispatch** after this plan is committed.
 It requires a fresh live estimate and hard bound of 44 Credits unless the live
 estimate is lower. Preview creation may hold Credits; Keep/Kill is not automatic.
