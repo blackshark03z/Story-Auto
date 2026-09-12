@@ -535,6 +535,7 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
     requests, reference_ids = [], {}
     ambient = media_plan.get("render_mode") == "ambient_story"
     full_image = media_plan.get("render_mode") == "full_image"
+    full_video = media_plan.get("render_mode") == "full_video_ai"
     if ambient:
         ambient_style = ambient_style or media_plan.get("ambient_style")
         style_directive = ambient_prompt_directive(ambient_style)
@@ -542,7 +543,9 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
         style_directive = ""
     visual_policy = dict(DEFAULT_VISUAL_POLICY)
     validate_visual_policy(visual_policy)
-    used = {i for s in shot_plan["shots"] for i in (s.get("character_ids", []) + s.get("prop_ids", []) + ([s["location_id"]] if s.get("location_id") else []))}
+    # Goal 54 starts with direct API text-to-video. Do not recreate the
+    # Flow-era reference-image chain merely because continuity entities exist.
+    used = set() if full_video else {i for s in shot_plan["shots"] for i in (s.get("character_ids", []) + s.get("prop_ids", []) + ([s["location_id"]] if s.get("location_id") else []))}
     kinds, _ = _entity_maps(continuity)
     entity_by_id = {entity["entity_id"]: entity for kind in ("characters", "locations", "props") for entity in continuity.get(kind, [])}
     for entity_id in sorted(used):
@@ -567,7 +570,7 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
     for shot in shot_plan["shots"]:
         media = media_by_shot[shot["shot_id"]]
         if media["media_type"] == "HOLD": continue
-        refs = list(dict.fromkeys(shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])))
+        refs = [] if full_video else list(dict.fromkeys(shot.get("character_ids", []) + shot.get("prop_ids", []) + ([shot["location_id"]] if shot.get("location_id") else [])))
         deps = [reference_ids[i] for i in refs]
         if ambient:
             brief = {key: shot.get(key) for key in (
@@ -597,7 +600,7 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
                 prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
             request_fingerprint = (_hash_text(canonical_json(seed)) if media["media_type"] == "VIDEO"
                                    else _hash_text(repr(seed)))
-            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":request_fingerprint,**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
+            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"byteplus_seedance" if full_video and media["media_type"] == "VIDEO" else "google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":request_fingerprint,**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
             part_start = part_end
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)

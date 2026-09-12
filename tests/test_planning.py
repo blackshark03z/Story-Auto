@@ -193,6 +193,9 @@ class PlanningTests(unittest.TestCase):
         parts=[item for item in requests["requests"] if item.get("purpose")=="SHOT"]
         self.assertEqual(([item["part_index"] for item in parts],[round(item["target_duration"],2) for item in parts]),([1,2,3],[.75,.75,.5]))
         self.assertTrue(all(item["media_type"]=="VIDEO" and item["requirement"]=="REQUIRED" for item in parts))
+        self.assertTrue(all(item["provider"]=="byteplus_seedance" for item in parts))
+        self.assertFalse(any(item.get("purpose")=="REFERENCE" for item in requests["requests"]))
+        self.assertTrue(all(not item.get("depends_on") and not item.get("reference_asset_ids") for item in parts))
         validate_generation_requests(requests,media,continuity)
 
     def test_motion_plan_decomposes_video_request_into_atomic_parts(self):

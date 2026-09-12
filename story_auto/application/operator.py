@@ -40,6 +40,7 @@ from story_auto.providers.flow.service import (queue_regeneration, replay_unreso
 from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
+from story_auto.providers.byteplus_seedance import execute_seedance_generation, seedance_readiness
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -376,7 +377,13 @@ class OperatorService:
         availability = render_mode_availability(effective_render_mode)
         if not availability["available"]:
             raise FeatureNotAvailableError(availability["human_message"])
+        # Until automated temporal/video semantic QC is accepted, Full Video
+        # preserves an explicit human quality boundary rather than pretending
+        # the existing image-only AUTO_ACCEPT policy covers video.
+        if effective_render_mode == "full_video_ai":
+            resolved_settings["qc_policy"] = MANUAL_REVIEW
         mode=execution_mode(resolved_settings)
+        flow_required = effective_render_mode == "full_image"
         source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
         if source_mode not in {"STORY_CONTENT","EXISTING_AUDIO","AUDIO_SRT"}:
             raise OperatorServiceError("INPUT_SOURCE_INVALID")
@@ -394,9 +401,9 @@ class OperatorService:
         if source_mode=="EXISTING_AUDIO" and not content:
             raise OperatorServiceError("EXISTING_AUDIO_TEXT_REQUIRED")
         connection=self.flow_connections.get_current_connection()
-        if self.auto_flow_projects and mode!="RENDER_ONLY":
+        if flow_required and self.auto_flow_projects and mode!="RENDER_ONLY":
             resolved_settings=managed_flow_settings(resolved_settings,ident)
-        elif connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
+        elif flow_required and connection is not None and connection.validation_status=="CONNECTED" and mode!="RENDER_ONLY":
             # Compatibility for callers that explicitly use the legacy
             # application mode.  The normal UI/CLI enables managed projects.
             resolved_settings["flow_binding"]={"connection_id":connection.connection_id,"connection_revision":connection.revision}
@@ -435,7 +442,7 @@ class OperatorService:
                     if temporary_dir.exists(): temporary_dir.rmdir()
             except Exception:
                 raise
-        if self.auto_flow_projects and mode!="RENDER_ONLY":
+        if flow_required and self.auto_flow_projects and mode!="RENDER_ONLY":
             try:
                 self.flow_project_bindings.ensure(ident,self.flow_projects)
             except (FlowProjectBindingError, FlowSessionError):
@@ -444,7 +451,7 @@ class OperatorService:
                 # saved project ID so clients cannot mistake this for BOUND.
                 pass
         result = self.snapshot(paths.project_id)
-        if self.auto_flow_projects and mode!="RENDER_ONLY":
+        if flow_required and self.auto_flow_projects and mode!="RENDER_ONLY":
             _, saved_config = self._project(ident)
             binding = managed_binding(saved_config)
             result["flow_setup"] = {"state":binding["state"],
@@ -498,7 +505,7 @@ class OperatorService:
         if visual_planning.get("status")=="NEEDS_REGENERATION": blocked.append("VISUAL_PLANNING_REGENERATION_REQUIRED")
         elif review.get("plan_approval",{}).get("status")!="APPROVED" and artifacts["continuity_bible.json"]: blocked.append("PLANNING_APPROVAL_REQUIRED")
         mode=execution_mode(config.settings)
-        required_flow=[] if mode=="RENDER_ONLY" else ["IMAGE"]
+        required_flow=[] if mode=="RENDER_ONLY" or config.render_mode=="full_video_ai" else ["IMAGE"]
         _connection,flow_status=self.flow_connections.connection_for_project(project_id,required_capabilities=required_flow)
         if counts.get("AUTH_REQUIRED"): blocked.append("FLOW_AUTH_REQUIRED")
         if counts.get("CREDIT_BLOCKED"): blocked.append("PROVIDER_CREDITS_REQUIRED")
@@ -509,7 +516,12 @@ class OperatorService:
         # A missing connection blocks a future provider boundary, not a finished
         # project, local Render Again, or an already-recorded provider recovery.
         awaiting_provider=any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE"})
-        if mode!="RENDER_ONLY" and awaiting_provider and not blocked and flow_status["status"]!="CONNECTED": blocked.append(flow_status["code"])
+        if mode!="RENDER_ONLY" and awaiting_provider and not blocked:
+            if config.render_mode=="full_video_ai":
+                seedance_status=seedance_readiness()
+                if seedance_status["status"]!="READY": blocked.append(seedance_status.get("reason_code") or "CREDENTIAL_MISSING")
+            elif flow_status["status"]!="CONNECTED":
+                blocked.append(flow_status["code"])
         shot_groups={}
         for request in requests.get("requests",[]):
             if request.get("purpose")!="SHOT": continue
@@ -822,6 +834,7 @@ class OperatorService:
         kokoro_settings=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
         llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
         flow_status=self.flow_connections.get_connection_status(required_capabilities=[])
+        seedance_status=seedance_readiness()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
         flow_status={**flow_status,
                      "observed_capabilities":{},
@@ -854,12 +867,14 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Visual generation","detail":"Google Flow · Live project readiness is checked before generation","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Full Image visuals","detail":"Google Flow · Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Full Video visuals","detail":f"BytePlus ModelArk · {seedance_status['model']} · API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
             "flow_connection":flow_status,
-            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","tts_provider":provider or "Not configured",
+            "seedance":seedance_status,
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
@@ -889,6 +904,7 @@ class OperatorService:
             "voice_options":voice_options,
             "voice_inventory_failure":inventory_failure,
             "flow_connection":self._flow_connection_overview(),
+            "seedance":seedance_readiness(),
         }
 
     def _flow_connection_overview(self) -> dict[str, Any]:
@@ -1181,10 +1197,15 @@ class OperatorService:
                     return False
         return True
 
-    def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None, max_requests: int | None=None) -> dict[str, Any]:
+    def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None,
+                 max_requests: int | None=None, seedance_client=None) -> dict[str, Any]:
         _,config=self._project(project_id)
         self._require_available_render_mode(config)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
+        if config.render_mode == "full_video_ai":
+            self.set_pause(project_id,False)
+            return execute_seedance_generation(self.runtime.root, project_id, client=seedance_client,
+                                               request_ids=request_ids, max_requests=max_requests)
         if managed_binding(config) is not None:
             if self.flow_projects is None:
                 raise FlowProjectBindingError("FLOW_PROJECT_AUTOMATION_UNAVAILABLE")

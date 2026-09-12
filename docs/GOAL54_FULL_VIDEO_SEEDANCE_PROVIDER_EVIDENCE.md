@@ -78,6 +78,28 @@ output usability. A slightly paid provider can beat a free provider if the free
 path requires fragile UI scraping, cannot bind result ownership, or cannot be
 recovered safely.
 
+### Stability gate — 2026-09-12
+
+Production candidates must satisfy all of the following before implementation:
+
+- documented programmatic API; no browser/session/CDP dependency;
+- durable provider task/job identity returned by submission;
+- queryable non-terminal and terminal states;
+- deterministic result acquisition from the identified task;
+- explicit failure/timeout semantics sufficient to avoid blind duplicate POSTs;
+- server-side credentials with no account/session scraping.
+
+Dola and Dreamina browser surfaces fail this production gate even if their free
+quota is attractive. Google Flow remains the accepted Full Image provider but is
+not reused for the new Full Video production transport.
+
+The first implementation candidate is BytePlus ModelArk first-party Seedance
+2.5 using model `dreamina-seedance-2-5-260628` and the official asynchronous
+`/api/v3/contents/generations/tasks` contract. The provider returns a durable task
+ID, supports direct task polling, and returns the completed video URL from the
+same task record. This choice is provisional until direct runtime credential and
+single-scene evidence passes.
+
 ## Abstraction trigger
 
 Do not create a generic provider router now. Reconsider only after a second
@@ -128,29 +150,40 @@ no Story Auto generation has been dispatched in this stage.
 - Dola walkthrough used only as non-authoritative discovery evidence: https://quantrimang.com/tao-video-ai-bang-seedance-2-5-tren-dola-ai-217032
 - DeeVid Seedance 2.5: https://deevid.ai/model/seedance-2
 
-### Stage A provisional ordering
+### Stage A supersession — stability first
 
-For the first Story Auto vertical-slice probe, prefer providers with a documented
-programmatic surface and explicit request/result identity. Current order is:
+The provisional aggregator ranking above is retained only as historical discovery
+context. Owner direction on 2026-09-12 makes connection stability the dominant
+selection criterion. Story Auto therefore stops production-path research on
+browser/UI routes and does not spend implementation effort qualifying third-party
+aggregators while the first-party BytePlus contract remains viable.
 
-1. Elyum — strongest combination of free starter credits, clean-output claim,
-   explicit REST/MCP surface, and 1080p option.
-2. AdSkull — easiest zero-card API/MCP probe, but the free budget is only one
-   short low-resolution generation and usage-right details need direct account
-   confirmation.
-3. Pollo AI — mature async API shape and Seedance 2.5 availability, but exact
-   2.5 task/error/pricing contract should be verified before spending quota.
-4. Dreamina — use as an official model/output oracle and possible browser route,
-   not yet as the preferred automation adapter.
-5. Dola — attractive recurring-free signal, but browser-only automation and
-   result identity remain UNKNOWN; do not build Story Auto around it yet.
-6. DeeVid — keep as fallback candidate until API/job identity and quota are
-   directly verified.
+### BytePlus implementation evidence — 2026-09-12
+
+- Selected transport: first-party BytePlus ModelArk REST async task API.
+- Model: `dreamina-seedance-2-5-260628`.
+- Production adapter: `story_auto/providers/byteplus_seedance/`.
+- Full Video planning emits only `byteplus_seedance` VIDEO requests for the
+  initial path; no Flow reference-image requests are introduced.
+- Submission state is persisted before and immediately after the provider
+  boundary. A returned task ID becomes the sole polling/ownership key.
+- Known task IDs resume with GET only. POST timeout/5xx ambiguity is persisted as
+  `AMBIGUOUS` and cannot trigger blind resubmission.
+- Terminal failed/expired/cancelled tasks require an explicit replacement
+  decision rather than automatic redispatch.
+- Completed results are downloaded to Story Auto-owned storage, validated with
+  FFprobe, hashed, and enter the existing manifest as `QC_PENDING`.
+- Full Video quality remains manual until automated video QC is accepted.
+- Focused/regression evidence: 111/111 PASS plus `node --check` PASS before the
+  final full-suite run.
+- Credential-safe no-generation probe:
+  `python tools/goal54_seedance_preflight.py`.
+- Live probe result on 2026-09-12: `BLOCKED / CREDENTIAL_MISSING`. No generation
+  task was submitted and no provider credit was spent.
 
 ### Next safe action
 
-Complete read-only contract verification for Elyum, AdSkull, and Pollo first:
-auth shape, create-task schema, task/result polling or webhook identity,
-acquisition URL lifetime, failure states, quota visibility, and commercial-use
-terms. Then select exactly one provider for Stage B. Do not dispatch generation
-until that contract review is recorded.
+Configure a ModelArk API key in the Story Auto process, rerun the zero-generation
+list-tasks preflight, and only if it passes submit one 4-second 480p Stage B
+fixture through Story Auto. Do not substitute a browser provider for this direct
+credential blocker.

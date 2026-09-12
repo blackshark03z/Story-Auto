@@ -476,6 +476,33 @@ class ProductionStateReconciler:
                     "provider_dispatches_per_continue": 1,
                     "next_action": "Continue production",
                 }
+            # BytePlus Full Video owns a durable server task ID. A known task is
+            # safe to poll again because polling cannot duplicate generation.
+            # By contrast, an ambiguous POST or terminal provider failure never
+            # authorizes a replacement POST automatically.
+            if entry.get("provider") == "byteplus_seedance":
+                attempts = entry.get("attempts") if isinstance(entry.get("attempts"), list) else []
+                latest = attempts[-1] if attempts and isinstance(attempts[-1], dict) else None
+                if (status == "GENERATING" and isinstance(latest, dict)
+                        and isinstance(latest.get("provider_job_id"), str)
+                        and latest.get("attribution_state") == "CONFIRMED"):
+                    return {**base, "status": "RECOVERY_READY", "reason_code": "SEEDANCE_TASK_RESUME_READY",
+                            "human_message": "The identified Seedance task can be safely polled again without another generation.",
+                            "affected_request_id": request_id, "automatic_recovery_available": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Continue production"}
+                if status == "AMBIGUOUS":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "SEEDANCE_DISPATCH_AMBIGUOUS",
+                            "human_message": "The Seedance submission outcome is unknown. Story Auto will not submit it again automatically.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
+                            "next_action": "Review recovery"}
+                if (status == "FAILED_RETRYABLE" and isinstance(latest, dict)
+                        and latest.get("provider_execution_state") in {"FAILED", "EXPIRED", "CANCELLED", "SUCCEEDED"}):
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": entry.get("failure_class") or "SEEDANCE_TASK_TERMINAL",
+                            "human_message": "The identified Seedance task ended without an accepted asset. A new provider task requires an explicit replacement decision.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
+                            "next_action": "Review recovery"}
             # This local import deliberately reuses the exact Slice 3 durable
             # evidence normalization; it only reads evidence and cannot reach
             # the provider adapter from the compact projection.

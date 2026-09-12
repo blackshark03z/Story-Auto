@@ -78,6 +78,17 @@ multi-scene Full Video fixture.
   in the queue is not acceptance.
 - Start with one provider-specific vertical slice; generalize only after real
   second-provider variation justifies it.
+- Stability decision 2026-09-12: the production Full Video path must be API-first
+  and must expose durable task/job identity plus polling or an authenticated
+  callback contract. Browser/UI automation is not an accepted production
+  transport for this Goal.
+- Dola/Dreamina browser surfaces and other UI-only routes remain research/demo
+  surfaces only. They are not production candidates because session/UI drift can
+  recreate the connection and attribution failures previously observed with Flow.
+- First implementation candidate: BytePlus ModelArk first-party Seedance 2.5
+  (`dreamina-seedance-2-5-260628`) through the official asynchronous contents
+  generation API. Third-party API providers remain fallback research only until
+  direct first-party runtime evidence proves or blocks this path.
 
 ## Progress
 
@@ -88,12 +99,20 @@ multi-scene Full Video fixture.
   `77b7bde9c257495a72c21aeee09c064797027182`.
 - Story Auto already contains provider-neutral generation requests/manifests,
   VIDEO media contracts, full-video partitioning, and the common compositor.
-- Stage A read-only provider qualification started on 2026-09-12 and is recorded
-  in `docs/GOAL54_FULL_VIDEO_SEEDANCE_PROVIDER_EVIDENCE.md`.
-- Provisional high-priority candidates are Elyum, AdSkull, and Pollo because each
-  currently exposes a documented programmatic Seedance path. Dreamina remains
-  the official creator-surface oracle; Dola and DeeVid remain discovery
-  candidates pending stronger automation/job-identity evidence.
+- Stage A is closed by the 2026-09-12 stability decision: production research no
+  longer spends time on browser/UI routes or third-party aggregators while the
+  first-party BytePlus path remains viable.
+- BytePlus ModelArk Seedance 2.5 is wired as a narrow Full Video adapter: direct
+  async task creation, immediate durable task-ID persistence, safe polling/resume,
+  local validated acquisition, and no blind redispatch after ambiguous POST or
+  terminal provider failure.
+- Full Video generation requests now use `byteplus_seedance` and do not create
+  Flow reference-image dependencies. Full Image remains on Google Flow.
+- Full Video is exposed in New Video and uses `MANUAL_REVIEW` until automated
+  temporal/video quality acceptance is separately proven.
+- Goal 54 focused + regression evidence currently passes 111/111 tests plus JS
+  syntax validation. A zero-generation live preflight is implemented at
+  `tools/goal54_seedance_preflight.py`.
 
 ## Discoveries / Blockers
 
@@ -103,19 +122,19 @@ multi-scene Full Video fixture.
 - Historical provider-baseline records closed provider selection around Google
   Flow. Goal 54 supersedes that closure only for Full Video qualification; Full
   Image remains unchanged.
-- Dola's recurring-free signal currently comes from recent third-party/tutorial
-  evidence rather than an authoritative public automation contract. Treat reset
-  behavior, API access, job identity, and commercial rights as UNKNOWN until
-  directly verified.
-- Marketing/model pages are sufficient for discovery ranking but not for Stage B
-  dispatch. Elyum, AdSkull, and Pollo still require contract-level verification
-  of auth, create-task identity, polling/webhook/result identity, acquisition,
-  quota visibility, failure states, and usage rights.
+- Browser/UI-only providers are intentionally not investigated further for the
+  production path because connection/session drift is a known unacceptable risk
+  for this Goal.
+- Live BytePlus preflight on 2026-09-12 reached no provider call because the Story
+  Auto process has no configured `BYTEPLUS_MODELARK_API_KEY`, `BYTEPLUS_API_KEY`,
+  or `ARK_API_KEY`. This is the current direct Stage B blocker; it is not an
+  engineering PASS or provider failure.
 
 ## Next Safe Action
 
-Finish contract-level Stage A verification for Elyum, AdSkull, and Pollo, then
-select exactly one first provider for the bounded Stage B vertical slice. Do not
-dispatch generation until provider identity, output acquisition, quota/cost
-consequence, and ambiguity/retry behavior are sufficiently understood to
-preserve Story Auto invariants.
+Keep the BytePlus implementation and regressions green. Once a ModelArk API key
+is configured in the Story Auto process, run the zero-cost list-tasks preflight;
+if it passes, execute exactly one 4-second 480p Stage B fixture through Story
+Auto, retain task/result/hash evidence, then prove manual acceptance and the
+existing render contract. Do not fall back to a browser provider to bypass the
+credential blocker.

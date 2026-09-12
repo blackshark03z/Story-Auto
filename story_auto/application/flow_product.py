@@ -32,26 +32,25 @@ _ACTIONS = {
 }
 
 
-# Provider capability and product availability are separate facts. Legacy
-# project configuration remains readable, but this release supports only Full
-# Image. Deferred implementations stay intact while production fails before
-# any provider boundary.
+# Provider capability and product availability are separate facts. Full Image
+# keeps its accepted Flow transport. Goal 54 reopens Full Video only through the
+# direct BytePlus async API; Hybrid and Ambient remain deferred.
 DEFERRED_MODE_UNAVAILABLE = {
     "available": False,
     "reason_code": "FEATURE_NOT_AVAILABLE",
-    "human_message": "Only Full Image is available in this release.",
+    "human_message": "This output mode is not available in the current release.",
     "retryable": False,
 }
 
 
 def render_mode_availability(render_mode: str) -> dict:
-    if render_mode == "full_image":
+    if render_mode in {"full_image", "full_video_ai"}:
         return {"available": True, "reason_code": None, "human_message": None, "retryable": False}
     return dict(DEFERRED_MODE_UNAVAILABLE)
 
 
 def required_capabilities(config, request_media_types: Iterable[str] | None = None) -> list[str]:
-    if execution_mode(config.settings) == "RENDER_ONLY":
+    if execution_mode(config.settings) == "RENDER_ONLY" or config.render_mode == "full_video_ai":
         return []
     kinds = {str(kind).upper() for kind in (request_media_types or [])}
     if not kinds:

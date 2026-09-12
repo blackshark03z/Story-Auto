@@ -113,7 +113,7 @@ class OperatorApplicationTests(unittest.TestCase):
             runtime=RuntimeLayout.from_root(root)
             create_project(runtime,ProjectConfig("prj_operator03",render_mode="full_video_ai"),"# Story\n\n## Narration\n\nTest.\n")
             app=OperatorService(root)
-            with self.assertRaisesRegex(OperatorServiceError,"Only Full Image is available"): app.set_media_override("prj_operator03","sh_0001","IMAGE")
+            with self.assertRaisesRegex(OperatorServiceError,"full_video_ai requires VIDEO / REQUIRED"): app.set_media_override("prj_operator03","sh_0001","IMAGE")
             paths,_=app._project("prj_operator03")
             self.assertNotIn("media",read_json(paths.project_file)["settings"])
 
@@ -188,9 +188,11 @@ class OperatorApplicationTests(unittest.TestCase):
                                            "REFERENCE_IMAGE":True,"FRAME_VIDEO":True},
             })
             settings=app.settings_overview()
-            visual=next(item for item in settings["providers"] if item["name"]=="Visual generation")
+            visual=next(item for item in settings["providers"] if item["name"]=="Full Image visuals")
             self.assertEqual(visual["status"],"Connected")
-            self.assertIn("Live project readiness",visual["detail"])
+            self.assertIn("Google Flow",visual["detail"])
+            full_video=next(item for item in settings["providers"] if item["name"]=="Full Video visuals")
+            self.assertIn("BytePlus ModelArk",full_video["detail"])
             self.assertEqual(settings["flow_connection"]["capability_authority"],
                              "HISTORICAL_CONNECTION_EVIDENCE")
             self.assertEqual(settings["flow_connection"]["observed_capabilities"],{})
