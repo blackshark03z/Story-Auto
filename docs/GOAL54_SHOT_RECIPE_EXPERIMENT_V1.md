@@ -101,51 +101,45 @@ fixed location image. Do not regenerate the reference between recipes.
 
 ## Credit-aware experiment order
 
-The live Elyum account has 150 starter Credits and one kill shown for the current
-period. The exact estimate is authoritative at run time.
+The live Elyum Free account has 150 Credits and one kill available. Live MCP
+`elyum_estimate` results on 2026-09-12 supersede earlier public-pricing assumptions:
 
-Current published discovery rates imply roughly:
+| Model / mode | 4 s / 480p live estimate |
+| --- | ---: |
+| Seedance 2 Fast T2V | 44 Credits |
+| Seedance 2 Mini T2V | 64 Credits |
+| Seedance 2.5 T2V | 76 Credits |
+| Seedance 2 Fast I2V | 44 Credits |
+| Seedance 2.5 Reference | 76 Credits |
+| Seedance 2.5 I2V | UNVERIFIED — one read-only estimate timed out |
 
-- Seedance 2.0 Mini, 480p: ~5 Credits/s, minimum 4 s -> ~20 Credits/attempt.
-- Seedance 2.5, 480p: ~9 Credits/s, minimum 4 s -> ~36 Credits/attempt.
+The previous five-attempt ~132-Credit plan is invalid and is superseded. The
+research goal is identity/continuity plus camera compliance, so prioritize
+reference-driven video instead of spending scarce Credits on text-only breadth.
 
-Use the cheaper Seedance family member to screen camera grammar, then confirm
-only the winning patterns on Seedance 2.5.
+### Mandatory bounded set — maximum estimated spend 120 Credits
 
-### Mandatory set — maximum nominal held/kept budget 132 Credits
-
-| ID | Model | 4 s recipe | Reference | Purpose | Nominal estimate* |
+| ID | Model | 4 s recipe | Reference | Purpose | Live estimate |
 | --- | --- | --- | --- | --- | ---: |
-| R1 | Seedance 2.0 Mini | `MEDIUM_EYE_LEVEL + LOCKED + SLOW_HEAD_TURN` | TEXT_ONLY | baseline / prompt clarity | ~20 |
-| R2 | Seedance 2.0 Mini | `MEDIUM_EYE_LEVEL + SLOW_PUSH_IN + HOLD_WITH_MICROMOTION` | TEXT_ONLY | camera compliance | ~20 |
-| R3 | Seedance 2.0 Mini | `MEDIUM_EYE_LEVEL + SLOW_LATERAL_TRACK + HOLD_WITH_MICROMOTION` | TEXT_ONLY | lateral motion compliance | ~20 |
-| R4 | Seedance 2.5 | best R1–R3 camera recipe + `SLOW_HEAD_TURN` | CHARACTER_IMAGE | identity lock | ~36 |
-| R5 | Seedance 2.5 | second shot, same character/location, one changed action | CHARACTER_PLUS_SCENE_IMAGE | shot-to-shot continuity | ~36 |
+| R1 | Seedance 2 Fast I2V | `MEDIUM_EYE_LEVEL + SLOW_PUSH_IN + HOLD_WITH_MICROMOTION` | CHARACTER_IMAGE | cheap camera + identity screening | 44 |
+| R2 | Seedance 2.5 Reference | same framing/camera, same character; add stable scene reference if supported | CHARACTER_IMAGE or CHARACTER_PLUS_SCENE_IMAGE | higher-quality identity/reference confirmation | 76 |
 
-`*` Re-estimate immediately before every run. Do not submit if the live estimate
-would make the bounded research budget exceed the available balance.
+Total estimated maximum: **120 / 150 Credits**, preserving 30 Credits. Re-run
+`elyum_estimate` immediately before each dispatch; estimate drift that would make
+the bounded spend exceed available balance blocks submission.
 
-The nominal total is ~132 Credits if every result is kept/held. This deliberately
-leaves an ~18-credit safety margin. Do not spend the reserve merely to complete a
-matrix.
-
-### Optional R6
-
-Run one additional 4-second test only if a prior hold was released, live pricing
-is lower than the nominal budget, or new Credits are explicitly available. R6
-should isolate **subject movement** using a locked camera:
-
-`MEDIUM_EYE_LEVEL + LOCKED + SHORT_WALK_2_STEPS`.
+Do not spend the remaining 30 Credits merely to fill a matrix. A third generation
+requires either released held Credits, newly available Credits, or an explicit new
+bounded research decision supported by evidence from R1/R2.
 
 ## One-variable rule
 
-Between adjacent tests, change one primary variable whenever possible. In
-particular:
-
-- R1 -> R2 changes camera behavior;
-- R2 -> R3 changes camera behavior;
-- R3 -> R4 changes model + reference strategy only after a camera recipe wins;
-- R4 -> R5 preserves model/character and changes shot action/context minimally.
+R1 and R2 preserve the same subject, character reference, semantic action,
+framing, camera motion, duration, resolution and aspect ratio. R2 changes only
+the model/reference capability needed to test whether Seedance 2.5 Reference
+materially improves identity/reference adherence over the cheaper Fast I2V path.
+If R2 supports an additional scene reference, record that as a deliberate second
+variable and do not attribute all improvement to the model alone.
 
 Do not change prompt style, duration, resolution, subject, environment and camera
 at the same time; such a result cannot teach Story Auto what caused improvement.
@@ -200,23 +194,19 @@ If free Credits are insufficient for repeatability proof, stop at
 
 ## API / MCP boundary
 
-Do not assume the Elyum Free account has developer/API access solely because it
-has 150 Credits. Current public pages are not perfectly consistent: model/MCP
-pages describe shared Studio/MCP/REST access, while the pricing table explicitly
-lists `API + MCP access` under Plus. The real account is the authority.
+The real Elyum Free account has now crossed the read-only runtime gate:
 
-Before implementing the Elyum Story Auto adapter:
+1. the Owner created an API key outside the repository;
+2. MCP Streamable HTTP initialized successfully;
+3. `elyum_account`, `elyum_models`, and `elyum_estimate` are available and callable;
+4. account result confirms `Free`, balance 150, kill limit 1 / kills left 1;
+5. model catalog exposes Seedance Fast/Mini/2.5 T2V, Fast/2.5 I2V, and 2.5 Reference paths;
+6. live read-only estimates are recorded above.
 
-1. open the logged-in account's Developer/API area;
-2. verify whether the Free account can create an API key or authorize MCP;
-3. if yes, run read-only `account`, `models` and `estimate` checks first;
-4. record scopes/daily cap without storing the key in Git;
-5. only then implement generation around `clientRef` + durable `jobId`.
-
-If Free API/MCP is unavailable, do **not** pay or upgrade automatically and do not
-build browser automation. Use the web Studio only for bounded cinematic-method
-research and keep BytePlus as the production API baseline until the Owner chooses
-otherwise.
+No generation has been dispatched yet. Before implementation, inspect the live
+MCP schemas for generate/job-status/wait/keep/kill and implement only the narrow
+contract needed for R1/R2 around idempotent `clientRef` plus durable `jobId`.
+Browser automation remains forbidden for the Full Video production path.
 
 ## Research output
 

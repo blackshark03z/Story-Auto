@@ -273,27 +273,40 @@ Official references used in this verification:
 - https://elyum.ai/docs/mcp
 - https://adskull.io/en/free/seedance-2-5
 
-### Real-account evidence and next safe action — 2026-09-12
+### Real-account read-only runtime evidence — 2026-09-12
 
-Owner evidence from the logged-in Elyum Free Studio confirms the account is on
-`FREE`, shows `150 Credits left`, and shows one kill available for the current
-period. This closes the starter-balance question but does not yet prove developer
-API/MCP entitlement.
+The logged-in Elyum Free account now proves the developer path directly:
 
-Public Elyum material is not fully consistent on Free developer access: current
-model/MCP pages describe Studio/MCP/REST on one balance, while the pricing table
-explicitly lists `API + MCP access` as a Plus feature. Treat the logged-in
-`/account/developer` surface as the runtime authority. Do not implement or depend
-on an Elyum adapter until the real Free account can create an API key or authorize
-MCP and pass read-only `account`, `models` and `estimate` checks.
+- plan `Free`, balance 150 Credits, kill limit 1, kills left 1;
+- Owner-created API key stored outside the repository;
+- MCP Streamable HTTP protocol `2025-06-18` initializes successfully against
+  Elyum server `0.3.0`;
+- read tools `elyum_account`, `elyum_models`, and `elyum_estimate` are available;
+- catalog exposes Seedance 2 Fast/Mini/2.5 T2V, Fast/2.5 I2V and 2.5 Reference;
+- live 4s/480p estimates: Fast T2V 44, Mini T2V 64, 2.5 T2V 76, Fast I2V 44,
+  2.5 Reference 76 Credits;
+- one 2.5 I2V estimate timed out and remains `UNVERIFIED`, not failed.
 
-The cinematic-method experiment is now bounded by
-`docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`. It screens camera grammar cheaply
-with Seedance 2.0 Mini, then uses Seedance 2.5 only for identity/reference and
-continuity confirmation, with a nominal maximum of ~132 Credits before the live
-estimate gate.
+No generation/keep/kill call has occurred. The old public-pricing-derived
+five-attempt budget is superseded by live account estimates. The bounded research
+plan is now Fast I2V (44) followed by 2.5 Reference (76) on the same golden
+fixture, maximum 120/150 Credits, with a live estimate recheck before each
+submission.
 
-If Free developer access is unavailable, do not upgrade automatically and do not
-build browser automation. Use Studio only for the bounded recipe research and
-retain BytePlus as the production API baseline. Pollo remains deferred until its
-API wallet itself proves free credits.
+Live MCP schema evidence adds:
+
+- create boundary is `elyum_make_video` (not `elyum_generate`);
+- `clientRef` is explicitly idempotent: the same ref replays the first answer
+  rather than rendering twice;
+- `elyum_wait` timeout recovery is an explicit same-`jobId` retry and says not to
+  resubmit;
+- `elyum_keep` is documented as the only action that spends Credits;
+- `elyum_kill` refunds the hold but is bounded by the account's kill allowance;
+- `elyum_upload` accepts URL or base64 image/video and returns a provider media
+  URL; provider description marks upload as free.
+
+Next safe action: implement one narrow research-only Elyum adapter preserving
+`clientRef` and durable `jobId`, with keep/kill explicit and never automatic.
+Do not change product routing yet. Prepare the fixed character/reference fixture
+and re-estimate immediately before R1; dispatch only after adapter recovery tests
+pass.

@@ -133,6 +133,18 @@ multi-scene Full Video fixture.
   `tools/goal54_elyum_preflight.py`. It can call only initialize/tools-list plus
   `elyum_account`, `elyum_models`, and `elyum_estimate`; it has no generation,
   keep, kill, upload, or mutation path. Offline sanitizer/protocol tests pass 4/4.
+- Real Elyum Free-account preflight PASS: plan Free, balance 150, kill limit/left
+  1/1, MCP protocol 2025-06-18, server 0.3.0, account/models/estimate read tools
+  callable. Live 4s/480p estimates are Fast T2V 44, Mini T2V 64, 2.5 T2V 76,
+  Fast I2V 44 and 2.5 Reference 76 Credits. 2.5 I2V estimate timed out once and
+  remains unverified.
+- Live MCP schema probe PASS: video creation is `elyum_make_video`, not a generic
+  `elyum_generate`. It accepts idempotent `clientRef`, mode/model/prompt,
+  imageUrl/imageUrls, duration/aspectRatio/resolution/audio and returns `jobId`.
+  `elyum_wait` explicitly requires retrying the same `jobId` after timeout; it
+  must never trigger resubmission. `elyum_keep` is documented as the only action
+  that spends Credits. `elyum_kill` releases the hold but consumes kill allowance.
+  `elyum_upload` accepts URL or base64 media and is documented as free.
 - Free+stable provider verification is persisted in
   `docs/GOAL54_FULL_VIDEO_SEEDANCE_PROVIDER_EVIDENCE.md`: Elyum is
   `FREE_STABLE_API_CANDIDATE_HIGH`; Pollo is `STABLE_API / FREE_API_UNVERIFIED`;
@@ -154,22 +166,21 @@ multi-scene Full Video fixture.
   or `ARK_API_KEY`. This is a BytePlus Stage B blocker; it is not an engineering
   PASS or provider failure.
 - The Owner's real logged-in Elyum Free account confirms 150 starter Credits and
-  one current-period kill.
-- The Owner has also created an Elyum API key from the logged-in account and keeps
-  the secret outside the repository. This proves key creation is available for
-  this account, but account scope/model/cost/runtime access still require a
-  read-only live preflight before any generation.
+  one current-period kill. The API key is kept outside the repository.
+- Elyum Free developer/MCP read access is now proven by runtime preflight. No
+  generation has been dispatched. The earlier five-test nominal Credit plan was
+  invalidated by live estimates and is superseded by the bounded 120-Credit
+  Fast-I2V -> 2.5-Reference plan in `GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`.
 
 ## Next Safe Action
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
 Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
-contract. Run `tools/goal54_elyum_preflight.py` locally with the Owner-created out-of-repo
-key and capture only its sanitized JSON: account (balance/plan/scopes/cap),
-Seedance model catalog, and a 4s/480p estimate. Do not call generation/keep/kill
-in this preflight. Only after those reads PASS should Story Auto add one narrow
-Elyum adapter around `clientRef` + durable `jobId` and execute the bounded
-experiment. If API runtime access fails, do not upgrade automatically and do not
-build browser automation: use Studio only for bounded recipe research while
-BytePlus remains the production API baseline. Pollo stays deferred until its API
-wallet itself proves usable free credit.
+contract. Implement one narrow research-only Elyum adapter around `elyum_upload`,
+`elyum_estimate`, idempotent `elyum_make_video`, durable `jobId`, and same-job
+`elyum_wait`; expose keep/kill explicitly but do not auto-call either. Do not
+change product routing yet. Prepare one fixed character/reference fixture and
+re-estimate immediately before R1. Do not dispatch generation until adapter/
+recovery tests pass and the bounded 120-Credit experiment still fits the live
+balance. BytePlus remains the stable production fallback; Pollo stays deferred
+until its API wallet itself proves usable free credit.

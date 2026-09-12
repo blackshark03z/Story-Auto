@@ -308,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     finally:
         key = ""
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0 if result.get("status") == "PASS" else 2
 
 
