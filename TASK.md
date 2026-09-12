@@ -97,6 +97,10 @@ multi-scene Full Video fixture.
 - Pollo passes the API stability gate at documentation level, but its guaranteed
   free API balance is unverified; consumer free credits must not be assumed to
   transfer to the separate Pollo API wallet.
+- Owner decision 2026-09-13: open a bounded `XIANXIA_3D_V1` research branch after
+  R1. This is a visual-method/continuity experiment, not a provider-routing
+  change. Decision Record `0003` and
+  `docs/GOAL54_XIANXIA_3D_RESEARCH_PLAN_V1.md` are the canonical contract.
 
 ## Progress
 
@@ -167,16 +171,19 @@ multi-scene Full Video fixture.
   PASS or provider failure.
 - The Owner's real logged-in Elyum Free account confirms 150 starter Credits and
   one current-period kill. The API key is kept outside the repository.
-- Elyum Free developer/MCP access is proven by runtime evidence. R1 has now
-  dispatched exactly one Fast-I2V job using the durable pre-recorded `clientRef`.
-  The initial wait failed transiently, then recovery by the same `jobId` reached
-  `PREVIEW_READY` without a second make call. No keep/kill has occurred. Live
-  estimate was 44 Credits, while the finished locked result reports an actual
-  Keep/unlock price of 20 Credits. The earlier five-test nominal plan remains
-  superseded by the bounded experiment contract in
-  `GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`.
+- Elyum Free developer/MCP access is proven by runtime evidence. R1 dispatched
+  exactly one Fast-I2V job using the durable pre-recorded `clientRef`; transient
+  wait failure recovered by the same `jobId` without a second make call.
+- R1 was explicitly Kept by the Owner. A post-Keep read-only account preflight on
+  2026-09-13 reports balance **130 Credits** (down from 150 by the provider's
+  reported 20-Credit unlock price) and kills left **1/1**, confirming the bounded
+  consequence without consuming the kill allowance.
+- The old R2-first 2.5-Reference direction is paused. The accepted next research
+  branch is `XIANXIA_3D_V1`, which restarts visual-method evidence with one new
+  canonical GPT Image anchor and one Fast-I2V X1 preview before any continuity
+  expansion.
 
-## Next Safe Action
+## Historical Next Safe Action (superseded 2026-09-13)
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
 Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
@@ -219,3 +226,25 @@ preview UI evidence, not treated as a generation-content defect. Keep would cost
 account's sole current-period kill allowance. BytePlus remains the stable
 production fallback; Pollo stays deferred until its API wallet itself proves
 usable free credit.
+
+## Next Safe Action
+
+Keep BytePlus and the accepted Full Image path unchanged. R1 remains preserved as
+provider/recovery evidence and is now Kept; do not continue the old R2 plan.
+
+Execute `docs/GOAL54_XIANXIA_3D_RESEARCH_PLAN_V1.md` in order:
+
+1. generate exactly one canonical `XIANXIA_F01` / `XIANXIA_ENV_PAVILION_01`
+   16:9 anchor with GPT Image in one generation step;
+2. store it outside Git under `D:\Story Auto\evidence\goal54\xianxia\`, hash it
+   and record only identity/evidence metadata in Git;
+3. read-only recheck Elyum balance and Fast-I2V 4 s estimate;
+4. dispatch only X1 (`SLOW_PUSH_IN + HOLD_WITH_MICROMOTION`) with a new xianxia
+   ledger/clientRef and hard cost bound;
+5. recover the same job to locked preview, acquire it locally, score the xianxia
+   rubric, then stop for explicit Keep/Kill.
+
+X2 Continuity is authorized only after a passing, explicitly Kept X1 and must use
+a clean frame from X1 as its input. X3 Spiritual Motion and optional Seedance 2.5
+Reference A/B remain conditional on evidence and current Credit balance. No
+production routing/UI/planner integration is authorized by this research branch.

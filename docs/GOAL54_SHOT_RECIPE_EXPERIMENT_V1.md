@@ -101,8 +101,10 @@ fixed location image. Do not regenerate the reference between recipes.
 
 ## Credit-aware experiment order
 
-The live Elyum Free account has 150 Credits and one kill available. Live MCP
-`elyum_estimate` results on 2026-09-12 supersede earlier public-pricing assumptions:
+At the start of R1, the live Elyum Free account had 150 Credits and one kill
+available. R1 was later Kept for 20 Credits; the current verified balance for the
+new xianxia branch is 130 Credits with kills left 1/1. The 2026-09-12 live MCP
+`elyum_estimate` results below remain historical model-cost evidence:
 
 | Model / mode | 4 s / 480p live estimate |
 | --- | ---: |
@@ -117,7 +119,15 @@ The previous five-attempt ~132-Credit plan is invalid and is superseded. The
 research goal is identity/continuity plus camera compliance, so prioritize
 reference-driven video instead of spending scarce Credits on text-only breadth.
 
-### Mandatory bounded set — maximum estimated spend 120 Credits
+### Historical bounded set — superseded 2026-09-13
+
+R1 completed and was Kept. The planned R2 Seedance 2.5 Reference step below is
+preserved as historical intent but is **paused and not executed**. Current
+research authority moved to `docs/GOAL54_XIANXIA_3D_RESEARCH_PLAN_V1.md`; the
+post-Keep Elyum balance is 130 Credits with kills left 1/1. This file remains the
+general shot-recipe methodology and historical R1 record.
+
+#### Original bounded set — maximum estimated spend 120 Credits
 
 | ID | Model | 4 s recipe | Reference | Purpose | Live estimate |
 | --- | --- | --- | --- | --- | ---: |
@@ -199,14 +209,16 @@ The real Elyum Free account has now crossed the read-only runtime gate:
 1. the Owner created an API key outside the repository;
 2. MCP Streamable HTTP initialized successfully;
 3. `elyum_account`, `elyum_models`, and `elyum_estimate` are available and callable;
-4. account result confirms `Free`, balance 150, kill limit 1 / kills left 1;
+4. account result initially confirmed `Free`, balance 150, kill limit 1 / kills left 1; post-R1 Keep verification reports balance 130 with kills still 1 / 1;
 5. model catalog exposes Seedance Fast/Mini/2.5 T2V, Fast/2.5 I2V, and 2.5 Reference paths;
 6. live read-only estimates are recorded above.
 
-No generation has been dispatched yet. Before implementation, inspect the live
-MCP schemas for generate/job-status/wait/keep/kill and implement only the narrow
-contract needed for R1/R2 around idempotent `clientRef` plus durable `jobId`.
-Browser automation remains forbidden for the Full Video production path.
+R1 has now been dispatched, recovered by durable `jobId`, visually reviewed and
+Kept. The research-only Elyum adapter implements the narrow idempotent
+`clientRef` + durable `jobId` contract with explicit Keep/Kill boundaries.
+Current generation order is governed by
+`docs/GOAL54_XIANXIA_3D_RESEARCH_PLAN_V1.md`. Browser automation remains
+forbidden for the Full Video production path.
 
 ## Research output
 

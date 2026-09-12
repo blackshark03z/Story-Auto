@@ -354,6 +354,14 @@ Provisional manual rubric from the supplied visual evidence: camera compliance
 anatomy/physical motion 2/2; total 9/10, with no critical-failure flag. R1 is
 therefore `RESEARCH_CANDIDATE`, not `REPEATABILITY_PROVEN`. The repeated Elyum
 preview/lock watermark is expected locked-preview overlay evidence and is not
-counted as a generated-content defect. Runtime reports `unlockCredits=20`; Keep
-requires explicit Owner approval and Kill would consume the only current-period
-kill allowance.
+counted as a generated-content defect.
+
+The Owner subsequently approved and completed Keep for R1. A read-only Elyum
+account preflight on 2026-09-13 reports balance **130 Credits**, compared with the
+previous 150, exactly matching the provider-reported `unlockCredits=20`; kills
+remain **1/1**. This is the current consequence evidence for R1. No further R1
+provider action is required.
+
+New visual-method research is isolated under
+`docs/GOAL54_XIANXIA_3D_RESEARCH_PLAN_V1.md`. The earlier R2-first Seedance 2.5
+Reference step is paused rather than silently consuming more Credits.
