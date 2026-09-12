@@ -293,8 +293,29 @@ classified X1 as `PARTIAL_FAIL_STYLE_SURFACE`: identity/scene/camera evidence is
 useful, but skin and scene materials are too glossy/plastic for the intended 3D
 xianxia target. The requested correction is lower gloss/specular response and
 higher softness. X1 is preserved as evidence, **must not be Kept**, and need not
-consume the sole Kill allowance. X2 remains blocked. The next authorized provider
-experiment is X1b, which changes only the style-surface block while reusing the
-same anchor, Fast-I2V 4 s / 480p settings, slow push-in and micro-motion. Exact
-X1b prompt is frozen at `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_prompt.txt`,
-SHA-256 `a0886dfee4f36c4eb5f1d82c477d5545e1a8573fb1735f26b6d6a7d5d5d04cc9`.
+consume the sole Kill allowance. X2 remains blocked. X1b Matte-Soft Retry has now been dispatched exactly once
+from source HEAD `3db9824842dcdb30d9847aaeb69bb5682f1df859`, reusing the same
+canonical anchor and changing only the style-surface prompt. Exact X1b prompt is
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_prompt.txt`, SHA-256
+`a0886dfee4f36c4eb5f1d82c477d5545e1a8573fb1735f26b6d6a7d5d5d04cc9`.
+
+X1b durable identity is
+`client_ref=story-auto-g54-567726916bd2328faad0131f8f6bb09507d7e108683fae43`,
+`job_id=cos_leYmn4yuIWZosURXvTRbUo:201a6c7a-9353-4f72-901d-88c6669522f8`,
+`gen_id=g_c6de972a60efff3178c8152f`. After transient wait/resume observations,
+the same job reached `PREVIEW_READY`; no redispatch occurred. Locked preview is
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_locked_preview.mp4`, SHA-256
+`d15b5a3d727998fef8465bc297a4355e24d218e49d342cc9304934478586338c`,
+H.264 836x480, 24 fps, 4.041667 s. Provider reports `unlockCredits=20`.
+
+Available balance was 110 before X1b and 90 after X1b, with kills still 1/1.
+Treat this as provider hold evidence rather than final spend: Elyum documents that
+generation holds Credits, Keep finalizes the charge, and Kill releases the hold.
+X1 and X1b remain locked/unkept. X1b visual acceptance is still `UNVERIFIED`;
+review the exact provenance-bound X1b surface before any Keep/Kill or X2 work.
+A matched A/B sheet is at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_vs_x1b_compare.png`, SHA-256
+`6dc74c0d81ffd81d0cd5669000cc7923fd87f836ba759875d0b28ed49f0a2616`.
+Supporting global image metrics show reduced highlight fraction (`0.096964 ->
+0.084539`) and mean luma (`0.535632 -> 0.499830`) in X1b, but they do not replace
+the Owner oracle for skin/material softness.

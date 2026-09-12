@@ -396,6 +396,68 @@ The intended A/B delta from X1 is only surface/light response: softer diffuse
 illumination, matte skin/fabric/wood and restrained specular highlights. Identity,
 environment, camera and subject-motion intent are held constant.
 
+#### X1b runtime evidence — pending visual verdict
+
+Candidate source HEAD: `3db9824842dcdb30d9847aaeb69bb5682f1df859`.
+
+Bound inputs:
+
+- canonical anchor SHA-256:
+  `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`;
+- X1b prompt SHA-256:
+  `a0886dfee4f36c4eb5f1d82c477d5545e1a8573fb1735f26b6d6a7d5d5d04cc9`;
+- model/settings: Seedance 2 Fast I2V, 4 s, 480p, 16:9, audio off;
+- live balance before X1b dispatch: **110 Credits**;
+- live estimate before X1b dispatch: **44 Credits**.
+
+Durable provider identity:
+
+- clientRef: `story-auto-g54-567726916bd2328faad0131f8f6bb09507d7e108683fae43`;
+- jobId: `cos_leYmn4yuIWZosURXvTRbUo:201a6c7a-9353-4f72-901d-88c6669522f8`;
+- genId: `g_c6de972a60efff3178c8152f`;
+- provider state: `done` / ledger `PREVIEW_READY`;
+- reported unlock/keep amount: **20 Credits**.
+
+The first wait and first explicit resume were transient-unavailable; a second
+resume reached the same job's preview. No second X1b generation dispatch occurred.
+
+Acceptance surface:
+
+- locked preview:
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_locked_preview.mp4`;
+- preview SHA-256:
+  `d15b5a3d727998fef8465bc297a4355e24d218e49d342cc9304934478586338c`;
+- media: H.264, 836x480, 24 fps, 97 frames, 4.041667 s;
+- contact sheet:
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1b_contact_sheet.png`;
+- contact-sheet SHA-256:
+  `1be4032ea71532513d19e1d302df51ac548caf7b338e6efefa7874154d56814c`.
+
+A post-X1b read-only account check reports **90 available Credits** with kills
+still 1/1. This is consistent with Elyum's documented hold semantics: render
+creation reserves Credits and Keep is the action that finalizes the charge;
+Kill releases the held amount. The observed 130 -> 110 -> 90 available-balance
+sequence therefore represents two concurrent 20-Credit locked-preview holds
+(X1 and X1b), not evidence that either preview has been Kept.
+
+Technical/provenance evidence is PASS. Visual acceptance remains `UNVERIFIED`
+until the Owner reviews this exact preview/contact-sheet surface. No Keep/Kill is
+authorized yet.
+
+A direct A/B comparison surface is also preserved at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_vs_x1b_compare.png`, SHA-256
+`6dc74c0d81ffd81d0cd5669000cc7923fd87f836ba759875d0b28ed49f0a2616`.
+The top row is X1 and the bottom row is X1b at matched contact-sheet samples.
+
+Supporting image statistics on the two contact sheets show the matte-soft prompt
+moved in the intended direction globally: low-saturation highlight fraction
+`0.096964 -> 0.084539`, very-bright fraction `0.026734 -> 0.025120`, and mean
+luma `0.535632 -> 0.499830`. Luma standard deviation increased
+`0.221791 -> 0.241297`, so these metrics do **not** independently prove softer
+skin/material response. They are supporting evidence only; the provenance-bound
+Owner visual comparison remains the oracle for the requested softness/gloss
+criterion.
+
 ## Non-goals for V1
 
 - multiple named characters;
