@@ -324,5 +324,6 @@ The research separates long-form Visual Constitution (anchor/reference creation)
 from short-form Seedance Shot Prompt (reference lock + one material/style delta +
 one subject motion + one camera move + 3–6 critical constraints). Candidate X1C
 is defined there as a concise reference-first/motion-first matte-soft prompt, but
-**is not yet dispatched**. X1B visual review remains the immediate Owner oracle;
-X2 remains blocked.
+**is not yet dispatched**. X1B visual review is superseded as the immediate next oracle by the Owner-selected Anchor V2 still; X2 remains blocked.
+
+The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after correcting the previous white/glossy skin and overly bright/reflective environmental materials. The selected chat-visible PNG is 1672x941 with expected SHA-256 `569030979570518ca7ed7fedd9499065f499b11977eb5131ce436dad5e5ca42c`; intended local path is `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_anchor_v2.png`. Provider dispatch remains blocked until those exact bytes are locally present and hash-verified. X1C concise prompt is frozen at `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1c_prompt.txt`, SHA-256 `ed71f3e6edbee061427b9efc1fa265dd4bddd6637adaf3d604b3313d46e552bc` (909 chars). After local anchor binding, the next safe provider action is one Fast-I2V 4 s / 480p X1C preview with a fresh balance/estimate, hard cost bound, durable new clientRef/jobId, and no automatic Keep/Kill.

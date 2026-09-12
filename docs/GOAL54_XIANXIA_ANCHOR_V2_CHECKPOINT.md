@@ -72,3 +72,17 @@ Anchor V2 must already look correct as a still image before video generation:
 - composition viable for the intended slow-push-in shot.
 
 If the still image fails these conditions, revise the still-image prompt/reference before spending another video preview.
+
+## Owner-selected Anchor V2 candidate
+
+The Owner accepted the latest still-image direction for continuation after iterative reduction of skin gloss, excessive whitening, and environmental/object shine. The selected chat-visible candidate is 1672x941 PNG and is frozen by expected SHA-256:
+
+`569030979570518ca7ed7fedd9499065f499b11977eb5131ce436dad5e5ca42c`
+
+Intended local evidence path:
+
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_anchor_v2.png`
+
+Under CADS acceptance-surface provenance, the chat-visible candidate is not yet admissible for provider dispatch until the exact bytes are present at that local path and the SHA-256 matches. Visual similarity or filename alone is insufficient.
+
+This candidate is intentionally not re-styled by Seedance. X1C must preserve its existing matte skin, restrained highlights, subdued scene brightness, diffuse weathered wood, muted mountain/pavilion materials, and localized jade/metal reflections.

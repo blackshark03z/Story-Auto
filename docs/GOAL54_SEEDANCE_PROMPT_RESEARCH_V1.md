@@ -177,3 +177,27 @@ Promotion rule:
 - only then may Story Auto planner use the compiler as a default.
 
 No prompt result alone changes production routing.
+
+## Frozen X1C candidate after Anchor V2 selection
+
+The next authorized comparison candidate is X1C, contingent on byte-level binding of the Owner-selected `XIANXIA_ANCHOR_V2`. Exact local prompt path:
+
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1c_prompt.txt`
+
+SHA-256:
+
+`ed71f3e6edbee061427b9efc1fa265dd4bddd6637adaf3d604b3313d46e552bc`
+
+Length: 909 characters.
+
+```text
+Use the canonical reference image as the exact visual anchor. Preserve the same adult Chinese cultivator, costume, pavilion, mountains, waterfall, composition, and subdued blue-white-gold dawn palette.
+
+Preserve the reference's soft matte material response: natural skin texture with restrained facial highlights, low-gloss soft-satin fabric, diffuse weathered wood, muted rocks and architecture, and only small localized reflections on jade and metal. Do not brighten or polish the scene.
+
+One slow smooth push-in only. She remains almost still: natural breathing, one subtle blink, and a gentle breeze moving a few hair strands and sleeve edges. Keep identity, composition, lighting, and environment stable throughout.
+
+One character only. No scene change, no style shift, no glossy/waxy/plastic skin, no harsh specular patches, no glowing mist, no shiny wood, no camera pan, tilt, orbit, or handheld shake.
+```
+
+Compared with X1B, X1C removes repeated face/costume/environment reconstruction language and treats the improved still as authoritative visual state. The experiment variable is therefore the new accepted static anchor plus the concise reference-first prompt architecture; model, duration, resolution, camera motion, and micro-motion remain fixed.
