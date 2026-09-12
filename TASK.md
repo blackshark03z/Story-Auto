@@ -311,8 +311,7 @@ H.264 836x480, 24 fps, 4.041667 s. Provider reports `unlockCredits=20`.
 Available balance was 110 before X1b and 90 after X1b, with kills still 1/1.
 Treat this as provider hold evidence rather than final spend: Elyum documents that
 generation holds Credits, Keep finalizes the charge, and Kill releases the hold.
-X1 and X1b remain locked/unkept. X1b visual acceptance is still `UNVERIFIED`;
-review the exact provenance-bound X1b surface before any Keep/Kill or X2 work.
+X1 and X1b remain locked/unkept. X1b visual acceptance remains useful research evidence but the current direction is paused before any Keep/Kill or X2 work. The next research step is recorded in `docs/GOAL54_XIANXIA_ANCHOR_V2_CHECKPOINT.md`: create and visually accept one GPT Image `XIANXIA_ANCHOR_V2` with matte skin, soft diffuse lighting, soft-satin fabric and restrained localized reflections, then test that still with the concise reference-first Seedance prompt architecture. Do not spend another video preview until the V2 still itself passes the Owner material/style oracle.
 A matched A/B sheet is at
 `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_vs_x1b_compare.png`, SHA-256
 `6dc74c0d81ffd81d0cd5669000cc7923fd87f836ba759875d0b28ed49f0a2616`.
