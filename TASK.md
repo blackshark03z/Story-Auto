@@ -201,10 +201,21 @@ result is now `PREVIEW_READY` / locked with generation
 Credits. The locked preview was acquired locally at
 `D:\Story Auto\evidence\goal54\r1_locked_preview.mp4`, SHA-256
 `f9f0b5cdae2044eb508e276e5031f678e92539fb21471a537184770cc3122e9a`, H.264,
-836x480, 24 fps, 4.041667 s. Automated motion evidence shows no hard cut
-(cut-spike ratio 1.526) but essentially no global camera scale change
-(first-to-last affine scale 0.9999), so the requested slow push-in is not proven
-and likely not followed. Human visual review of identity/action/anatomy remains
-the acceptance oracle before Keep or Kill. BytePlus remains the stable production
-fallback; Pollo stays deferred until its API wallet itself proves usable free
-credit.
+836x480, 24 fps, 4.041667 s. Automated motion evidence shows no hard cut (cut-spike ratio 1.526), but its
+first-to-last affine scale metric (0.9999) was a misleading proxy for this stylized
+clip. Direct review of the uploaded video/contact sheet supersedes that inference:
+the framing clearly tightens from medium toward close-up across 0% -> 100%, so
+the requested slow push-in is visibly present and smooth. Identity markers
+(teal bob, red round glasses, mustard jacket, blue shirt, triangle earrings and
+beauty mark) remain stable; the window/sofa/plant layout stays coherent; no hard
+cut, scene replacement, severe anatomy defect or obvious identity swap is visible.
+The requested slight head turn is present only subtly, so subject-action compliance
+is weaker than camera compliance. Provisional visual rubric is 9/10 (camera 2,
+subject action 1, identity 2, environment 2, anatomy/physical motion 2) with no
+critical-failure flag. R1 is therefore `RESEARCH_CANDIDATE`, not yet
+`REPEATABILITY_PROVEN`. The Elyum preview watermark/lock overlay is provider
+preview UI evidence, not treated as a generation-content defect. Keep would cost
+20 Credits and still requires explicit Owner approval; Kill would consume the
+account's sole current-period kill allowance. BytePlus remains the stable
+production fallback; Pollo stays deferred until its API wallet itself proves
+usable free credit.

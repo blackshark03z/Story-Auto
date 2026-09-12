@@ -335,8 +335,25 @@ The locked preview is locally preserved outside Git as
 Objective first-pass motion evidence: 97 frames; consecutive-change median
 0.013897, maximum 0.021207, cut-spike ratio 1.526 (no hard-cut signal); affine
 first-to-last global scale 0.9999 with 0.542 inlier ratio and near-zero global
-translation; dense-flow median 7.508 px / p90 23.733 px. This supports local
-subject/scene motion but does not prove the requested slow camera push-in; global
-scale evidence instead suggests the push-in was effectively absent. Identity,
-anatomy, subject-action readability and overall visual usability still require
-human visual review before the locked result may be kept or killed.
+translation; dense-flow median 7.508 px / p90 23.733 px. The affine-scale proxy
+proved misleading for this stylized I2V output and must not be used as the sole
+camera-compliance oracle.
+
+Direct visual review of the Owner-uploaded R1 video/contact sheet supersedes that
+inference. Across 0%, 25%, 50%, 75% and 100% frames, the composition tightens
+progressively from medium toward close-up, visibly demonstrating a smooth push-in.
+The same identity markers remain recognizable across the clip: teal bob hair,
+red round glasses, mustard jacket over blue shirt, triangle earrings and beauty
+mark. The window stays camera-left and sofa/plant remain camera-right with no scene
+replacement. No hard cut, severe anatomy defect or obvious identity swap is
+visible. The requested slight head turn is comparatively subtle rather than
+strongly readable.
+
+Provisional manual rubric from the supplied visual evidence: camera compliance
+2/2; subject action 1/2; identity stability 2/2; environment stability 2/2;
+anatomy/physical motion 2/2; total 9/10, with no critical-failure flag. R1 is
+therefore `RESEARCH_CANDIDATE`, not `REPEATABILITY_PROVEN`. The repeated Elyum
+preview/lock watermark is expected locked-preview overlay evidence and is not
+counted as a generated-content defect. Runtime reports `unlockCredits=20`; Keep
+requires explicit Owner approval and Kill would consume the only current-period
+kill allowance.
