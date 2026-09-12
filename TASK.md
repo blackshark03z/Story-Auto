@@ -84,8 +84,16 @@ multi-scene Full Video fixture.
 - Current CADS standard/template reviewed through the registered local CADS
   project.
 - Baseline before Goal 54: `48947dc` (`Clean accepted product baseline`).
+- Goal 54 SoT/CADS framing committed and pushed at
+  `77b7bde9c257495a72c21aeee09c064797027182`.
 - Story Auto already contains provider-neutral generation requests/manifests,
   VIDEO media contracts, full-video partitioning, and the common compositor.
+- Stage A read-only provider qualification started on 2026-09-12 and is recorded
+  in `docs/GOAL54_FULL_VIDEO_SEEDANCE_PROVIDER_EVIDENCE.md`.
+- Provisional high-priority candidates are Elyum, AdSkull, and Pollo because each
+  currently exposes a documented programmatic Seedance path. Dreamina remains
+  the official creator-surface oracle; Dola and DeeVid remain discovery
+  candidates pending stronger automation/job-identity evidence.
 
 ## Discoveries / Blockers
 
@@ -95,11 +103,19 @@ multi-scene Full Video fixture.
 - Historical provider-baseline records closed provider selection around Google
   Flow. Goal 54 supersedes that closure only for Full Video qualification; Full
   Image remains unchanged.
+- Dola's recurring-free signal currently comes from recent third-party/tutorial
+  evidence rather than an authoritative public automation contract. Treat reset
+  behavior, API access, job identity, and commercial rights as UNKNOWN until
+  directly verified.
+- Marketing/model pages are sufficient for discovery ranking but not for Stage B
+  dispatch. Elyum, AdSkull, and Pollo still require contract-level verification
+  of auth, create-task identity, polling/webhook/result identity, acquisition,
+  quota visibility, failure states, and usage rights.
 
 ## Next Safe Action
 
-Persist the Goal 54 decision/evidence plan, verify candidate providers directly,
-then select the first bounded provider vertical slice. Do not dispatch generation
-until provider identity, output acquisition, quota/cost consequence, and
-ambiguity/retry behavior are sufficiently understood to preserve Story Auto
-invariants.
+Finish contract-level Stage A verification for Elyum, AdSkull, and Pollo, then
+select exactly one first provider for the bounded Stage B vertical slice. Do not
+dispatch generation until provider identity, output acquisition, quota/cost
+consequence, and ambiguity/retry behavior are sufficiently understood to
+preserve Story Auto invariants.
