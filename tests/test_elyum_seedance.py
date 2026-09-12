@@ -47,6 +47,19 @@ class _FakeSession:
 
 
 class ElyumSeedanceClientTests(unittest.TestCase):
+    def test_locked_runtime_url_is_treated_as_preview_and_unlock_cost_is_parsed(self):
+        payload = {
+            "status": "done",
+            "locked": True,
+            "url": "https://elyum.ai/media/g_fixture/p0.mp4?sig=x",
+            "unlockCredits": 20,
+        }
+        self.assertEqual(
+            ElyumSeedanceClient.preview_urls(payload),
+            ["https://elyum.ai/media/g_fixture/p0.mp4?sig=x"],
+        )
+        self.assertEqual(ElyumSeedanceClient.unlock_credits(payload), 20)
+
     def test_estimate_uses_explicit_i2v_mode(self):
         session = _FakeSession()
         client = ElyumSeedanceClient(key="test", session=session)
@@ -186,6 +199,46 @@ class ElyumResearchLedgerTests(unittest.TestCase):
             )
         self.assertEqual(result["status"], "BLOCKED_BALANCE")
         self.assertEqual([name for name, _ in session.calls], ["elyum_account", "elyum_estimate"])
+
+    def test_resume_requires_existing_job_and_never_calls_make_video(self):
+        import tempfile
+        from story_auto.core.artifacts import atomic_write_json
+        from story_auto.providers.elyum_seedance.research import resume_experiment_preview
+
+        class _ResumeClient:
+            def __init__(self):
+                self.make_calls = 0
+                self.wait_calls = []
+            def wait(self, job_id, timeout_seconds=50, thumbnails=True):
+                self.wait_calls.append((job_id, timeout_seconds, thumbnails))
+                return {"status": "succeeded", "genId": "gen_existing", "preview": "https://preview.invalid/x.jpg"}
+            @staticmethod
+            def gen_id(value):
+                return value.get("genId")
+            @staticmethod
+            def execution_state(value):
+                return value.get("status")
+            @staticmethod
+            def preview_urls(value):
+                return [value["preview"]] if value.get("preview") else []
+            @staticmethod
+            def unlock_credits(value):
+                return value.get("unlockCredits")
+
+        with tempfile.TemporaryDirectory() as root:
+            ledger = Path(root) / "ledger.json"
+            atomic_write_json(ledger, {
+                "schema_version": "story-auto-goal54-elyum-experiment/1.0.0",
+                "experiments": {"R1": {"recipe_id": "R1", "status": "WAIT_UNAVAILABLE",
+                    "client_ref": "stable-ref", "job_id": "cos_existing", "estimate_credits": 44,
+                    "balance_before": 150}},
+            })
+            client = _ResumeClient()
+            result = resume_experiment_preview(ledger, recipe_id="R1", client=client, wait_seconds=7)
+            self.assertEqual(result["status"], "PREVIEW_READY")
+            self.assertEqual(result["job_id"], "cos_existing")
+            self.assertEqual(client.wait_calls, [("cos_existing", 7, True)])
+            self.assertEqual(client.make_calls, 0)
 
     def test_keep_and_kill_are_explicit_separate_operations(self):
         for decision in ("keep", "kill"):

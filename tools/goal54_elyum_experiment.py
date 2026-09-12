@@ -25,6 +25,7 @@ from story_auto.providers.elyum_seedance import (
     keep_experiment_preview,
     kill_experiment_preview,
     prepare_reference_upload,
+    resume_experiment_preview,
     run_experiment_preview,
 )
 
@@ -85,7 +86,7 @@ def _safe_show(path: Path, recipe_id: str) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bounded Elyum Goal 54 experiment runner.")
-    parser.add_argument("action", choices=("show", "prepare", "preview", "keep", "kill"))
+    parser.add_argument("action", choices=("show", "prepare", "preview", "resume", "keep", "kill"))
     parser.add_argument("--key-file", type=Path)
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--recipe-id", default="R1")
@@ -146,6 +147,11 @@ def main(argv: list[str] | None = None) -> int:
                     max_credits=args.max_credits,
                     wait_seconds=args.wait_seconds,
                 )
+        elif args.action == "resume":
+            result = resume_experiment_preview(
+                args.ledger, recipe_id=args.recipe_id, client=client,
+                wait_seconds=args.wait_seconds,
+            )
         elif args.action == "keep":
             result = keep_experiment_preview(args.ledger, recipe_id=args.recipe_id, client=client)
         else:

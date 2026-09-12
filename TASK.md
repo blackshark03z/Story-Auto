@@ -167,10 +167,14 @@ multi-scene Full Video fixture.
   PASS or provider failure.
 - The Owner's real logged-in Elyum Free account confirms 150 starter Credits and
   one current-period kill. The API key is kept outside the repository.
-- Elyum Free developer/MCP read access is now proven by runtime preflight. No
-  generation has been dispatched. The earlier five-test nominal Credit plan was
-  invalidated by live estimates and is superseded by the bounded 120-Credit
-  Fast-I2V -> 2.5-Reference plan in `GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`.
+- Elyum Free developer/MCP access is proven by runtime evidence. R1 has now
+  dispatched exactly one Fast-I2V job using the durable pre-recorded `clientRef`.
+  The initial wait failed transiently, then recovery by the same `jobId` reached
+  `PREVIEW_READY` without a second make call. No keep/kill has occurred. Live
+  estimate was 44 Credits, while the finished locked result reports an actual
+  Keep/unlock price of 20 Credits. The earlier five-test nominal plan remains
+  superseded by the bounded experiment contract in
+  `GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`.
 
 ## Next Safe Action
 
@@ -186,11 +190,21 @@ was generated outside Git at SHA-256
 `31ca872d7b608dee61db0f0bdc753e4acaf659c428706ff7da88dfee98c3e531`
 and uploaded successfully through `elyum_upload` (documented free).
 
-First R1 preview attempt returned `PROVIDER_TRANSIENT` before dispatch: the
-research ledger remained `PRE_DISPATCH` with durable `clientRef` and no
-`balance_before`, `estimate_credits`, `job_id` or `gen_id`, so no video job or
-Credit hold is evidenced. A subsequent read-only recheck PASS confirmed Free
-balance 150, kills left 1, and Fast I2V 4s quote 44 Credits. Retry must reuse the
-same durable `clientRef`; do not create a new experiment identity. BytePlus
-remains the stable production fallback; Pollo stays deferred until its API wallet
-itself proves usable free credit.
+R1 runtime qualification has now crossed the first real generation boundary.
+The first call failed pre-dispatch with `PROVIDER_TRANSIENT`; read-only recheck
+then confirmed balance 150 and quote 44. A retry reused the exact same durable
+`clientRef`, returned provider job
+`cos_leYmn4yuIWZosURXvTRbUo:cb35e5fa-f9c9-4763-81fc-523c2b9073b1`, and a
+transient `elyum_wait` failure was recovered by polling that same job only. The
+result is now `PREVIEW_READY` / locked with generation
+`g_e2fa8c99efa9300c0e792ebd`; provider runtime reports Keep/unlock cost 20
+Credits. The locked preview was acquired locally at
+`D:\Story Auto\evidence\goal54\r1_locked_preview.mp4`, SHA-256
+`f9f0b5cdae2044eb508e276e5031f678e92539fb21471a537184770cc3122e9a`, H.264,
+836x480, 24 fps, 4.041667 s. Automated motion evidence shows no hard cut
+(cut-spike ratio 1.526) but essentially no global camera scale change
+(first-to-last affine scale 0.9999), so the requested slow push-in is not proven
+and likely not followed. Human visual review of identity/action/anatomy remains
+the acceptance oracle before Keep or Kill. BytePlus remains the stable production
+fallback; Pollo stays deferred until its API wallet itself proves usable free
+credit.

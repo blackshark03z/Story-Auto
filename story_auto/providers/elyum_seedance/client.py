@@ -348,7 +348,17 @@ class ElyumSeedanceClient:
 
     @staticmethod
     def preview_urls(result: Any) -> list[str]:
-        return _collect_urls(result, key_hints=("thumb", "poster", "preview"))
+        # Elyum locked-preview runtime currently returns the preview as generic `url`.
+        # This method is only used on pre-keep observation results, where that URL is
+        # the locked preview rather than the unlocked/original asset.
+        return _collect_urls(result, key_hints=("thumb", "poster", "preview", "url"))
+
+    @staticmethod
+    def unlock_credits(result: Any) -> int | None:
+        value = _find_first(result, {"unlockcredits", "unlock_credits"})
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return int(value)
 
     @staticmethod
     def downloadable_urls(result: Any) -> list[str]:

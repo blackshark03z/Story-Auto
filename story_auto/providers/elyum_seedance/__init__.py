@@ -14,6 +14,7 @@ from .research import (
     keep_experiment_preview,
     kill_experiment_preview,
     prepare_reference_upload,
+    resume_experiment_preview,
     run_experiment_preview,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "ElyumSeedanceClient",
     "ElyumSeedanceError",
     "prepare_reference_upload",
+    "resume_experiment_preview",
     "run_experiment_preview",
     "keep_experiment_preview",
     "kill_experiment_preview",

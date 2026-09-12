@@ -287,11 +287,12 @@ The logged-in Elyum Free account now proves the developer path directly:
   2.5 Reference 76 Credits;
 - one 2.5 I2V estimate timed out and remains `UNVERIFIED`, not failed.
 
-No generation/keep/kill call has occurred. The old public-pricing-derived
-five-attempt budget is superseded by live account estimates. The bounded research
-plan is now Fast I2V (44) followed by 2.5 Reference (76) on the same golden
-fixture, maximum 120/150 Credits, with a live estimate recheck before each
-submission.
+The first R1 generation has now been dispatched, but no Keep or Kill has
+occurred. The old public-pricing-derived five-attempt budget remains superseded by
+live account estimates. R1 was capped by the Fast I2V 44-Credit estimate; the
+finished locked result later reported `unlockCredits=20`, proving that the
+pre-dispatch estimate is an upper/hold quote rather than necessarily the final
+Keep price. Any later R2 still requires a fresh live estimate before submission.
 
 Live MCP schema evidence adds:
 
@@ -317,8 +318,25 @@ R1 fixture is deterministic synthetic 1280x720 PNG with SHA-256
 `31ca872d7b608dee61db0f0bdc753e4acaf659c428706ff7da88dfee98c3e531`.
 `elyum_upload` returned a provider media reference and no Credit consequence was
 reported. The first R1 preview invocation failed with `PROVIDER_TRANSIENT` while
-the ledger was still `PRE_DISPATCH`: durable `clientRef` existed, but there was
-no `balance_before`, estimate, `job_id` or `gen_id`, establishing pre-dispatch
-failure for this attempt. A later read-only preflight PASS reconfirmed balance
-150 and Fast I2V 4s estimate 44 Credits. The next dispatch attempt must reuse the
-same ledger/clientRef and remain capped at 44 Credits; no new identity is allowed.
+the ledger was still `PRE_DISPATCH`. A later read-only preflight PASS reconfirmed
+balance 150 and Fast I2V 4s estimate 44 Credits.
+
+A bounded retry reused the same durable `clientRef` and returned job
+`cos_leYmn4yuIWZosURXvTRbUo:cb35e5fa-f9c9-4763-81fc-523c2b9073b1`. Its first
+wait returned `PROVIDER_TRANSIENT`, but the job identity had already been
+persisted; recovery used only that same `jobId` and reached `PREVIEW_READY`
+without another make call. Provider status identifies locked generation
+`g_e2fa8c99efa9300c0e792ebd`, with `unlockCredits=20`; no Keep/Kill is recorded.
+The locked preview is locally preserved outside Git as
+`D:\Story Auto\evidence\goal54\r1_locked_preview.mp4`, SHA-256
+`f9f0b5cdae2044eb508e276e5031f678e92539fb21471a537184770cc3122e9a`, H.264,
+836x480, 24 fps, duration 4.041667 s.
+
+Objective first-pass motion evidence: 97 frames; consecutive-change median
+0.013897, maximum 0.021207, cut-spike ratio 1.526 (no hard-cut signal); affine
+first-to-last global scale 0.9999 with 0.542 inlier ratio and near-zero global
+translation; dense-flow median 7.508 px / p90 23.733 px. This supports local
+subject/scene motion but does not prove the requested slow camera push-in; global
+scale evidence instead suggests the push-in was effectively absent. Identity,
+anatomy, subject-action readability and overall visual usability still require
+human visual review before the locked result may be kept or killed.

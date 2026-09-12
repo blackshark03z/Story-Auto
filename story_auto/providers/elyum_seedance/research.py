@@ -169,8 +169,10 @@ def run_experiment_preview(ledger_path: Path | str, *, recipe_id: str, prompt: s
     gen_id = client.gen_id(observed_result)
     execution = client.execution_state(observed_result)
     previews = client.preview_urls(observed_result)
+    unlock_credits = client.unlock_credits(observed_result)
     entry.update({"last_observed_at": _now(), "provider_execution_state": execution,
-                  "preview_urls": previews, "failure_class": None, "updated_at": _now()})
+                  "preview_urls": previews, "failure_class": None, "updated_at": _now(),
+                  **({"unlock_credits": unlock_credits} if unlock_credits is not None else {})})
     if gen_id:
         entry.update({"gen_id": gen_id, "status": "PREVIEW_READY"})
     elif execution in {"failed", "error", "cancelled", "canceled"}:
@@ -181,6 +183,47 @@ def run_experiment_preview(ledger_path: Path | str, *, recipe_id: str, prompt: s
     return {"status": entry["status"], "recipe_id": recipe_id, "job_id": job_id,
             "client_ref": client_ref, "gen_id": entry.get("gen_id"),
             "preview_urls": list(entry.get("preview_urls") or []),
+            "unlock_credits": entry.get("unlock_credits"),
+            "estimate_credits": entry.get("estimate_credits"),
+            "balance_before": entry.get("balance_before")}
+
+
+def resume_experiment_preview(ledger_path: Path | str, *, recipe_id: str,
+                              client: ElyumSeedanceClient, wait_seconds: int = 50) -> dict[str, Any]:
+    """Observe only an already-submitted Elyum job; never dispatch, keep, or kill."""
+    ledger_path = Path(ledger_path)
+    ledger = _load(ledger_path)
+    entry = _entry(ledger, recipe_id)
+    job_id = entry.get("job_id")
+    client_ref = entry.get("client_ref")
+    if not isinstance(job_id, str) or not job_id:
+        raise ElyumSeedanceError("PROVIDER_JOB_ID_MISSING")
+    try:
+        observed_result = client.wait(job_id, timeout_seconds=wait_seconds, thumbnails=True)
+    except ElyumSeedanceError as error:
+        entry.update({"status": "WAIT_UNAVAILABLE", "failure_class": error.failure_class, "updated_at": _now()})
+        atomic_write_json(ledger_path, ledger)
+        return {"status": "WAIT_UNAVAILABLE", "recipe_id": recipe_id, "job_id": job_id,
+                "client_ref": client_ref, "failure_class": error.failure_class}
+
+    gen_id = client.gen_id(observed_result)
+    execution = client.execution_state(observed_result)
+    previews = client.preview_urls(observed_result)
+    unlock_credits = client.unlock_credits(observed_result)
+    entry.update({"last_observed_at": _now(), "provider_execution_state": execution,
+                  "preview_urls": previews, "failure_class": None, "updated_at": _now(),
+                  **({"unlock_credits": unlock_credits} if unlock_credits is not None else {})})
+    if gen_id:
+        entry.update({"gen_id": gen_id, "status": "PREVIEW_READY"})
+    elif execution in {"failed", "error", "cancelled", "canceled"}:
+        entry.update({"status": "FAILED_TERMINAL", "failure_class": f"PROVIDER_{execution.upper()}"})
+    else:
+        entry.update({"status": "GENERATING"})
+    atomic_write_json(ledger_path, ledger)
+    return {"status": entry["status"], "recipe_id": recipe_id, "job_id": job_id,
+            "client_ref": client_ref, "gen_id": entry.get("gen_id"),
+            "preview_urls": list(entry.get("preview_urls") or []),
+            "unlock_credits": entry.get("unlock_credits"),
             "estimate_credits": entry.get("estimate_credits"),
             "balance_before": entry.get("balance_before")}
 
