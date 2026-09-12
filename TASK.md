@@ -254,3 +254,11 @@ X2 Continuity is authorized only after a passing, explicitly Kept X1 and must us
 a clean frame from X1 as its input. X3 Spiritual Motion and optional Seedance 2.5
 Reference A/B remain conditional on evidence and current Credit balance. No
 production routing/UI/planner integration is authorized by this research branch.
+
+Current Xianxia anchor state: one canonical GPT Image candidate has been selected
+and deterministically normalized to 1280x720 with expected SHA-256
+`d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`.
+X1 remains blocked until the local evidence file at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png` matches that
+hash. This block intentionally enforces CADS `292bee9` Acceptance Surface
+Provenance and prevents stale/wrong clipboard or chat-image bytes from being used.

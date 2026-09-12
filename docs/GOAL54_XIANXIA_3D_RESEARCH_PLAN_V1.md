@@ -89,6 +89,25 @@ Store the canonical image outside Git under:
 Record its SHA-256 and generation identity in Git evidence. The image bytes stay
 outside source control.
 
+### Canonical anchor candidate selected — provenance pending local import
+
+The selected GPT Image source is generation
+`5eb96ca5-da11-4d7e-b615-7e1e9fef1726` (`xianxia_maiden_over_the_misty_mountains`).
+A deterministic crop/resize was produced from those exact source bytes to remove
+readable side banners while preserving the same character/environment candidate.
+Canonical candidate properties:
+
+- target size: `1280x720` PNG;
+- expected SHA-256:
+  `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`;
+- intended local acceptance/evidence path:
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`.
+
+Under CADS Acceptance Surface Provenance, this candidate is **not yet admissible
+for X1 dispatch** until the local file at the intended path is verified to have
+that exact SHA-256. A chat-visible image, clipboard image, filename or visual
+similarity alone cannot substitute for byte-level candidate binding.
+
 ## Experiment ledger and artifact boundary
 
 Use a new ledger, separate from R1:
