@@ -180,7 +180,7 @@ No prompt result alone changes production routing.
 
 ## Frozen X1C candidate after Anchor V2 selection
 
-The next authorized comparison candidate is X1C, contingent on byte-level binding of the Owner-selected `XIANXIA_ANCHOR_V2`. Exact local prompt path:
+The next authorized comparison candidate is X1C. Byte-level binding of the Owner-selected `XIANXIA_ANCHOR_V2` is complete at `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_anchor_v2.png`, SHA-256 `569030979570518ca7ed7fedd9499065f499b11977eb5131ce436dad5e5ca42c`. Exact local prompt path:
 
 `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1c_prompt.txt`
 

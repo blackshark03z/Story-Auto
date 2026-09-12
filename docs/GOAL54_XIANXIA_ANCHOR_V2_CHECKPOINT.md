@@ -83,6 +83,6 @@ Intended local evidence path:
 
 `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_anchor_v2.png`
 
-Under CADS acceptance-surface provenance, the chat-visible candidate is not yet admissible for provider dispatch until the exact bytes are present at that local path and the SHA-256 matches. Visual similarity or filename alone is insufficient.
+CADS acceptance-surface provenance is now satisfied for the still: exact bytes are present locally at the intended path, dimensions are 1672x941, and SHA-256 matches `569030979570518ca7ed7fedd9499065f499b11977eb5131ce436dad5e5ca42c`. Visual similarity/filename were not used as substitutes for the byte-level binding.
 
 This candidate is intentionally not re-styled by Seedance. X1C must preserve its existing matte skin, restrained highlights, subdued scene brightness, diffuse weathered wood, muted mountain/pavilion materials, and localized jade/metal reflections.
