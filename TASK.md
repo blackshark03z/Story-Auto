@@ -147,17 +147,22 @@ multi-scene Full Video fixture.
   Auto process has no configured `BYTEPLUS_MODELARK_API_KEY`, `BYTEPLUS_API_KEY`,
   or `ARK_API_KEY`. This is a BytePlus Stage B blocker; it is not an engineering
   PASS or provider failure.
-- Elyum has not yet crossed runtime acceptance: official docs prove the free/API
-  contract, but Story Auto has not authenticated a real Elyum Free account or
-  observed its advertised 150-credit balance, model catalog or live job lifecycle.
+- The Owner's real logged-in Elyum Free account now confirms 150 starter Credits
+  and one current-period kill. Runtime model/API qualification is still incomplete.
+- Elyum Free developer access remains specifically unverified. Public model/MCP
+  pages describe shared Studio/MCP/REST access, while the pricing table lists
+  `API + MCP access` under Plus; the logged-in account's Developer/API surface is
+  the authority before Story Auto implements an Elyum adapter.
 
 ## Next Safe Action
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
-Next, authenticate one Elyum Free account and perform only read-only
-account/model/estimate checks first. If the real account confirms the advertised
-free balance, Seedance 2.5 availability, durable job contract and idempotent
-create semantics, implement one narrow Elyum adapter and execute at most one
-short 480p Stage B probe. If Elyum fails the stability/runtime gate, discard that
-path and return to BytePlus; do not fall back to browser/UI automation. Pollo
-remains deferred until its API wallet itself proves usable free credit.
+Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
+contract. Before any adapter work, verify on the real logged-in Elyum Free
+account whether Developer/API or MCP authorization is actually available. If it
+is, run only read-only account/model/estimate checks first; then implement one
+narrow Elyum adapter around `clientRef` + durable `jobId` and execute the bounded
+480p experiment. If Free API/MCP is unavailable, do not upgrade automatically
+and do not build browser automation: use Studio only for the bounded recipe
+research while BytePlus remains the production API baseline. Pollo stays deferred
+until its API wallet itself proves usable free credit.

@@ -269,13 +269,27 @@ Official references used in this verification:
 - https://elyum.ai/docs/mcp
 - https://adskull.io/en/free/seedance-2-5
 
-### Next safe action
+### Real-account evidence and next safe action — 2026-09-12
 
-Keep the existing BytePlus adapter unchanged as the stable first-party baseline.
-Before adding another production adapter, create an Elyum Free account/API key
-and run read-only account/model/estimate checks through its documented API/MCP
-surface. Only if the real account confirms the advertised 150-credit balance,
-Seedance 2.5 availability, job identity and idempotent create contract should
-Story Auto implement one narrow Elyum Stage B adapter and spend at most one short
-480p probe. Pollo remains deferred until its API wallet itself proves free
-credits; do not infer API free quota from consumer-web credits.
+Owner evidence from the logged-in Elyum Free Studio confirms the account is on
+`FREE`, shows `150 Credits left`, and shows one kill available for the current
+period. This closes the starter-balance question but does not yet prove developer
+API/MCP entitlement.
+
+Public Elyum material is not fully consistent on Free developer access: current
+model/MCP pages describe Studio/MCP/REST on one balance, while the pricing table
+explicitly lists `API + MCP access` as a Plus feature. Treat the logged-in
+`/account/developer` surface as the runtime authority. Do not implement or depend
+on an Elyum adapter until the real Free account can create an API key or authorize
+MCP and pass read-only `account`, `models` and `estimate` checks.
+
+The cinematic-method experiment is now bounded by
+`docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md`. It screens camera grammar cheaply
+with Seedance 2.0 Mini, then uses Seedance 2.5 only for identity/reference and
+continuity confirmation, with a nominal maximum of ~132 Credits before the live
+estimate gate.
+
+If Free developer access is unavailable, do not upgrade automatically and do not
+build browser automation. Use Studio only for the bounded recipe research and
+retain BytePlus as the production API baseline. Pollo remains deferred until its
+API wallet itself proves free credits.
