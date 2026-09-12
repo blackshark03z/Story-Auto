@@ -100,8 +100,10 @@ multi-scene Full Video fixture.
 
 ## Progress
 
-- Current CADS standard/template reviewed through the registered local CADS
-  project.
+- CADS refreshed from `origin/master` on 2026-09-12 at `432a19a`
+  (`Strengthen project architecture description`). The frozen Standard/Five
+  Controls remain unchanged; Story Auto now applies the new conditional
+  Architecture Description rule for material provider/runtime/trust shape.
 - Baseline before Goal 54: `48947dc` (`Clean accepted product baseline`).
 - Goal 54 SoT/CADS framing committed and pushed at
   `77b7bde9c257495a72c21aeee09c064797027182`.
@@ -147,22 +149,23 @@ multi-scene Full Video fixture.
   Auto process has no configured `BYTEPLUS_MODELARK_API_KEY`, `BYTEPLUS_API_KEY`,
   or `ARK_API_KEY`. This is a BytePlus Stage B blocker; it is not an engineering
   PASS or provider failure.
-- The Owner's real logged-in Elyum Free account now confirms 150 starter Credits
-  and one current-period kill. Runtime model/API qualification is still incomplete.
-- Elyum Free developer access remains specifically unverified. Public model/MCP
-  pages describe shared Studio/MCP/REST access, while the pricing table lists
-  `API + MCP access` under Plus; the logged-in account's Developer/API surface is
-  the authority before Story Auto implements an Elyum adapter.
+- The Owner's real logged-in Elyum Free account confirms 150 starter Credits and
+  one current-period kill.
+- The Owner has also created an Elyum API key from the logged-in account and keeps
+  the secret outside the repository. This proves key creation is available for
+  this account, but account scope/model/cost/runtime access still require a
+  read-only live preflight before any generation.
 
 ## Next Safe Action
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
 Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
-contract. Before any adapter work, verify on the real logged-in Elyum Free
-account whether Developer/API or MCP authorization is actually available. If it
-is, run only read-only account/model/estimate checks first; then implement one
-narrow Elyum adapter around `clientRef` + durable `jobId` and execute the bounded
-480p experiment. If Free API/MCP is unavailable, do not upgrade automatically
-and do not build browser automation: use Studio only for the bounded recipe
-research while BytePlus remains the production API baseline. Pollo stays deferred
-until its API wallet itself proves usable free credit.
+contract. Run a read-only Elyum preflight with the Owner-created out-of-repo key: account
+(balance/plan/scopes/cap), model catalog, and cost estimates for the bounded
+480p Shot Recipe experiment. Do not call generation/keep/kill in this preflight.
+Only after those reads PASS should Story Auto add one narrow Elyum adapter around
+`clientRef` + durable `jobId` and execute the bounded experiment. If API runtime
+access fails, do not upgrade automatically and do not build browser automation:
+use Studio only for bounded recipe research while BytePlus remains the production
+API baseline. Pollo stays deferred until its API wallet itself proves usable free
+credit.

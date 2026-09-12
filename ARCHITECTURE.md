@@ -1,10 +1,19 @@
 # Story Auto Architecture V1
 
-Status: **FROZEN PRODUCT ARCHITECTURE**. Implementation details may evolve only when they preserve the invariants below or an owner-approved ADR creates a new design revision.
+Status: **CURRENT DURABLE ARCHITECTURE**. This document describes the architecture that exists now; Git/source and identified runtime evidence remain authoritative. Material rationale that must survive turnover belongs in Decision Records.
 
 ## Core principle
 
-One modular pipeline, two media policies. Never build a separate hybrid pipeline and full-video pipeline.
+One modular production pipeline with mode-specific media policy and provider boundaries. Never build a separate Full Image, Full Video, or legacy-mode pipeline.
+
+## Architecture drivers
+
+- **Recoverability and external-effect identity:** a provider timeout, restart, or reconnect must not cause blind duplicate paid generation.
+- **Provenance and timing integrity:** canonical alignment owns story time; every selected visual is bound to request/attempt/provider/model and local hash evidence.
+- **Provider isolation:** planning/rendering remain provider-independent; browser/session details and API credentials stay inside adapters.
+- **Operational stability:** Full Video production must prefer documented API task identity/polling over fragile browser/session automation.
+- **Cost observability:** generation cost/quota is an external consequence and must be estimable/bounded before scaled execution.
+- **Low-IT product journey:** the supported product path must remain understandable and recoverable without requiring provider implementation knowledge.
 
 ```text
 content.md
@@ -25,7 +34,9 @@ review_state.json                         ← plan approval gate
   ↓
 generation_requests.json                 ← provider-ready requests, references first
   ↓
-Google Flow adapter
+provider boundary
+  ├─ Full Image → Google Flow browser adapter
+  └─ Full Video → BytePlus ModelArk async API adapter
   ↓
 generation_manifest.json + assets        ← attempts / hashes / status / provenance
   ↓
@@ -129,28 +140,43 @@ local-only presentation changes do not invalidate Flow requests.
 
 ## Provider boundaries
 
-`story_auto.providers.gemini_media` is the official Gemini API media boundary.
-It accepts provider-independent prompts and local continuity references, owns
-model discovery, key rotation, Interactions image/Omni execution, Veo long-running
-job polling, atomic local acquisition, and append-only attempt provenance. Veo
-operation identity is committed before polling so restart never blindly submits
-a second paid job. Signed result URLs and API keys never cross the adapter.
+Current production routing is explicit rather than inferred:
 
-This adapter does not change production routing by itself. Flow and Gemini API
-remain benchmark candidates until the owner completes the anonymous quality
-review and explicitly accepts routing.
+- `full_image` visual generation → `providers/flow/*` (`google_flow`), using the accepted dedicated browser/session boundary.
+- `full_video_ai` visual generation → `providers/byteplus_seedance/*` (`byteplus_seedance`), using BytePlus ModelArk's documented asynchronous task API.
+- `providers/gemini_media/*` remains a non-routing experimental media adapter unless a later accepted decision changes production routing.
+- Elyum is currently a bounded Goal 54 research candidate/revisit trigger only. Until runtime qualification and an accepted routing decision exist, it is not part of production architecture.
 
 ```text
 core/application request
   ↓
-provider interface
-  ↓
-providers/tts/{elevenlabs,typecast,kokoro_local}
-providers/llm/gemini
-providers/flow/*
+provider-specific adapter boundary
+  ├─ providers/flow/*                 Full Image
+  ├─ providers/byteplus_seedance/*    Full Video
+  ├─ providers/gemini_media/*         experimental/non-routing
+  ├─ providers/tts/*
+  └─ providers/llm/gemini
 ```
 
-Core code does not know Flow DOM selectors, browser profile paths, login state, project URL details, provider button labels, or provider-specific error strings.
+Core planning/rendering does not know Flow DOM selectors, browser profile paths,
+BytePlus/Elyum credentials, provider result URLs, login state, provider button
+labels, or provider-specific retry mechanics.
+
+### BytePlus ModelArk Full Video responsibilities
+
+- server-side API-key authentication kept outside committed source;
+- Seedance async task creation through one documented POST boundary;
+- immediate persistence of returned provider task identity before polling;
+- polling/resume by the exact known task ID without another POST;
+- fail-closed `AMBIGUOUS` state when POST outcome is uncertain;
+- no automatic replacement task after ambiguous dispatch or terminal provider failure;
+- deterministic HTTPS result acquisition, FFprobe validation, local hashing, and manifest provenance;
+- Full Video results enter `QC_PENDING` and remain subject to manual video review until a stronger accepted oracle exists.
+
+The current implementation model is `dreamina-seedance-2-5-260628`. BytePlus is
+the stable first-party Full Video baseline/fallback while Goal 54 evaluates
+whether a cheaper API-first route can satisfy the same recovery/provenance
+invariants.
 
 ### Google Flow provider responsibilities
 
@@ -268,22 +294,38 @@ Gemini metadata and Flow thumbnail provenance. Publishing requests share the
 generation ledger but are excluded from render fingerprints, so publishing
 changes cannot invalidate video stages.
 
-The provider execution boundary resolves both image and video requests to
-`GOOGLE_FLOW_WEB`; upstream narration, continuity, shot/media planning,
-generation requests, and rendering remain provider-independent. Flow-bound
-prompt policy carries a soft bottom-right provider-mark safe area, and subtitle
-styles reserve extra right clearance. For production images, the Flow adapter
-preserves the provider-original bytes and creates a separately hashed local
-derivative with the visible sparkle mark removed before `selected_asset` is
-bound. The generation manifest records raw-to-derivative lineage, and local
-cleanup failure is retried from the raw bytes without another provider submit.
-The supported versioned image profiles are `1280x720 v1` and `1376x768 v1`;
-unknown geometry fails closed locally. Postprocessing only repairs a derivative
-from valid raw evidence and never by submitting another Flow request solely for
-local cleanup failure. This is a Flow IMAGE boundary, not a universal watermark
-removal system.
-Flow video remains unchanged: its visible mark is the accepted known
-limitation. The renderer continues to consume only the selected path and hash.
+The production provider boundary is split by active render mode: Full Image
+resolves to `GOOGLE_FLOW_WEB`; Full Video resolves to `byteplus_seedance`.
+Upstream narration, continuity, shot/media planning, generation requests, and
+rendering remain provider-independent.
+
+For production Full Image, Flow-bound prompt policy carries a soft bottom-right
+provider-mark safe area, and subtitle styles reserve extra right clearance. The
+Flow adapter preserves provider-original bytes and creates a separately hashed
+local derivative with the visible sparkle mark removed before `selected_asset`
+is bound. The generation manifest records raw-to-derivative lineage, and local
+cleanup failure is retried from raw bytes without another provider submit. The
+supported versioned image profiles are `1280x720 v1` and `1376x768 v1`; unknown
+geometry fails closed locally. This is a Flow IMAGE boundary, not a universal
+watermark-removal system.
+
+Flow VIDEO is historical/non-production for the reopened Full Video path. The
+active Full Video adapter acquires provider-owned API output into Story
+Auto-owned local storage, validates/hash-binds it, and the renderer consumes only
+the selected local path and hash.
+
+### External provider trust and revisit triggers
+
+- Provider credentials are secrets stored outside committed source and must not
+  appear in logs, evidence docs, or UI payloads.
+- A provider marketing claim is discovery evidence only; production qualification
+  requires identified runtime/account evidence.
+- Browser/session automation is not an accepted Full Video production transport.
+- Elyum may replace or complement BytePlus only after read-only account/model/cost
+  preflight plus a bounded runtime probe prove task identity, idempotent create,
+  deterministic result acquisition, and Story Auto provenance/recovery invariants.
+- A second provider does not justify a generic router by itself; introduce shared
+  abstraction only after concrete repeated variation demonstrates the need.
 
 ## UI boundary
 
@@ -316,7 +358,9 @@ story_auto/
     credentials/
     tts/
     llm/
-    flow/
+    flow/                  Full Image browser provider
+    byteplus_seedance/     Full Video async API provider
+    gemini_media/          experimental/non-routing media adapter
   cli/
   ui/                   loopback HTTP operator dashboard
 ```

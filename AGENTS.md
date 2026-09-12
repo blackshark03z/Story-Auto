@@ -7,11 +7,16 @@ changing anything.
 
 ## Sources of authority
 
-- Git owns product history and the current source baseline.
-- Tests and CI own verification truth.
-- The Owner and Tech Lead own product intent and approvals.
-- A Worker owns ordinary reversible implementation decisions within the
-  approved task scope.
+- Identified Git/source owns implementation reality and product history.
+- Identified runtime evidence owns observed behavior for the source,
+  configuration, and environment actually exercised.
+- Tests and CI provide verification evidence; they do not by themselves prove
+  Product Goal acceptance.
+- The Owner owns desired product outcome, material product trade-offs,
+  consequential authorization, and subjective real-use acceptance where human
+  experience is the oracle.
+- The AI Tech Lead/Worker owns ordinary reversible engineering judgment within
+  established intent and authority.
 - Preserve owner work. Do not reset, clean, overwrite, or silently stage it.
 
 ## CADS working model
@@ -25,9 +30,13 @@ volatility rather than hypothetical possibility.
 
 For multi-step user-facing work, define a representative Critical User Journey
 and prove the composed journey on the supported surface. Isolated feature or
-subsystem PASS does not establish Product Goal acceptance. Accepted material
-direction that could change a later session's approach belongs in
-`docs/decisions/`; chat memory and agent reports are not authority.
+subsystem PASS does not establish Product Goal acceptance. When durable
+system/provider/runtime/data/deployment/trust shape is material, apply CADS
+Architecture Description conditionally: `ARCHITECTURE.md` describes current
+durable truth and concern-driven views, while accepted rationale that could
+change a later session's approach belongs in `docs/decisions/`. Architecture
+prose never outranks identified Git/runtime reality. Chat memory and agent
+reports are not authority.
 
 The legacy `.buildos` records and historical authority files are provenance,
 not active authority. Do not reconstruct or migrate their lifecycle state.
