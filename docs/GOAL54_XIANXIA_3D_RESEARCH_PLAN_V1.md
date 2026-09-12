@@ -313,6 +313,50 @@ Rules:
 9. Only after a kept X1: extract a clean continuity frame and plan X2.
 10. X3/X4 remain conditional on evidence and budget.
 
+## X1 runtime evidence — pending visual verdict
+
+Candidate source HEAD for dispatch:
+`b1c3ea61fb356939f663137ae71f6f35ac8b21b7`.
+
+Bound inputs:
+
+- anchor path: `D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`;
+- anchor SHA-256: `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`;
+- prompt path: `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_prompt.txt`;
+- prompt SHA-256: `e28c57c545a1c606c13df1637664ace5c9718304ca85bea3afcfa70d563592da`;
+- model/settings: Seedance 2 Fast I2V, 4 s, 480p, 16:9, audio off;
+- live balance before dispatch: 130 Credits;
+- live estimate before dispatch: 44 Credits.
+
+Durable provider identity:
+
+- clientRef: `story-auto-g54-3604b3b68a1483f2692154ddd1f0a46e326356c37090aad6`;
+- jobId: `cos_leYmn4yuIWZosURXvTRbUo:7e7856b2-3d90-42ff-ae0b-7a2664510d62`;
+- genId: `g_c94da17e6dfeb2f8814a7648`.
+
+The initial wait and one explicit resume both returned transient-unavailable, but
+all recovery stayed on the same durable job. A subsequent resume reached
+`PREVIEW_READY`; provider execution state is `done`, preview count is one, and
+reported `unlockCredits=20`. There was no second generation dispatch.
+
+Acceptance-surface provenance:
+
+- local locked preview:
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_locked_preview.mp4`;
+- preview SHA-256:
+  `b89e5b057a8a83534abb26d73d3e6ac6f7404a151f7c617496839f6a0baf48eb`;
+- technical media: H.264, 836x480, 24 fps, 97 frames, 4.041667 s;
+- contact sheet:
+  `D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_contact_sheet.png`;
+- contact-sheet SHA-256:
+  `03589216d946f187b6792974fceae3738b7ff74188ab09e8829630883c3ca10f`.
+
+These artifacts are the exact Owner-review surface for X1. Technical validity and
+provenance are verified. The xianxia/style, identity/costume, environment,
+camera/action and anatomy/fabric/hair rubric dimensions remain pending direct
+visual review. X1 therefore remains `UNVERIFIED` for visual acceptance and no
+Keep/Kill action is authorized yet.
+
 ## Non-goals for V1
 
 - multiple named characters;

@@ -265,10 +265,28 @@ a clean frame from X1 as its input. X3 Spiritual Motion and optional Seedance 2.
 Reference A/B remain conditional on evidence and current Credit balance. No
 production routing/UI/planner integration is authorized by this research branch.
 
-Current Xianxia anchor state: one canonical GPT Image candidate has been selected
-and deterministically normalized to 1280x720 with expected SHA-256
-`d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`.
-X1 remains blocked until the local evidence file at
-`D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png` matches that
-hash. This block intentionally enforces CADS `292bee9` Acceptance Surface
-Provenance and prevents stale/wrong clipboard or chat-image bytes from being used.
+Current Xianxia anchor state: canonical GPT Image bytes are present locally at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\xianxia_f01_anchor.png`, 1280x720,
+SHA-256 `d8a48a3e725b8511250f84506458bcdf2d13e4f2e9a73cabd8c3f4f5eb2ae96b`.
+The exact X1 prompt is frozen outside Git at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_prompt.txt`, SHA-256
+`e28c57c545a1c606c13df1637664ace5c9718304ca85bea3afcfa70d563592da`.
+
+X1 has now crossed the provider boundary exactly once from candidate source HEAD
+`b1c3ea61fb356939f663137ae71f6f35ac8b21b7`. Live pre-dispatch evidence was
+balance 130 Credits and Fast-I2V 4 s / 480p estimate 44. Durable identity:
+`client_ref=story-auto-g54-3604b3b68a1483f2692154ddd1f0a46e326356c37090aad6`,
+`job_id=cos_leYmn4yuIWZosURXvTRbUo:7e7856b2-3d90-42ff-ae0b-7a2664510d62`,
+`gen_id=g_c94da17e6dfeb2f8814a7648`. Two transient `elyum_wait` observations were
+recovered against that same job only; no second make-video dispatch occurred.
+Provider state is now `done` / ledger `PREVIEW_READY`, with one locked preview and
+reported `unlockCredits=20`.
+
+The exact acceptance surface for X1 is locally acquired at
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_locked_preview.mp4`, SHA-256
+`b89e5b057a8a83534abb26d73d3e6ac6f7404a151f7c617496839f6a0baf48eb`, H.264,
+836x480, 24 fps, 97 frames, duration 4.041667 s. Contact-sheet evidence is
+`D:\\Story Auto\\evidence\\goal54\\xianxia\\x1_contact_sheet.png`, SHA-256
+`03589216d946f187b6792974fceae3738b7ff74188ab09e8829630883c3ca10f`.
+Technical acquisition/provenance is verified; human visual rubric and explicit
+Keep/Kill remain unresolved, so X1 is not yet accepted.
