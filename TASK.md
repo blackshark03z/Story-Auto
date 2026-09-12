@@ -85,10 +85,18 @@ multi-scene Full Video fixture.
 - Dola/Dreamina browser surfaces and other UI-only routes remain research/demo
   surfaces only. They are not production candidates because session/UI drift can
   recreate the connection and attribution failures previously observed with Flow.
-- First implementation candidate: BytePlus ModelArk first-party Seedance 2.5
+- First implementation baseline: BytePlus ModelArk first-party Seedance 2.5
   (`dreamina-seedance-2-5-260628`) through the official asynchronous contents
-  generation API. Third-party API providers remain fallback research only until
-  direct first-party runtime evidence proves or blocks this path.
+  generation API.
+- Free-first verification on 2026-09-12 reopens only API-first third-party
+  candidates that pass the same stability gate. Elyum is the first candidate to
+  preflight because official docs state 150 free credits with no card, one shared
+  Web/MCP/REST balance, durable `jobId`, job-status/wait operations and
+  idempotent `clientRef` create semantics. BytePlus remains the stable first-party
+  baseline/fallback until direct Elyum runtime evidence proves otherwise.
+- Pollo passes the API stability gate at documentation level, but its guaranteed
+  free API balance is unverified; consumer free credits must not be assumed to
+  transfer to the separate Pollo API wallet.
 
 ## Progress
 
@@ -117,8 +125,12 @@ multi-scene Full Video fixture.
 - Full hermetic regression (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`) reaches 100% with
   714 tests passed and 283 subtests passed. The ChatCode wrapper reported a
   process timeout only after pytest printed the complete PASS summary.
-- A zero-generation live preflight is implemented at
+- A zero-generation live BytePlus preflight is implemented at
   `tools/goal54_seedance_preflight.py`.
+- Free+stable provider verification is persisted in
+  `docs/GOAL54_FULL_VIDEO_SEEDANCE_PROVIDER_EVIDENCE.md`: Elyum is
+  `FREE_STABLE_API_CANDIDATE_HIGH`; Pollo is `STABLE_API / FREE_API_UNVERIFIED`;
+  AdSkull is `FREE_API_CANDIDATE_MEDIUM` pending stronger task/retry evidence.
 
 ## Discoveries / Blockers
 
@@ -133,14 +145,19 @@ multi-scene Full Video fixture.
   for this Goal.
 - Live BytePlus preflight on 2026-09-12 reached no provider call because the Story
   Auto process has no configured `BYTEPLUS_MODELARK_API_KEY`, `BYTEPLUS_API_KEY`,
-  or `ARK_API_KEY`. This is the current direct Stage B blocker; it is not an
-  engineering PASS or provider failure.
+  or `ARK_API_KEY`. This is a BytePlus Stage B blocker; it is not an engineering
+  PASS or provider failure.
+- Elyum has not yet crossed runtime acceptance: official docs prove the free/API
+  contract, but Story Auto has not authenticated a real Elyum Free account or
+  observed its advertised 150-credit balance, model catalog or live job lifecycle.
 
 ## Next Safe Action
 
-Keep the BytePlus implementation and regressions green. Once a ModelArk API key
-is configured in the Story Auto process, run the zero-cost list-tasks preflight;
-if it passes, execute exactly one 4-second 480p Stage B fixture through Story
-Auto, retain task/result/hash evidence, then prove manual acceptance and the
-existing render contract. Do not fall back to a browser provider to bypass the
-credential blocker.
+Keep the BytePlus implementation and regressions green as the stable fallback.
+Next, authenticate one Elyum Free account and perform only read-only
+account/model/estimate checks first. If the real account confirms the advertised
+free balance, Seedance 2.5 availability, durable job contract and idempotent
+create semantics, implement one narrow Elyum adapter and execute at most one
+short 480p Stage B probe. If Elyum fails the stability/runtime gate, discard that
+path and return to BytePlus; do not fall back to browser/UI automation. Pollo
+remains deferred until its API wallet itself proves usable free credit.

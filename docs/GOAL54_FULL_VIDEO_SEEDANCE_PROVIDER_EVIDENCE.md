@@ -203,9 +203,79 @@ First-party references retained for future verification:
 - https://github.com/byteplus-sa/modelark-mcp/blob/main/docs/api-reference.md
 - https://docs.byteplus.com/en/docs/Byteplus_LAS/video_gen_enhanced
 
+### Free + stable API verification — 2026-09-12
+
+The free-first question was re-opened after confirming that BytePlus ModelArk is
+a stable first-party API baseline but does not publish a standard free Seedance
+2.5 API quota.
+
+**Pollo API**
+
+- Stability gate: PASS at documentation level. Pollo documents API-key auth,
+  async `taskId`, `waiting/processing/succeed/failed` states, GET status polling,
+  deterministic result URLs, and signed HMAC-SHA256 webhooks.
+- Seedance 2.5 availability through Pollo API is explicitly advertised.
+- Free-credit verification: NOT PROVEN for the API wallet. Pollo's consumer
+  Seedance 2.5 page gives new users limited free credits, while the separate API
+  pricing surface uses its own top-up balance. Official sources located in this
+  pass do not state a guaranteed free API credit amount or that consumer free
+  credits transfer to the API balance.
+- Verdict: `STABLE_API / FREE_API_UNVERIFIED`. Do not implement Pollo as the
+  free-first route until the API console itself proves usable free balance.
+
+**Elyum**
+
+- Free-credit verification: PASS at official documentation level. Elyum states
+  Free starts with 150 credits, no card required, and the same balance is used by
+  Web Studio, MCP and REST.
+- Seedance 2.5 is listed at 4–30 seconds, up to 1080p, with current 480p pricing
+  around 9 credits/second; the free balance is therefore enough for multiple
+  short 480p acceptance probes if the account receives the advertised balance.
+- Stability gate: PASS at documentation level. Elyum's official MCP/REST docs
+  expose durable `jobId`, job-status/wait operations, API-key/OAuth auth, a daily
+  credit cap, and `clientRef` idempotency on create operations. The create flow
+  therefore has stronger duplicate-dispatch protection than a browser route.
+- Billing safety: generation holds credits but does not charge until KEEP; KILL
+  refunds the hold; failed generations are documented as uncharged. Free-plan
+  kill allowance is limited, so acceptance probes should avoid unnecessary
+  rerolls.
+- Verdict: `FREE_STABLE_API_CANDIDATE_HIGH`. This is now the first candidate to
+  preflight for a free Stage B path, while BytePlus remains the first-party
+  stable fallback/baseline.
+
+**AdSkull**
+
+- Free-credit verification: PASS at official marketing/documentation level: 50
+  signup credits, no card, explicitly usable through the public API/MCP for one
+  4-second 480p Seedance 2.5 clip.
+- Stability evidence is weaker than Elyum in the public material located in this
+  pass: public API/MCP availability is stated, but a concrete documented task
+  lifecycle/idempotency contract was not located.
+- Free output is described as a watermarked preview and free plan has no
+  commercial rights; this makes it useful for connectivity/model validation but
+  weaker as a production route.
+- Verdict: `FREE_API_CANDIDATE_MEDIUM`; keep behind Elyum until task/retry
+  semantics are documented or directly proven.
+
+Official references used in this verification:
+
+- https://docs.pollo.ai/quick-start
+- https://docs.pollo.ai/task/get-task-status
+- https://docs.pollo.ai/webhooks
+- https://api.pollo.ai/pricing
+- https://pollo.ai/m/seedance-2-5
+- https://elyum.ai/models/seedance-2-5
+- https://elyum.ai/pricing
+- https://elyum.ai/docs/mcp
+- https://adskull.io/en/free/seedance-2-5
+
 ### Next safe action
 
-Configure a ModelArk API key in the Story Auto process, rerun the zero-generation
-list-tasks preflight, and only if it passes submit one 4-second 480p Stage B
-fixture through Story Auto. Do not substitute a browser provider for this direct
-credential blocker.
+Keep the existing BytePlus adapter unchanged as the stable first-party baseline.
+Before adding another production adapter, create an Elyum Free account/API key
+and run read-only account/model/estimate checks through its documented API/MCP
+surface. Only if the real account confirms the advertised 150-credit balance,
+Seedance 2.5 availability, job identity and idempotent create contract should
+Story Auto implement one narrow Elyum Stage B adapter and spend at most one short
+480p probe. Pollo remains deferred until its API wallet itself proves free
+credits; do not infer API free quota from consumer-web credits.
