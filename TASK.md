@@ -176,13 +176,21 @@ multi-scene Full Video fixture.
 
 Keep the BytePlus implementation and regressions green as the stable fallback.
 Use `docs/GOAL54_SHOT_RECIPE_EXPERIMENT_V1.md` as the bounded cinematic research
-contract. The research-only Elyum adapter is now implemented under
+contract. The research-only Elyum adapter is implemented under
 `story_auto/providers/elyum_seedance/` without changing product routing. It
 supports free reference upload, live estimate, idempotent make-video with stable
 `clientRef`, durable research ledger `jobId`, same-job wait/resume, and explicit
-keep/kill decisions; no automatic Credit spend exists. Focused + production-path
-regression passes 58/58 tests plus JS syntax/diff checks. Next prepare one fixed
-character/reference fixture and re-estimate immediately before R1. Dispatch R1
-only if the live Fast-I2V quote remains within the 44-Credit bound. BytePlus
+keep/kill decisions; no automatic Credit spend exists. Pre-dispatch gate passes
+63/63 tests plus JS syntax/diff checks. The deterministic R1 character fixture
+was generated outside Git at SHA-256
+`31ca872d7b608dee61db0f0bdc753e4acaf659c428706ff7da88dfee98c3e531`
+and uploaded successfully through `elyum_upload` (documented free).
+
+First R1 preview attempt returned `PROVIDER_TRANSIENT` before dispatch: the
+research ledger remained `PRE_DISPATCH` with durable `clientRef` and no
+`balance_before`, `estimate_credits`, `job_id` or `gen_id`, so no video job or
+Credit hold is evidenced. A subsequent read-only recheck PASS confirmed Free
+balance 150, kills left 1, and Fast I2V 4s quote 44 Credits. Retry must reuse the
+same durable `clientRef`; do not create a new experiment identity. BytePlus
 remains the stable production fallback; Pollo stays deferred until its API wallet
 itself proves usable free credit.

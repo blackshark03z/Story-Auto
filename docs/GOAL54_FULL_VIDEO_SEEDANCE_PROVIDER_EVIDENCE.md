@@ -305,12 +305,20 @@ Live MCP schema evidence adds:
 - `elyum_upload` accepts URL or base64 image/video and returns a provider media
   URL; provider description marks upload as free.
 
-Research-only adapter implementation is now present under
+Research-only adapter implementation is present under
 `story_auto/providers/elyum_seedance/` and is intentionally not wired into
 production routing. The durable experiment ledger persists the stable
 `clientRef` before dispatch, persists `jobId` before waiting, resumes known jobs
 without another make call, and converts an uncertain create response into a
 same-`clientRef` replay path. Keep/kill remain separate explicit operations.
-Focused plus production-boundary regression: 58/58 PASS, JS syntax PASS, diff
-check PASS. Next safe action is selecting one fixed existing reference fixture,
-re-estimating Fast I2V, then dispatching at most R1 under the 44-Credit bound.
+Pre-dispatch regression reached 63/63 PASS plus JS syntax/diff checks.
+
+R1 fixture is deterministic synthetic 1280x720 PNG with SHA-256
+`31ca872d7b608dee61db0f0bdc753e4acaf659c428706ff7da88dfee98c3e531`.
+`elyum_upload` returned a provider media reference and no Credit consequence was
+reported. The first R1 preview invocation failed with `PROVIDER_TRANSIENT` while
+the ledger was still `PRE_DISPATCH`: durable `clientRef` existed, but there was
+no `balance_before`, estimate, `job_id` or `gen_id`, establishing pre-dispatch
+failure for this attempt. A later read-only preflight PASS reconfirmed balance
+150 and Fast I2V 4s estimate 44 Credits. The next dispatch attempt must reuse the
+same ledger/clientRef and remain capped at 44 Credits; no new identity is allowed.
