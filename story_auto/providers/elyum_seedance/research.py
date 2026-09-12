@@ -115,11 +115,18 @@ def run_experiment_preview(ledger_path: Path | str, *, recipe_id: str, prompt: s
                 "job_id": entry.get("job_id"), "gen_id": entry.get("gen_id")}
 
     if not isinstance(entry.get("job_id"), str):
+        balance = client.account_balance()
         estimate = client.estimate_video(model=model, duration=int(duration), mode="i2v")
+        entry["balance_before"] = balance
         entry["estimate_credits"] = estimate
         entry["estimated_at"] = _now()
         entry["updated_at"] = _now()
         atomic_write_json(ledger_path, ledger)
+        if balance < estimate:
+            entry.update({"status": "BLOCKED_BALANCE", "failure_class": "INSUFFICIENT_CREDIT_BALANCE", "updated_at": _now()})
+            atomic_write_json(ledger_path, ledger)
+            return {"status": "BLOCKED_BALANCE", "recipe_id": recipe_id, "balance": balance,
+                    "estimate_credits": estimate, "client_ref": client_ref}
         if max_credits is not None and estimate > int(max_credits):
             entry.update({"status": "BLOCKED_COST", "failure_class": "ESTIMATE_EXCEEDS_BOUND", "updated_at": _now()})
             atomic_write_json(ledger_path, ledger)
@@ -174,7 +181,8 @@ def run_experiment_preview(ledger_path: Path | str, *, recipe_id: str, prompt: s
     return {"status": entry["status"], "recipe_id": recipe_id, "job_id": job_id,
             "client_ref": client_ref, "gen_id": entry.get("gen_id"),
             "preview_urls": list(entry.get("preview_urls") or []),
-            "estimate_credits": entry.get("estimate_credits")}
+            "estimate_credits": entry.get("estimate_credits"),
+            "balance_before": entry.get("balance_before")}
 
 
 def keep_experiment_preview(ledger_path: Path | str, *, recipe_id: str,

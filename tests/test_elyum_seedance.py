@@ -24,6 +24,8 @@ class _FakeSession:
     def call_tool(self, name, arguments=None):
         arguments = dict(arguments or {})
         self.calls.append((name, arguments))
+        if name == "elyum_account":
+            return {"plan": "Free", "balance": 150, "killsLeft": 1}
         if name == "elyum_estimate":
             return {"credits": 44, "model": arguments.get("model")}
         if name == "elyum_upload":
@@ -109,7 +111,7 @@ class ElyumResearchLedgerTests(unittest.TestCase):
         self.assertEqual((stored["job_id"], stored["gen_id"], stored["estimate_credits"]),
                          ("gen_job_001", "gen_result_001", 44))
         names = [name for name, _ in session.calls]
-        self.assertEqual(names, ["elyum_estimate", "elyum_make_video", "elyum_wait"])
+        self.assertEqual(names, ["elyum_account", "elyum_estimate", "elyum_make_video", "elyum_wait"])
         self.assertNotIn("elyum_keep", names)
         self.assertNotIn("elyum_kill", names)
 
@@ -164,7 +166,26 @@ class ElyumResearchLedgerTests(unittest.TestCase):
                 model="seedance-2-fast-i2v", max_credits=43,
             )
         self.assertEqual(result["status"], "BLOCKED_COST")
-        self.assertEqual([name for name, _ in session.calls], ["elyum_estimate"])
+        self.assertEqual([name for name, _ in session.calls], ["elyum_account", "elyum_estimate"])
+
+    def test_insufficient_live_balance_blocks_before_make_video(self):
+        session = _FakeSession()
+        original = session.call_tool
+        def low_balance(name, arguments=None):
+            if name == "elyum_account":
+                session.calls.append((name, dict(arguments or {})))
+                return {"balance": 20, "plan": "Free"}
+            return original(name, arguments)
+        session.call_tool = low_balance
+        client = ElyumSeedanceClient(key="test", session=session)
+        with tempfile.TemporaryDirectory() as root:
+            result = run_experiment_preview(
+                Path(root) / "ledger.json", recipe_id="R1", prompt="Slow push in.",
+                reference_url="https://elyum.ai/media/ref.png", client=client,
+                model="seedance-2-fast-i2v", max_credits=44,
+            )
+        self.assertEqual(result["status"], "BLOCKED_BALANCE")
+        self.assertEqual([name for name, _ in session.calls], ["elyum_account", "elyum_estimate"])
 
     def test_keep_and_kill_are_explicit_separate_operations(self):
         for decision in ("keep", "kill"):

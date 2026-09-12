@@ -236,6 +236,13 @@ class ElyumSeedanceClient:
             raise ElyumSeedanceError("CREDENTIAL_MISSING")
         return self.session.call_tool(name, arguments or {})
 
+    def account_balance(self) -> int:
+        payload = self._call("elyum_account", {})
+        balance = _find_first(payload, {"balance", "credits", "creditbalance", "credit_balance"})
+        if isinstance(balance, bool) or not isinstance(balance, (int, float)):
+            raise ElyumSeedanceError("ACCOUNT_BALANCE_INVALID")
+        return int(balance)
+
     def estimate_video(self, *, model: str, duration: int, mode: str) -> int:
         if mode not in {"t2v", "i2v", "ugc", "clone"}:
             raise ElyumSeedanceError("MODE_UNSUPPORTED", mode)
