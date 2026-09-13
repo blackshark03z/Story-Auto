@@ -332,4 +332,12 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - X2 is `KEPT` on Elyum: `gen_id=g_d59e88f0244b0717a1b29da6`.
 - Evidence: `docs/GOAL54_X2_KEEP_EVIDENCE.md`.
 - X2 is the promoted continuity baseline after X1C; do not redispatch X2.
-- Next: bind clean X2 output provenance and plan X3 in-repo before any new provider effect.
+- Clean X2 provenance is now bound and the X3 plan is locked in-repo.
+
+## Goal 54 X3 pre-dispatch checkpoint
+- Evidence: `docs/GOAL54_X3_PRE_DISPATCH_EVIDENCE.md`.
+- Clean X2 SHA-256: `a70f90bdd0e96ee7d28d1b154c6edf4692f44bec67e6ec2395fd3511f5816e47`.
+- X3 continuity frame at 3.500000 s SHA-256: `5edaecf148914b1230ecf4d3bc0a7f1f80b513cdda9cd71a835471c3e15480ef`.
+- X3 exact prompt SHA-256: `8e062a316c0bf5aa329f9baa1cb17f89b892a88d5c72f349c542645011c7f68c`.
+- Fresh Elyum read-only preflight PASS: balance `50`, estimate `44`, model `seedance-2-fast-i2v`, `4s`, `480p`.
+- Exactly one X3 preview may be dispatched after this checkpoint is committed and pushed; same-job recovery only; no automatic Keep/Kill.
