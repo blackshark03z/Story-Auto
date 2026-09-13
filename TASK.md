@@ -350,4 +350,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Recovery preserved the single provider job across transient waits; no redispatch, Keep, or Kill occurred.
 - Technical/provenance verification is complete. Owner visual review against `docs/GOAL54_X3_PLAN.md` is the next acceptance oracle; no later experiment is authorized yet.
 
-- Assistant visual review of the exact uploaded locked preview: PASS_WITH_MINOR_DRIFT; owner decision pending. No Keep/Kill authorized yet. Evidence: docs/GOAL54_X3_PREVIEW_EVIDENCE.md.
+- Assistant visual review of the exact uploaded locked preview: `PASS_WITH_MINOR_DRIFT`; the Owner then explicitly approved X3.
+
+## Goal 54 X3 Keep checkpoint
+- X3 is `KEPT`: `job_id=cos_leYmn4yuIWZosURXvTRbUo:90981d0a-4963-45f6-8547-22cded994c38`, `gen_id=g_a18de93d00316ba4dbbe32ba`.
+- Keep evidence: `docs/GOAL54_X3_KEEP_EVIDENCE.md`.
+- Clean kept X3 SHA-256: `8da1d34734f83d8131812f619490b6c0a358948d7e9a9cbc8518883fac24976f`.
+- X1C → X2 → X3 is now a completed bounded `RESEARCH_CANDIDATE` chain; do not auto-promote it into production routing from one passing chain.
+- Next safe step is repeatability qualification planning. No X4 or other provider generation is authorized by this checkpoint.
