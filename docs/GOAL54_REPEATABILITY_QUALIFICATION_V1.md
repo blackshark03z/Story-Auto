@@ -74,6 +74,9 @@ Before each repeat:
 
 The last verified balance before X3 Keep was 50 and X3 Keep quote was 20. A fresh live balance read is mandatory; do not infer authorization from arithmetic.
 
+### Credential-pool rule
+The Elyum key file may contain multiple non-empty credentials, one per line. Qualification tooling must preflight each slot independently without printing credentials, select only a slot whose live balance covers the current quote, and persist the non-secret `credential_slot` with the durable experiment entry. Same-job resume/status/Keep/Kill must reuse that persisted slot. Never merge credential text, log it, or infer that one slot's balance applies to another.
+
 ## Separation from robustness
 After repeatability passes, robustness/generalization may be tested separately with changed continuity frames, motion classes or scene conditions. Do not mix that question into this qualification.
 

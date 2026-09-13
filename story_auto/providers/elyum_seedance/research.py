@@ -82,11 +82,19 @@ def run_experiment_preview(ledger_path: Path | str, *, recipe_id: str, prompt: s
                            reference_url: str, client: ElyumSeedanceClient,
                            model: str, duration: int = 4, aspect_ratio: str = "16:9",
                            resolution: str = "480p", max_credits: int | None = None,
-                           wait_seconds: int = 50) -> dict[str, Any]:
+                           wait_seconds: int = 50, credential_slot: int | None = None) -> dict[str, Any]:
     """Create or resume one preview without ever keeping/killing it automatically."""
     ledger_path = Path(ledger_path)
     ledger = _load(ledger_path)
     entry = _entry(ledger, recipe_id)
+    observed_slot = entry.get("credential_slot")
+    if credential_slot is not None:
+        if observed_slot not in {None, credential_slot}:
+            raise ElyumSeedanceError("EXPERIMENT_CREDENTIAL_SLOT_MISMATCH")
+        if observed_slot is None:
+            entry["credential_slot"] = credential_slot
+            entry["updated_at"] = _now()
+            atomic_write_json(ledger_path, ledger)
     identity = {
         "recipe_id": recipe_id,
         "prompt": prompt,

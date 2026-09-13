@@ -383,3 +383,10 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Current Full Video production is BytePlus prompt-only T2V with provider-specific durable task recovery; Goal 54's accepted research method is Elyum I2V with an exact continuity frame, cost preflight and explicit consequence semantics.
 - Elyum therefore is not a drop-in provider-string replacement. If repeatability later qualifies it, integration requires a capability-aware provider contract plus a shot-to-shot continuity-reference lifecycle while preserving BytePlus behavior.
 - No Elyum production routing, provider selector, or production adapter promotion is authorized until RQ1 and RQ2 both pass and the method reaches `REPEATABILITY_QUALIFIED`.
+
+## Goal 54 Elyum credential-pool checkpoint
+- The Elyum research tooling supports a multiline credential pool without logging credential contents.
+- Read-only preflight can inspect every non-empty slot and returns only sanitized slot index, account balance, estimate, and provider metadata.
+- RQ1 must select a slot only when its own live balance covers the quote; no cross-account balance inference is allowed.
+- The chosen non-secret `credential_slot` is persisted in the experiment ledger so same-job recovery and any later explicit consequence reuse the same provider account.
+- Targeted Elyum regression: `12 passed`; Python compile and `git diff --check` PASS before commit.

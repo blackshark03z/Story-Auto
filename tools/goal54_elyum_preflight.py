@@ -285,6 +285,10 @@ def run_preflight(key: str, *, endpoint: str = DEFAULT_ENDPOINT, model: str = "s
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Elyum MCP preflight; never generates or spends credits.")
     parser.add_argument("--key-file", required=True, type=Path)
+    parser.add_argument("--key-index", type=int, default=None,
+                        help="1-based credential slot for a multiline key pool.")
+    parser.add_argument("--all-keys", action="store_true",
+                        help="Preflight every non-empty credential slot and print sanitized results only.")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--model", default="seedance-2-mini")
     parser.add_argument("--duration", type=int, default=4)
@@ -295,31 +299,41 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        key = args.key_file.read_text(encoding="utf-8").strip()
+        keys = [line.strip() for line in args.key_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     except OSError:
         print(json.dumps({"status": "BLOCKED", "reason_code": "KEY_FILE_UNREADABLE"}, sort_keys=True))
         return 2
-    if not key:
+    if not keys:
         print(json.dumps({"status": "BLOCKED", "reason_code": "KEY_EMPTY"}, sort_keys=True))
         return 2
 
-    try:
-        result = run_preflight(key, endpoint=args.endpoint, model=args.model,
-                               duration=args.duration, resolution=args.resolution, timeout=args.timeout)
-    except PreflightError as error:
-        # Never print provider bodies or the credential. Failure classes only.
-        print(json.dumps({"status": "FAIL", "reason_code": str(error)}, sort_keys=True))
-        return 1
-    finally:
-        key = ""
-    if args.summary_only:
-        result = {
-            "status": result.get("status"),
-            "account": result.get("account", {}),
-            "estimate": result.get("estimate", {}),
-            "protocol_version": result.get("protocol_version"),
-            "server": result.get("server", {}),
-        }
+    def one(slot: int, key: str) -> dict[str, Any]:
+        try:
+            value = run_preflight(key, endpoint=args.endpoint, model=args.model,
+                                  duration=args.duration, resolution=args.resolution, timeout=args.timeout)
+        except PreflightError as error:
+            return {"key_index": slot, "status": "FAIL", "reason_code": str(error)}
+        if args.summary_only:
+            value = {
+                "status": value.get("status"),
+                "account": value.get("account", {}),
+                "estimate": value.get("estimate", {}),
+                "protocol_version": value.get("protocol_version"),
+                "server": value.get("server", {}),
+            }
+        return {"key_index": slot, **value}
+
+    if args.all_keys:
+        results = [one(index, key) for index, key in enumerate(keys, 1)]
+        status = "PASS" if any(item.get("status") == "PASS" for item in results) else "BLOCKED"
+        print(json.dumps({"status": status, "key_count": len(keys), "keys": results}, ensure_ascii=True, sort_keys=True))
+        return 0 if status == "PASS" else 2
+
+    slot = args.key_index or 1
+    if slot < 1 or slot > len(keys):
+        print(json.dumps({"status": "BLOCKED", "reason_code": "KEY_INDEX_INVALID", "key_count": len(keys)}, sort_keys=True))
+        return 2
+    result = one(slot, keys[slot - 1])
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0 if result.get("status") == "PASS" else 2
 

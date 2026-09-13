@@ -54,14 +54,16 @@ def confirmation_failure(action: str, *, confirm_dispatch: bool, confirm_spend: 
     return None
 
 
-def _load_key(path: Path) -> str:
+def _load_key(path: Path, key_index: int = 1) -> str:
     try:
-        value = path.read_text(encoding="utf-8").strip()
+        values = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     except OSError as error:
         raise ElyumSeedanceError("KEY_FILE_UNREADABLE") from error
-    if not value:
+    if not values:
         raise ElyumSeedanceError("KEY_EMPTY")
-    return value
+    if key_index < 1 or key_index > len(values):
+        raise ElyumSeedanceError("KEY_INDEX_INVALID")
+    return values[key_index - 1]
 
 
 def _safe_show(path: Path, recipe_id: str) -> dict[str, Any]:
@@ -74,7 +76,7 @@ def _safe_show(path: Path, recipe_id: str) -> dict[str, Any]:
         return {"status": "NOT_STARTED", "recipe_id": recipe_id}
     allowed = {
         key: entry[key] for key in (
-            "recipe_id", "status", "identity_sha256", "client_ref", "provider",
+            "recipe_id", "status", "identity_sha256", "client_ref", "provider", "credential_slot",
             "reference", "settings", "balance_before", "estimate_credits",
             "job_id", "provider_execution_state", "gen_id", "preview_urls",
             "failure_class", "download_urls", "kill_reason", "created_at",
@@ -88,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bounded Elyum Goal 54 experiment runner.")
     parser.add_argument("action", choices=("show", "prepare", "preview", "resume", "keep", "kill"))
     parser.add_argument("--key-file", type=Path)
+    parser.add_argument("--key-index", type=int, default=None,
+                        help="1-based credential slot. Resume/Keep/Kill reuse the slot persisted by Preview when omitted.")
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--recipe-id", default="R1")
     parser.add_argument("--reference-file", type=Path)
@@ -122,7 +126,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        key = _load_key(args.key_file)
+        key_index = args.key_index
+        if key_index is None and args.action in {"resume", "keep", "kill"}:
+            observed = _safe_show(args.ledger, args.recipe_id)
+            stored_slot = observed.get("credential_slot")
+            if isinstance(stored_slot, int) and not isinstance(stored_slot, bool):
+                key_index = stored_slot
+        key_index = key_index or 1
+        key = _load_key(args.key_file, key_index)
         client = ElyumSeedanceClient(key=key)
         if args.action in {"prepare", "preview"}:
             if args.reference_file is None:
@@ -146,6 +157,7 @@ def main(argv: list[str] | None = None) -> int:
                     resolution=args.resolution,
                     max_credits=args.max_credits,
                     wait_seconds=args.wait_seconds,
+                    credential_slot=key_index,
                 )
         elif args.action == "resume":
             result = resume_experiment_preview(
