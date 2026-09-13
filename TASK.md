@@ -370,3 +370,10 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - RQ2 is not authorized until RQ1 locked preview has been provenance-bound and visually reviewed against the X3 rubric.
 - Repeatability may promote only when RQ1 and RQ2 each reach `PASS` or `PASS_WITH_MINOR_DRIFT` with zero critical failures and zero quality redispatches.
 - Locked preview is sufficient for repeatability evidence. Keep/Kill remains a separate explicit Owner consequence and is not required for qualification.
+
+## Goal 54 RQ1 budget checkpoint
+- Fresh read-only Elyum preflight after the qualification plan was pushed: balance `30`, estimate `44`, model `seedance-2-fast-i2v`, `4s`, `480p`.
+- RQ1 is `BLOCKED_BUDGET` because `30 < 44`; no provider generation was dispatched.
+- Evidence: `docs/GOAL54_RQ1_BUDGET_BLOCK_EVIDENCE.md`.
+- Do not weaken the frozen X3 inputs/settings to fit budget. RQ1 remains `NOT_STARTED` until a future fresh preflight covers the exact contract.
+- RQ2 remains unauthorized and the method remains `RESEARCH_CANDIDATE`, not `REPEATABILITY_QUALIFIED`.
