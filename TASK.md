@@ -358,3 +358,15 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Clean kept X3 SHA-256: `8da1d34734f83d8131812f619490b6c0a358948d7e9a9cbc8518883fac24976f`.
 - X1C → X2 → X3 is now a completed bounded `RESEARCH_CANDIDATE` chain; do not auto-promote it into production routing from one passing chain.
 - Next safe step is repeatability qualification planning. No X4 or other provider generation is authorized by this checkpoint.
+
+## Goal 54 repeatability qualification checkpoint
+- Plan: `docs/GOAL54_REPEATABILITY_QUALIFICATION_V1.md`.
+- Baseline X3 is `KEPT` / `RESEARCH_CANDIDATE`: `gen_id=g_a18de93d00316ba4dbbe32ba`.
+- Frozen source-frame SHA-256: `5edaecf148914b1230ecf4d3bc0a7f1f80b513cdda9cd71a835471c3e15480ef`.
+- Frozen prompt SHA-256: `8e062a316c0bf5aa329f9baa1cb17f89b892a88d5c72f349c542645011c7f68c`.
+- Qualification consists of at most two independent provider samples, `RQ1` then `RQ2`, using the exact same source frame, prompt, model, duration, resolution, aspect ratio and audio setting as X3.
+- No prompt/source tuning between X3, RQ1 and RQ2; no visual-quality redispatch; no RQ3 rescue run.
+- Each repeat requires a fresh read-only Elyum balance/estimate preflight immediately before dispatch; quote must be `<=44` and live balance must cover it.
+- RQ2 is not authorized until RQ1 locked preview has been provenance-bound and visually reviewed against the X3 rubric.
+- Repeatability may promote only when RQ1 and RQ2 each reach `PASS` or `PASS_WITH_MINOR_DRIFT` with zero critical failures and zero quality redispatches.
+- Locked preview is sufficient for repeatability evidence. Keep/Kill remains a separate explicit Owner consequence and is not required for qualification.
