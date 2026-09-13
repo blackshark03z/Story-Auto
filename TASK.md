@@ -377,3 +377,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Evidence: `docs/GOAL54_RQ1_BUDGET_BLOCK_EVIDENCE.md`.
 - Do not weaken the frozen X3 inputs/settings to fit budget. RQ1 remains `NOT_STARTED` until a future fresh preflight covers the exact contract.
 - RQ2 remains unauthorized and the method remains `RESEARCH_CANDIDATE`, not `REPEATABILITY_QUALIFIED`.
+
+## Goal 54 production-integration readiness checkpoint
+- Planning-only integration analysis is recorded at `docs/GOAL54_PRODUCTION_INTEGRATION_READINESS_PLAN_V1.md`; production routing is unchanged.
+- Current Full Video production is BytePlus prompt-only T2V with provider-specific durable task recovery; Goal 54's accepted research method is Elyum I2V with an exact continuity frame, cost preflight and explicit consequence semantics.
+- Elyum therefore is not a drop-in provider-string replacement. If repeatability later qualifies it, integration requires a capability-aware provider contract plus a shot-to-shot continuity-reference lifecycle while preserving BytePlus behavior.
+- No Elyum production routing, provider selector, or production adapter promotion is authorized until RQ1 and RQ2 both pass and the method reaches `REPEATABILITY_QUALIFIED`.
