@@ -340,4 +340,12 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - X3 continuity frame at 3.500000 s SHA-256: `5edaecf148914b1230ecf4d3bc0a7f1f80b513cdda9cd71a835471c3e15480ef`.
 - X3 exact prompt SHA-256: `8e062a316c0bf5aa329f9baa1cb17f89b892a88d5c72f349c542645011c7f68c`.
 - Fresh Elyum read-only preflight PASS: balance `50`, estimate `44`, model `seedance-2-fast-i2v`, `4s`, `480p`.
-- Exactly one X3 preview may be dispatched after this checkpoint is committed and pushed; same-job recovery only; no automatic Keep/Kill.
+- Exactly one X3 preview was dispatched after this checkpoint was pushed; same-job recovery only was used; no automatic Keep/Kill occurred.
+
+## Goal 54 X3 preview checkpoint
+- Evidence: `docs/GOAL54_X3_PREVIEW_EVIDENCE.md`.
+- X3 is `PREVIEW_READY` on Elyum: `job_id=cos_leYmn4yuIWZosURXvTRbUo:90981d0a-4963-45f6-8547-22cded994c38`, `gen_id=g_a18de93d00316ba4dbbe32ba`.
+- Locked preview SHA-256: `8c916375cf3ab76b22dbf69da1e1749a9425396632c0c6696ade185be3ca518b`.
+- Contact-sheet SHA-256: `718a2a167f540d46e9b92866112ee7757fe69817223cf361ace4d9353655aeee`.
+- Recovery preserved the single provider job across transient waits; no redispatch, Keep, or Kill occurred.
+- Technical/provenance verification is complete. Owner visual review against `docs/GOAL54_X3_PLAN.md` is the next acceptance oracle; no later experiment is authorized yet.
