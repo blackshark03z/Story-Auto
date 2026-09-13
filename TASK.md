@@ -405,3 +405,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - RQ2 is now authorized as the second and final independent repeat using the exact frozen X3 frame, prompt, model and settings.
 - Before RQ2 dispatch, run a fresh read-only key-pool preflight and select only a credential slot whose live balance covers the current quote.
 - After RQ2 visual verdict, stop the research phase: promote to `REPEATABILITY_QUALIFIED` only if RQ2 also passes; otherwise record `NOT_REPEATABLE`. No RQ3 rescue run is allowed.
+
+## Goal 54 RQ2 pre-dispatch checkpoint
+- RQ2 frozen contract is unchanged from X3/RQ1; evidence: `docs/GOAL54_RQ2_PRE_DISPATCH_EVIDENCE.md`.
+- Fresh key-pool preflight: slot 1 balance `30`, slot 2 balance `130`, quote `44`; slot 2 is eligible.
+- First RQ2 launcher attempt returned `PROVIDER_TRANSIENT`, but sanitized ledger verification afterward showed `RQ2 = NOT_STARTED`; no durable clientRef/job/gen was created.
+- No RQ2 generation, Keep, or Kill exists yet. A retry is safe only while the ledger remains `NOT_STARTED`; after any durable job appears, same-job recovery only.
