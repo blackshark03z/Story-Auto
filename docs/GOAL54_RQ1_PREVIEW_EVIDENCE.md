@@ -1,7 +1,7 @@
 # Goal 54 — RQ1 Preview Evidence
 
 Date: 2026-09-13
-Status: PREVIEW_READY / VISUAL_REVIEW_PENDING
+Status: OWNER_APPROVED / PASS
 
 ## Qualification identity
 
@@ -58,9 +58,15 @@ Exactly one RQ1 provider generation exists. There was no visual-quality redispat
 
 The first direct Python acquisition returned HTTP 403 because the media endpoint rejected the default urllib request profile. Re-acquisition with an explicit browser-like User-Agent succeeded against the same signed preview URL; no provider generation or consequence operation was involved.
 
+## Owner visual decision
+
+The Owner explicitly approved the exact locked RQ1 preview after viewing it. RQ1 is therefore classified `PASS` for repeatability qualification. The reviewed artifact remains the exact locked preview with SHA-256 `3cdd424427c1cbf1042c7160e74529023cf90ceb5ebdab74a6a1577c9b772cd9`.
+
+This approval authorizes progression to the single final repeatability sample `RQ2`; it does not authorize Keep/Kill for RQ1 and does not authorize any RQ3 rescue run.
+
 ## Acceptance boundary
 
-Technical/provenance acceptance is complete. RQ1 visual review must use the exact X3 rubric from `docs/GOAL54_REPEATABILITY_QUALIFICATION_V1.md`:
+Technical/provenance acceptance is complete and the Owner visual decision is `PASS`. The governing rubric remains the exact X3 rubric from `docs/GOAL54_REPEATABILITY_QUALIFICATION_V1.md`:
 
 - same adult Chinese female identity;
 - matte natural skin / low-gloss material response;
@@ -70,4 +76,4 @@ Technical/provenance acceptance is complete. RQ1 visual review must use the exac
 - faint/localized/translucent pale-blue glow;
 - no scene change, extra character, severe anatomy break, large spell effect or style shift.
 
-RQ2 remains unauthorized until RQ1 is visually classified `PASS` or `PASS_WITH_MINOR_DRIFT`. Keep/Kill is not required for repeatability qualification and remains an explicit Owner consequence only.
+RQ2 is now authorized as the one final independent repeatability sample. Keep/Kill is not required for repeatability qualification and remains an explicit Owner consequence only.

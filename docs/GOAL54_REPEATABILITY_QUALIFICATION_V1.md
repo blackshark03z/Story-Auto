@@ -1,7 +1,7 @@
 # Goal 54 — Xianxia Repeatability Qualification V1
 
 Date: 2026-09-13
-Status: LOCKED / RQ1_NOT_DISPATCHED
+Status: LOCKED / RQ1_APPROVED / RQ2_AUTHORIZED
 
 ## Baseline
 - Completed kept chain: X1C -> X2 -> X3.
@@ -61,6 +61,10 @@ Promote `RESEARCH_CANDIDATE` -> `REPEATABILITY_QUALIFIED` only when:
 - all provenance/budget gates complete.
 
 If either repeat has a critical visual failure, stop as `NOT_REPEATABLE` for the frozen X3 method. Do not create a third sample to rescue the score. If only one repeat can run because of budget, record `PARTIAL_REPEATABILITY_EVIDENCE` and do not promote.
+
+## RQ1 outcome
+
+RQ1 is `OWNER_APPROVED / PASS` on the exact locked preview SHA-256 `3cdd424427c1cbf1042c7160e74529023cf90ceb5ebdab74a6a1577c9b772cd9`. Exactly one RQ1 generation was created, with no quality redispatch and no Keep/Kill. RQ2 is therefore authorized as the second and final independent sample under this frozen contract.
 
 ## Budget / consequence gate
 Before each repeat:

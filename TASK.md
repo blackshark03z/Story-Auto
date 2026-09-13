@@ -397,4 +397,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Exactly one provider generation was dispatched. A pre-dispatch transient occurred before any RQ1 ledger entry; after the durable job existed, recovery used only same-job status/resume.
 - Locked preview SHA-256: `3cdd424427c1cbf1042c7160e74529023cf90ceb5ebdab74a6a1577c9b772cd9`; contact-sheet SHA-256: `058fe2c02431c42fad3981640c7973028cd3941caf37fd0e8f015d415456acf9`.
 - Evidence: `docs/GOAL54_RQ1_PREVIEW_EVIDENCE.md`.
-- Technical/provenance verification is complete. Visual review against the frozen X3 rubric is next; RQ2 remains unauthorized until RQ1 passes. No Keep/Kill was executed.
+- Technical/provenance verification is complete. The Owner reviewed the exact locked preview and approved RQ1 as `PASS`. No Keep/Kill was executed.
+
+## Goal 54 RQ1 approval / RQ2 authorization checkpoint
+- RQ1 is `OWNER_APPROVED / PASS` on locked preview SHA-256 `3cdd424427c1cbf1042c7160e74529023cf90ceb5ebdab74a6a1577c9b772cd9`.
+- RQ1 required exactly one provider generation and zero quality redispatches; Keep/Kill remains unnecessary for repeatability.
+- RQ2 is now authorized as the second and final independent repeat using the exact frozen X3 frame, prompt, model and settings.
+- Before RQ2 dispatch, run a fresh read-only key-pool preflight and select only a credential slot whose live balance covers the current quote.
+- After RQ2 visual verdict, stop the research phase: promote to `REPEATABILITY_QUALIFIED` only if RQ2 also passes; otherwise record `NOT_REPEATABLE`. No RQ3 rescue run is allowed.
