@@ -1,7 +1,7 @@
 # Goal 54 — X3 Preview Evidence
 
 Date: 2026-09-13
-Status: TECHNICAL_VERIFIED / VISUAL_UNVERIFIED
+Status: TECHNICAL_VERIFIED / ASSISTANT_VISUAL_PASS_WITH_MINOR_DRIFT / OWNER_DECISION_PENDING
 
 ## Locked baseline
 
@@ -70,3 +70,20 @@ Technical/provenance acceptance is complete. Visual acceptance is intentionally 
 - no scene change, extra character, anatomy break, large spell effect, or style shift.
 
 Do not Keep or Kill X3 automatically. No later experiment is authorized by this evidence alone.
+## Assistant visual review of Owner-uploaded locked preview
+
+The Owner uploaded a copy of the X3 locked preview for review. The uploaded bytes were independently verified as the exact locked preview above: SHA-256 `8c916375cf3ab76b22dbf69da1e1749a9425396632c0c6696ade185be3ca518b`, 97 frames, 4.041667 s.
+
+Verdict: `PASS_WITH_MINOR_DRIFT` for the bounded X3 research objective.
+
+- identity/face remains stable across the clip with no obvious age/face reshape drift;
+- matte/subdued skin, fabric, wood and environment response remains consistent enough with the accepted continuity direction;
+- pavilion, mountains, mist, waterfall/dawn composition remain stable and there is no scene replacement;
+- camera is effectively locked for the shot objective;
+- the single hand raise is readable and anatomically coherent enough across the motion;
+- the pale-blue spiritual effect stays localized to the raised hand and does not expand into a scene-wide aura;
+- no extra character, hard cut, combat action, large spell effect or material/style collapse is visible.
+
+Minor drift: the blue glow becomes somewhat stronger than the word `faint` near the end, and the raised-hand/finger rendering is slightly simplified in the final phase, but neither crosses the current X3 rejection threshold.
+
+This assistant review is not Owner approval and does not authorize Keep/Kill. X3 remains locked until the Owner explicitly approves or rejects it.
