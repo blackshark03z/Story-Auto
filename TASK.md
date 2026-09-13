@@ -410,4 +410,14 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - RQ2 frozen contract is unchanged from X3/RQ1; evidence: `docs/GOAL54_RQ2_PRE_DISPATCH_EVIDENCE.md`.
 - Fresh key-pool preflight: slot 1 balance `30`, slot 2 balance `130`, quote `44`; slot 2 is eligible.
 - First RQ2 launcher attempt returned `PROVIDER_TRANSIENT`, but sanitized ledger verification afterward showed `RQ2 = NOT_STARTED`; no durable clientRef/job/gen was created.
-- No RQ2 generation, Keep, or Kill exists yet. A retry is safe only while the ledger remains `NOT_STARTED`; after any durable job appears, same-job recovery only.
+- Historical note: at this checkpoint no RQ2 generation, Keep, or Kill existed yet. That state has now been superseded by the RQ2 preview checkpoint below.
+
+## Goal 54 RQ2 preview checkpoint
+- Evidence: `docs/GOAL54_RQ2_PREVIEW_EVIDENCE.md`.
+- RQ2 preserved the exact frozen X3/RQ1 input contract and used credential slot `2`.
+- The first create observation became `REPLAY_SAME_CLIENT_REF`; recovery reused the same durable `client_ref` and did not create a new request identity.
+- One durable provider job was established: `job_id=cos_leYmn4yuIWZosURXvTRbUo:c77849c3-d850-42e0-a9cc-f96b01affc43`.
+- A transient wait was recovered only against that same job; RQ2 is now `PREVIEW_READY` with `gen_id=g_2a349ebe471d24bb37a8e9d6`.
+- Exact local locked preview SHA-256: `56aee3514dcccca429c918f4d92e0a6768d0b09f889f29dc59fd481b58575598`; contact-sheet SHA-256: `511d5b30cc6c3decb8983c0786b32acbaa6394fd85cd4040dbbbc065c59df5bf`.
+- Technical/provenance verification is complete; no Keep/Kill occurred.
+- Repeatability is `PENDING_RQ2_VISUAL_ORACLE`. RQ1 is already `PASS`; RQ2 must independently reach `PASS` or `PASS_WITH_MINOR_DRIFT` with zero critical failures to promote the method to `REPEATABILITY_QUALIFIED`. No RQ3 rescue run is allowed.
