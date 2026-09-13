@@ -390,3 +390,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - RQ1 must select a slot only when its own live balance covers the quote; no cross-account balance inference is allowed.
 - The chosen non-secret `credential_slot` is persisted in the experiment ledger so same-job recovery and any later explicit consequence reuse the same provider account.
 - Targeted Elyum regression: `12 passed`; Python compile and `git diff --check` PASS before commit.
+
+## Goal 54 RQ1 preview checkpoint
+- RQ1 budget gate passed through credential slot `2`: live balance `150`, quote `44`; slot `1` remained insufficient at `30`.
+- RQ1 is `PREVIEW_READY`: `job_id=cos_leYmn4yuIWZosURXvTRbUo:b3afb79b-977c-4fa1-b5f7-217d9bd5ec82`, `gen_id=g_76b50dda397f41226d08fcbe`, `credential_slot=2`.
+- Exactly one provider generation was dispatched. A pre-dispatch transient occurred before any RQ1 ledger entry; after the durable job existed, recovery used only same-job status/resume.
+- Locked preview SHA-256: `3cdd424427c1cbf1042c7160e74529023cf90ceb5ebdab74a6a1577c9b772cd9`; contact-sheet SHA-256: `058fe2c02431c42fad3981640c7973028cd3941caf37fd0e8f015d415456acf9`.
+- Evidence: `docs/GOAL54_RQ1_PREVIEW_EVIDENCE.md`.
+- Technical/provenance verification is complete. Visual review against the frozen X3 rubric is next; RQ2 remains unauthorized until RQ1 passes. No Keep/Kill was executed.
