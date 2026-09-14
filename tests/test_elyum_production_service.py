@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -363,13 +364,17 @@ class ElyumProductionServiceTests(unittest.TestCase):
             authorize_elyum_replacement(self.runtime.root, "prj_elyum_prod", "req_first",
                                         reason="One bounded replacement")
         self.assertEqual(caught.exception.failure_class, "ELYUM_REPLACEMENT_CONFIRMATION_REQUIRED")
+        replacement_prompt = "Preserve identity while using readable natural body motion and facial acting."
         authorized = authorize_elyum_replacement(self.runtime.root, "prj_elyum_prod", "req_first",
-                                                 reason="One bounded replacement", confirm_replace=True)
+                                                 reason="One bounded replacement", confirm_replace=True,
+                                                 replacement_prompt=replacement_prompt)
         self.assertEqual(authorized["status"], "REPLACEMENT_AUTHORIZED")
         middle = self._manifest()["requests"][0]
         self.assertEqual((middle["provider_submissions"], len(middle["attempts"])), (1, 2))
         self.assertNotEqual(middle["attempts"][1]["client_ref"], first_ref)
         self.assertEqual(middle["attempts"][1]["replacement_of_attempt"], 1)
+        self.assertEqual(middle["attempts"][1]["prompt_override"], replacement_prompt)
+        self.assertEqual(middle["attempts"][1]["prompt_sha256"], hashlib.sha256(replacement_prompt.encode()).hexdigest())
         second_client = FakeElyumClient(make_outcomes=[("job_prod_2", {})],
                                         wait_outcomes=[{"status": "done", "genId": "gen_prod_2",
                                                        "url": "https://elyum.invalid/replacement.mp4", "unlockCredits": 20}])
@@ -382,6 +387,7 @@ class ElyumProductionServiceTests(unittest.TestCase):
         self.assertEqual(after["attempts"][1]["provider_job_id"], "job_prod_2")
         self.assertEqual(len(second_client.make_calls), 1)
         self.assertEqual(second_client.make_calls[0]["client_ref"], middle["attempts"][1]["client_ref"])
+        self.assertEqual(second_client.make_calls[0]["prompt"], replacement_prompt)
 
     def test_ambiguous_kill_is_never_retried_automatically(self):
         transient = ElyumSeedanceError("PROVIDER_TRANSIENT")

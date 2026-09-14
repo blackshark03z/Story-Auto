@@ -238,7 +238,7 @@ function fullVideoProviderSurface(snapshot) {
   } else if (provider.action === 'REACQUIRE_KEPT_OUTPUT') {
     controls = `<div class="button-row"><button class="button-primary" data-elyum-reacquire data-request-id="${esc(provider.request_id)}" type="button">Retry clean output download</button></div>`;
   } else if (provider.action === 'AUTHORIZE_REPLACEMENT') {
-    controls = `<div class="field"><label>Replacement reason<input data-elyum-replacement-reason type="text" autocomplete="off" placeholder="Why one new generation is required"></label><small>The killed attempt stays immutable. This authorizes exactly one new logical attempt.</small></div><div class="button-row"><button class="button-primary" data-elyum-replace data-request-id="${esc(provider.request_id)}" type="button">Authorize one replacement</button></div>`;
+    controls = `<div class="field"><label>Replacement reason<input data-elyum-replacement-reason type="text" autocomplete="off" placeholder="Why one new generation is required"></label><small>The killed attempt stays immutable. This authorizes exactly one new logical attempt.</small></div><div class="field"><label>Revised provider prompt<textarea data-elyum-replacement-prompt rows="10" spellcheck="false">${esc(provider.request_prompt || '')}</textarea></label><small>Edit the full prompt for the replacement attempt. Story Auto snapshots this exact text and SHA-256 into the new attempt before provider dispatch.</small></div><div class="button-row"><button class="button-primary" data-elyum-replace data-request-id="${esc(provider.request_id)}" type="button">Authorize one replacement</button></div>`;
   }
   const exact = provider.preview_sha256 ? `<details class="disclosure"><summary>Exact acceptance surface</summary><div class="technical">Preview SHA-256: ${esc(provider.preview_sha256)}${provider.selected_sha256 ? `\nSelected SHA-256: ${esc(provider.selected_sha256)}` : ''}</div></details>` : '';
   return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">FULL VIDEO PROVIDER</p><h2>${esc(provider.provider_label)}</h2><p>${esc(routing)}</p></div><span class="status-chip ${provider.owner_decision_required ? 'attention' : provider.status === 'SUCCEEDED' ? 'success' : ''}">${esc(provider.status)}</span></div><div class="choice-grid"><div class="choice"><strong>Continuation safety</strong><small>${esc(provider.continuation_behavior)}</small></div><div class="choice"><strong>Provider state</strong><small>${provider.known_job ? 'A durable provider job is already known. Continue must resume it.' : 'No durable provider job is currently bound to this request.'}</small></div>${budgetParts.length ? `<div class="choice"><strong>Budget / preflight</strong><small>${budgetParts.map(esc).join(' · ')}</small></div>` : ''}</div>${preview}${controls}${provider.action === 'RECONCILE_CONSEQUENCE' ? '<div class="attention-card"><div><strong>Consequence reconciliation required</strong><p>Story Auto will not repeat Keep or Kill automatically because the provider outcome is ambiguous.</p></div></div>' : ''}${exact}</section>`;
@@ -268,11 +268,15 @@ function bindFullVideoProviderControls() {
     await runAction('keep_elyum_preview','Retrying clean output acquisition without another Keep…',{request_id:button.dataset.requestId,confirm_spend:false});
   }));
   document.querySelectorAll('[data-elyum-replace]').forEach(button => button.addEventListener('click', async () => {
-    const input = button.closest('.surface')?.querySelector('[data-elyum-replacement-reason]');
+    const surface = button.closest('.surface');
+    const input = surface?.querySelector('[data-elyum-replacement-reason]');
+    const promptInput = surface?.querySelector('[data-elyum-replacement-prompt]');
     const reason = input?.value?.trim() || '';
+    const replacementPrompt = promptInput?.value?.trim() || '';
     if (!reason) { toast('Add a reason for the replacement attempt.',true); input?.focus(); return; }
+    if (!replacementPrompt) { toast('Add the full revised provider prompt for this replacement.',true); promptInput?.focus(); return; }
     if (!window.confirm('Authorize exactly one new provider generation for this killed rejection? The previous attempt remains immutable.')) return;
-    await runAction('authorize_elyum_replacement','Authorizing one replacement attempt…',{request_id:button.dataset.requestId,reason,confirm_replace:true});
+    await runAction('authorize_elyum_replacement','Authorizing one replacement attempt…',{request_id:button.dataset.requestId,reason,confirm_replace:true,replacement_prompt:replacementPrompt});
   }));
 }
 

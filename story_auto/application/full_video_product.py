@@ -126,6 +126,7 @@ def full_video_provider_product_view(paths, config) -> dict[str, Any] | None:
         "routing_enabled": routing_enabled,
         "routing_state": "PRODUCTION_ENABLED" if routing_enabled else "INTEGRATION_STAGED",
         "request_id": request.get("request_id") if isinstance(request, dict) else None,
+        "request_prompt": request.get("prompt") if isinstance(request, dict) else None,
         "status": status,
         "failure_class": entry.get("failure_class") if isinstance(entry, dict) else None,
         "known_job": bool(isinstance(attempt, dict) and isinstance(attempt.get("provider_job_id"), str) and attempt.get("provider_job_id")),

@@ -1233,10 +1233,11 @@ class OperatorService:
                                          confirm_kill=confirm_kill, reason=reason)
 
     def authorize_full_video_replacement(self, project_id: str, request_id: str, *, reason: str,
-                                         confirm_replace: bool) -> dict[str, Any]:
+                                         confirm_replace: bool, replacement_prompt: str | None = None) -> dict[str, Any]:
         """Authorize one explicit Elyum replacement attempt after a killed rejection."""
         return authorize_elyum_locked_replacement(self.runtime.root, project_id, request_id,
-                                                   reason=reason, confirm_replace=confirm_replace)
+                                                   reason=reason, confirm_replace=confirm_replace,
+                                                   replacement_prompt=replacement_prompt)
 
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None,
                  max_requests: int | None=None, seedance_client=None) -> dict[str, Any]:

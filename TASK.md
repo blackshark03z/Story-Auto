@@ -460,4 +460,7 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - The first live wait ended `WAIT_UNAVAILABLE`; a separate local invocation resumed only that same job and reached `PREVIEW_READY` without upload/create redispatch.
 - Live locked preview SHA-256: `a8c72a65008492638863ccfa31e0e59267e756c6d1d68a538883c0149e92a0f8`; contact sheet SHA-256: `8cfa8716c1602ba2a7de8b360684d8d8db819661f619eab8bb2d544cb96e9d91`; H.264 836x480, 24 fps, 4.041667 s.
 - Provider reports `unlock_credits=20`. Post-preview read-only preflight: slot 1 balance 30, slot 2 balance 90, quote 44. No Keep/Kill has run.
-- Exact locked preview has been opened locally. Remaining boundary is the explicit visual oracle for that exact SHA before Keep/unlock. Ordinary Elyum routing remains disabled until the live Product boundary and routing-promotion decision are accepted.
+- Exact locked preview was opened locally and Owner-rejected for stiff motion and facial expression. Canonical live state is `PREVIEW_REJECTED`; no Keep/unlock and no Kill has run.
+- Root cause: the V1 prompt over-constrained movement (`almost locked`, `mostly steady`, tiny hand motion, subtle blink only) and named historical X2 despite the production continuity snapshot being bound to the supplied X3 frame.
+- Correction SoT: `docs/GOAL54_LIVE_UAT_MOTION_ACTING_CORRECTION_V1.md`. Replacement attempts now support immutable `replacement_prompt` + SHA-256 + distinct clientRef provenance, and the UI exposes the full revised prompt before authorization.
+- Ordinary Elyum routing remains disabled. Next consequence boundary is explicit Kill of the rejected preview, then a separately authorized one-attempt V2 replacement behind a fresh balance/quote preflight.

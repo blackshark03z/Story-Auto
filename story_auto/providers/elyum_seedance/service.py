@@ -454,7 +454,8 @@ def kill_elyum_preview(runtime_root: Path | str, project_id: str, request_id: st
 
 
 def authorize_elyum_replacement(runtime_root: Path | str, project_id: str, request_id: str, *,
-                                reason: str, confirm_replace: bool = False) -> dict[str, Any]:
+                                reason: str, confirm_replace: bool = False,
+                                replacement_prompt: str | None = None) -> dict[str, Any]:
     """Authorize exactly one new logical attempt after a rejected result was killed.
 
     This boundary is provider-free. It preserves the killed attempt, copies its
@@ -478,6 +479,8 @@ def authorize_elyum_replacement(runtime_root: Path | str, project_id: str, reque
         entry = _find_entry(manifest, request_id)
         latest = _latest_attempt(entry)
         if latest.get("replacement_authorized") is True and latest.get("dispatch_confirmed") is not True:
+            if replacement_prompt is not None and latest.get("prompt_override") != replacement_prompt.strip():
+                raise ElyumProductionError("ELYUM_REPLACEMENT_PROMPT_MISMATCH")
             return {"status": latest.get("status", "REPLACEMENT_AUTHORIZED"), "project_id": project_id,
                     "request_id": request_id, "attempt": latest.get("attempt"), "idempotent": True}
         if latest.get("status") != "KILLED" or entry.get("status") != "KILLED":
@@ -499,9 +502,14 @@ def authorize_elyum_replacement(runtime_root: Path | str, project_id: str, reque
         if not isinstance(attempts, list):
             raise ElyumProductionError("GENERATION_MANIFEST_INVALID")
         number = int(latest.get("attempt") or len(attempts)) + 1
-        client_ref = f"{previous_ref}-r{number}"
+        effective_prompt = replacement_prompt.strip() if isinstance(replacement_prompt, str) else str(request.get("prompt") or "").strip()
+        if not effective_prompt:
+            raise ElyumProductionError("ELYUM_REPLACEMENT_PROMPT_INVALID")
+        prompt_sha256 = hashlib.sha256(effective_prompt.encode("utf-8")).hexdigest()
+        client_ref = f"{previous_ref}-r{number}-{prompt_sha256[:12]}"
         if len(client_ref) > 120:
-            raise ElyumProductionError("CLIENT_REF_INVALID")
+            identity = hashlib.sha256(f"{previous_ref}|{number}|{prompt_sha256}".encode("utf-8")).hexdigest()
+            client_ref = f"story-auto-replacement-{identity[:64]}"
         replacement = {
             "attempt": number, "status": "REPLACEMENT_AUTHORIZED", "started_at": _now(),
             "provider_mode": "VIDEO", "provider_model": model,
@@ -515,6 +523,8 @@ def authorize_elyum_replacement(runtime_root: Path | str, project_id: str, reque
                                   "target_duration": target_duration},
             "replacement_authorized": True, "replacement_of_attempt": latest.get("attempt"),
             "replacement_reason": reason.strip(), "replacement_authorized_at": _now(),
+            "prompt_override": effective_prompt, "prompt_sha256": prompt_sha256,
+            "source_request_prompt_sha256": hashlib.sha256(str(request.get("prompt") or "").encode("utf-8")).hexdigest(),
         }
         attempts.append(replacement)
         entry.update({"status": "REPLACEMENT_AUTHORIZED", "failure_class": None,
@@ -697,8 +707,9 @@ def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_i
                 try:
                     latest["provider_create_calls"] = int(latest.get("provider_create_calls", 0)) + 1
                     atomic_write_json(manifest_path, manifest)
+                    attempt_prompt = latest.get("prompt_override") if isinstance(latest.get("prompt_override"), str) else request.get("prompt", "")
                     job_id, _create = active.make_video(
-                        client_ref=latest["client_ref"], model=model, prompt=request.get("prompt", ""),
+                        client_ref=latest["client_ref"], model=model, prompt=attempt_prompt,
                         duration=provider_duration, mode="i2v", aspect_ratio=str(request.get("aspect_ratio") or "16:9"),
                         resolution=resolution, image_url=latest["provider_reference_url"], audio=False,
                     )

@@ -67,6 +67,7 @@ class Goal54SliceEProductSurfaceTests(unittest.TestCase):
         self.assertTrue(view["known_job"])
         self.assertEqual(view["budget"], {"balance": 110, "estimate_credits": 44, "max_credits": 44, "unlock_credits": 20})
         self.assertEqual(view["preview_sha256"], "b" * 64)
+        self.assertEqual(view["request_prompt"], self.request.get("prompt"))
         self.assertNotIn("provider_job_id", view)
         self.assertNotIn("url", str(view).lower())
 
@@ -102,7 +103,8 @@ class Goal54SliceEProductSurfaceTests(unittest.TestCase):
         text = script.read_text(encoding="utf-8")
         for token in ("fullVideoProviderSurface", "Accept exact preview", "Reject exact preview",
                       "Keep / unlock", "Kill rejected preview", "Retry clean output download",
-                      "Authorize one replacement", "confirm_spend:true", "confirm_kill:true", "confirm_replace:true"):
+                      "Authorize one replacement", "Revised provider prompt", "replacement_prompt:replacementPrompt",
+                      "confirm_spend:true", "confirm_kill:true", "confirm_replace:true"):
             self.assertIn(token, text)
 
 

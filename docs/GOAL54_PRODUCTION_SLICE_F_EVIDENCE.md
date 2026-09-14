@@ -84,10 +84,16 @@ A post-preview read-only preflight reports slot 2 balance `90` and the same 4-se
 
 The exact locked preview was opened locally for the Product visual oracle. No Keep or Kill has run.
 
+## Live V1 visual rejection / prompt correction
+
+The Owner rejected the exact locked preview SHA-256 `a8c72a65008492638863ccfa31e0e59267e756c6d1d68a538883c0149e92a0f8` because motion and facial expression were too stiff. Canonical state is now `PREVIEW_REJECTED`; no Keep/unlock and no Kill has occurred.
+
+Root-cause analysis found that the V1 prompt itself requested an almost locked camera, mostly steady torso/head, a small hand movement and only a subtle blink. The prompt also named an historical X2 step while the canonical production continuity snapshot was bound to the supplied X3 continuity frame. This is a prompt-design failure, not evidence that the provider transport/recovery lifecycle failed.
+
+Correction contract and exact V2 prompt are recorded in `docs/GOAL54_LIVE_UAT_MOTION_ACTING_CORRECTION_V1.md`. Replacement attempts now support a prompt override with immutable prompt SHA-256 and distinct clientRef provenance before provider dispatch. The UI exposes the full revised provider prompt before authorization.
+
 ## Remaining acceptance boundary
 
-Transport, identity, local acquisition and same-job recovery are now live-verified through the production adapter. The remaining Slice F boundary is the explicit visual oracle for the exact locked preview above. Do not infer Product acceptance from transport success.
+Transport, identity, local acquisition and same-job recovery are live-verified. Product visual acceptance is not. The next provider mutation, if authorized, is the explicit Kill consequence for the rejected V1 preview, followed by a separately authorized single replacement attempt using the V2 prompt and a fresh read-only balance/quote gate.
 
-If the exact preview passes, record that decision against its SHA-256, execute the explicit Keep/unlock consequence, verify/hash-bind the clean output, render the bounded final fixture, and only then evaluate the routing-promotion decision. If it fails, record rejection and follow the explicit consequence/replacement policy without automatic redispatch.
-
-Until this live boundary is closed, Elyum remains `production_enabled=false` and ordinary production routing must remain unchanged.
+Until a corrected live preview passes, Elyum remains `production_enabled=false` and ordinary production routing must remain unchanged.
