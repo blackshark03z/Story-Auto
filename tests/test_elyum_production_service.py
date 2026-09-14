@@ -13,8 +13,8 @@ from story_auto.core.full_video_continuity import FullVideoContinuityError, bind
 from story_auto.core.full_video_provider import full_video_provider_snapshot
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.elyum_seedance import ElyumSeedanceError
-from story_auto.providers.elyum_seedance.service import (ElyumProductionError, execute_elyum_generation,
-    keep_elyum_preview, kill_elyum_preview, review_elyum_preview)
+from story_auto.providers.elyum_seedance.service import (ElyumProductionError, authorize_elyum_replacement,
+    execute_elyum_generation, keep_elyum_preview, kill_elyum_preview, review_elyum_preview)
 
 
 FFMPEG = shutil.which("ffmpeg") and shutil.which("ffprobe")
@@ -349,6 +349,39 @@ class ElyumProductionServiceTests(unittest.TestCase):
                                    confirm_kill=True, reason="Rejected preview")
         self.assertTrue(again["idempotent"])
         self.assertEqual(client.kill_calls, 1)
+
+    def test_killed_rejection_requires_explicit_replacement_and_uses_new_client_ref(self):
+        client = self._preview_ready()
+        review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                             decision="REJECT", reason="Owner rejects preview")
+        kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                           confirm_kill=True, reason="Rejected preview")
+        before = self._manifest()["requests"][0]
+        first_ref = before["attempts"][0]["client_ref"]
+        self.assertEqual((before["status"], before["provider_submissions"], len(before["attempts"])), ("KILLED", 1, 1))
+        with self.assertRaises(ElyumProductionError) as caught:
+            authorize_elyum_replacement(self.runtime.root, "prj_elyum_prod", "req_first",
+                                        reason="One bounded replacement")
+        self.assertEqual(caught.exception.failure_class, "ELYUM_REPLACEMENT_CONFIRMATION_REQUIRED")
+        authorized = authorize_elyum_replacement(self.runtime.root, "prj_elyum_prod", "req_first",
+                                                 reason="One bounded replacement", confirm_replace=True)
+        self.assertEqual(authorized["status"], "REPLACEMENT_AUTHORIZED")
+        middle = self._manifest()["requests"][0]
+        self.assertEqual((middle["provider_submissions"], len(middle["attempts"])), (1, 2))
+        self.assertNotEqual(middle["attempts"][1]["client_ref"], first_ref)
+        self.assertEqual(middle["attempts"][1]["replacement_of_attempt"], 1)
+        second_client = FakeElyumClient(make_outcomes=[("job_prod_2", {})],
+                                        wait_outcomes=[{"status": "done", "genId": "gen_prod_2",
+                                                       "url": "https://elyum.invalid/replacement.mp4", "unlockCredits": 20}])
+        replacement = execute_elyum_generation(self.runtime.root, "prj_elyum_prod", run_id="run_prod",
+                                               client=second_client, dispatch_authorized=True,
+                                               preview_fetcher=self._fetch)
+        self.assertEqual(replacement["status"], "PREVIEW_READY")
+        after = self._manifest()["requests"][0]
+        self.assertEqual((after["provider_submissions"], len(after["attempts"])), (2, 2))
+        self.assertEqual(after["attempts"][1]["provider_job_id"], "job_prod_2")
+        self.assertEqual(len(second_client.make_calls), 1)
+        self.assertEqual(second_client.make_calls[0]["client_ref"], middle["attempts"][1]["client_ref"])
 
     def test_ambiguous_kill_is_never_retried_automatically(self):
         transient = ElyumSeedanceError("PROVIDER_TRANSIENT")

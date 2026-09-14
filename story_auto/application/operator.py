@@ -44,7 +44,8 @@ from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
 from story_auto.providers.byteplus_seedance import execute_seedance_generation, seedance_readiness
-from story_auto.providers.elyum_seedance import (kill_elyum_preview as kill_elyum_locked_preview,
+from story_auto.providers.elyum_seedance import (authorize_elyum_replacement as authorize_elyum_locked_replacement,
+                                                kill_elyum_preview as kill_elyum_locked_preview,
                                                 keep_elyum_preview as keep_elyum_locked_preview,
                                                 review_elyum_preview as review_elyum_locked_preview)
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
@@ -1230,6 +1231,12 @@ class OperatorService:
         """Execute the explicit Elyum Kill consequence for an Owner-rejected preview."""
         return kill_elyum_locked_preview(self.runtime.root, project_id, request_id, client=client,
                                          confirm_kill=confirm_kill, reason=reason)
+
+    def authorize_full_video_replacement(self, project_id: str, request_id: str, *, reason: str,
+                                         confirm_replace: bool) -> dict[str, Any]:
+        """Authorize one explicit Elyum replacement attempt after a killed rejection."""
+        return authorize_elyum_locked_replacement(self.runtime.root, project_id, request_id,
+                                                   reason=reason, confirm_replace=confirm_replace)
 
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None,
                  max_requests: int | None=None, seedance_client=None) -> dict[str, Any]:

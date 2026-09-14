@@ -453,6 +453,81 @@ def kill_elyum_preview(runtime_root: Path | str, project_id: str, request_id: st
         return {"status": "KILLED", "project_id": project_id, "request_id": request_id}
 
 
+def authorize_elyum_replacement(runtime_root: Path | str, project_id: str, request_id: str, *,
+                                reason: str, confirm_replace: bool = False) -> dict[str, Any]:
+    """Authorize exactly one new logical attempt after a rejected result was killed.
+
+    This boundary is provider-free. It preserves the killed attempt, copies its
+    exact continuity snapshot, and creates a new durable attempt identity with a
+    distinct clientRef. Provider preflight/upload/create remain deferred until a
+    later explicit production continuation.
+    """
+    if confirm_replace is not True:
+        raise ElyumProductionError("ELYUM_REPLACEMENT_CONFIRMATION_REQUIRED")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ElyumProductionError("ELYUM_REPLACEMENT_REASON_REQUIRED")
+    paths, config = _require_elyum_project(runtime_root, project_id)
+    settings = config.settings.get("elyum", {}) if isinstance(config.settings.get("elyum"), dict) else {}
+    model = str(settings.get("model") or DEFAULT_FAST_I2V_MODEL)
+    resolution = str(settings.get("resolution") or DEFAULT_RESOLUTION)
+    provider_duration = int(settings.get("provider_duration_seconds", DEFAULT_PROVIDER_DURATION_SECONDS))
+    if model != DEFAULT_FAST_I2V_MODEL or resolution != "480p" or provider_duration != 4:
+        raise ElyumProductionError("ELYUM_QUALIFIED_ENVELOPE_INVALID")
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        entry = _find_entry(manifest, request_id)
+        latest = _latest_attempt(entry)
+        if latest.get("replacement_authorized") is True and latest.get("dispatch_confirmed") is not True:
+            return {"status": latest.get("status", "REPLACEMENT_AUTHORIZED"), "project_id": project_id,
+                    "request_id": request_id, "attempt": latest.get("attempt"), "idempotent": True}
+        if latest.get("status") != "KILLED" or entry.get("status") != "KILLED":
+            raise ElyumProductionError("ELYUM_REPLACEMENT_NOT_ALLOWED")
+        try:
+            requests_value = read_json(paths.artifact_path("output/generation_requests.json"))
+            request = next(item for item in requests_value.get("requests", [])
+                           if isinstance(item, dict) and item.get("request_id") == request_id)
+        except Exception as error:
+            raise ElyumProductionError("GENERATION_REQUESTS_INVALID") from error
+        reference = latest.get("continuity_reference")
+        previous_ref = latest.get("client_ref")
+        if not isinstance(reference, dict) or not isinstance(previous_ref, str) or not previous_ref:
+            raise ElyumProductionError("ELYUM_REPLACEMENT_IDENTITY_INVALID")
+        target_duration = float(request.get("target_duration") or 0.0)
+        if target_duration <= 0 or target_duration > provider_duration + 0.001:
+            raise ElyumProductionError("ELYUM_TARGET_DURATION_UNSUPPORTED")
+        attempts = entry.get("attempts")
+        if not isinstance(attempts, list):
+            raise ElyumProductionError("GENERATION_MANIFEST_INVALID")
+        number = int(latest.get("attempt") or len(attempts)) + 1
+        client_ref = f"{previous_ref}-r{number}"
+        if len(client_ref) > 120:
+            raise ElyumProductionError("CLIENT_REF_INVALID")
+        replacement = {
+            "attempt": number, "status": "REPLACEMENT_AUTHORIZED", "started_at": _now(),
+            "provider_mode": "VIDEO", "provider_model": model,
+            "provider_execution_state": "NOT_STARTED", "dispatch_confirmed": False,
+            "attribution_state": "NOT_STARTED", "attribution_status": "NOT_STARTED",
+            "client_ref": client_ref,
+            "continuity_reference": json.loads(json.dumps(reference)),
+            "provider_settings": {"mode": "i2v", "resolution": resolution,
+                                  "aspect_ratio": request.get("aspect_ratio", "16:9"),
+                                  "provider_duration_seconds": provider_duration,
+                                  "target_duration": target_duration},
+            "replacement_authorized": True, "replacement_of_attempt": latest.get("attempt"),
+            "replacement_reason": reason.strip(), "replacement_authorized_at": _now(),
+        }
+        attempts.append(replacement)
+        entry.update({"status": "REPLACEMENT_AUTHORIZED", "failure_class": None,
+                      "selected_asset": None, "updated_at": _now()})
+        entry.setdefault("replacement_events", []).append({
+            "authorized_at": replacement["replacement_authorized_at"], "actor": "OWNER",
+            "reason": reason.strip(), "replaces_attempt": latest.get("attempt"), "new_attempt": number,
+        })
+        atomic_write_json(manifest_path, manifest)
+        return {"status": "REPLACEMENT_AUTHORIZED", "project_id": project_id,
+                "request_id": request_id, "attempt": number, "client_ref": client_ref}
+
+
 def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_id: str,
                              client: ElyumSeedanceClient | None = None,
                              request_ids: set[str] | None = None, max_requests: int | None = 1,
@@ -533,45 +608,65 @@ def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_i
                         "provider": PROVIDER_ID, "new_submissions": 0, "resumed_tasks": 0}
             if attempts and not isinstance(latest, dict):
                 raise ElyumProductionError("GENERATION_MANIFEST_INVALID")
-            if max_requests is not None and considered >= max_requests and not attempts:
+            replacement_pending = bool(isinstance(latest, dict) and latest.get("replacement_authorized") is True
+                                       and latest.get("dispatch_confirmed") is not True
+                                       and not latest.get("provider_job_id"))
+            new_logical_attempt = not attempts or replacement_pending
+            if max_requests is not None and considered >= max_requests and new_logical_attempt:
                 break
-            considered += int(not attempts)
+            considered += int(new_logical_attempt)
 
-            if not attempts:
-                try:
-                    reference = resolve_continuity_reference_under_lock(paths, project_id, run_id, request["request_id"])
-                except FullVideoContinuityError as error:
-                    raise ElyumProductionError(error.failure_class) from error
-                target_duration = float(request.get("target_duration") or 0.0)
+            if not attempts or replacement_pending:
+                if not attempts:
+                    try:
+                        reference = resolve_continuity_reference_under_lock(paths, project_id, run_id, request["request_id"])
+                    except FullVideoContinuityError as error:
+                        raise ElyumProductionError(error.failure_class) from error
+                    target_duration = float(request.get("target_duration") or 0.0)
+                else:
+                    reference = latest.get("continuity_reference")
+                    if not isinstance(reference, dict) or reference.get("run_id") != run_id:
+                        raise ElyumProductionError("ELYUM_CONTINUITY_SNAPSHOT_MISMATCH")
+                    target_duration = float(latest.get("provider_settings", {}).get("target_duration") or request.get("target_duration") or 0.0)
                 if target_duration <= 0 or target_duration > provider_duration + 0.001:
                     raise ElyumProductionError("ELYUM_TARGET_DURATION_UNSUPPORTED")
                 balance = active.account_balance()
                 estimate = active.estimate_video(model=model, duration=provider_duration, mode="i2v")
                 _record_preflight(entry, balance=balance, estimate=estimate, max_credits=max_credits)
                 if estimate > max_credits:
+                    if replacement_pending:
+                        latest.update({"status": "COST_BLOCKED", "failure_class": "ESTIMATE_EXCEEDS_BOUND",
+                                       "balance_before": balance, "estimate_credits": estimate})
                     entry.update({"status": "COST_BLOCKED", "failure_class": "ESTIMATE_EXCEEDS_BOUND", "updated_at": _now()})
                     atomic_write_json(manifest_path, manifest)
                     return {"status": "COST_BLOCKED", "project_id": project_id, "request_id": request["request_id"],
                             "estimate_credits": estimate, "max_credits": max_credits}
                 if balance < estimate:
+                    if replacement_pending:
+                        latest.update({"status": "CREDIT_BLOCKED", "failure_class": "INSUFFICIENT_CREDIT_BALANCE",
+                                       "balance_before": balance, "estimate_credits": estimate})
                     entry.update({"status": "CREDIT_BLOCKED", "failure_class": "INSUFFICIENT_CREDIT_BALANCE", "updated_at": _now()})
                     atomic_write_json(manifest_path, manifest)
                     return {"status": "CREDIT_BLOCKED", "project_id": project_id, "request_id": request["request_id"],
                             "balance": balance, "estimate_credits": estimate}
-                client_ref = _client_ref(project_id, run_id, request, reference, model, provider_duration, resolution)
-                latest = {
-                    "attempt": 1, "status": "PRE_DISPATCH", "started_at": _now(),
-                    "provider_mode": "VIDEO", "provider_model": model,
-                    "provider_execution_state": "NOT_STARTED", "dispatch_confirmed": False,
-                    "attribution_state": "NOT_STARTED", "attribution_status": "NOT_STARTED",
-                    "client_ref": client_ref, "continuity_reference": reference,
-                    "balance_before": balance, "estimate_credits": estimate,
-                    "provider_settings": {"mode": "i2v", "resolution": resolution,
-                                          "aspect_ratio": request.get("aspect_ratio", "16:9"),
-                                          "provider_duration_seconds": provider_duration,
-                                          "target_duration": target_duration},
-                }
-                attempts.append(latest)
+                if not attempts:
+                    client_ref = _client_ref(project_id, run_id, request, reference, model, provider_duration, resolution)
+                    latest = {
+                        "attempt": 1, "status": "PRE_DISPATCH", "started_at": _now(),
+                        "provider_mode": "VIDEO", "provider_model": model,
+                        "provider_execution_state": "NOT_STARTED", "dispatch_confirmed": False,
+                        "attribution_state": "NOT_STARTED", "attribution_status": "NOT_STARTED",
+                        "client_ref": client_ref, "continuity_reference": reference,
+                        "balance_before": balance, "estimate_credits": estimate,
+                        "provider_settings": {"mode": "i2v", "resolution": resolution,
+                                              "aspect_ratio": request.get("aspect_ratio", "16:9"),
+                                              "provider_duration_seconds": provider_duration,
+                                              "target_duration": target_duration},
+                    }
+                    attempts.append(latest)
+                else:
+                    latest.update({"status": "PRE_DISPATCH", "provider_execution_state": "NOT_STARTED",
+                                   "failure_class": None, "balance_before": balance, "estimate_credits": estimate})
                 entry.update({"attempts": attempts, "status": "GENERATING", "failure_class": None, "updated_at": _now()})
                 atomic_write_json(manifest_path, manifest)
             else:
@@ -625,7 +720,7 @@ def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_i
                                "provider_execution_state": "QUEUED", "dispatch_confirmed": True,
                                "attribution_state": "CONFIRMED", "attribution_status": "CONFIRMED",
                                "submitted_at": _now(), "failure_class": None})
-                entry["provider_submissions"] = 1
+                entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
                 entry.update({"status": "GENERATING", "failure_class": None, "updated_at": _now()})
                 atomic_write_json(manifest_path, manifest)
                 new_submission = 1

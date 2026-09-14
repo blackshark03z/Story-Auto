@@ -116,6 +116,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="review_elyum_preview": result=self.service.review_full_video_preview(project_id,body["request_id"],decision=body.get("decision",""),reason=body.get("reason",""))
             elif action=="keep_elyum_preview": result=self.service.keep_full_video_preview(project_id,body["request_id"],confirm_spend=body.get("confirm_spend") is True)
             elif action=="kill_elyum_preview": result=self.service.kill_full_video_preview(project_id,body["request_id"],confirm_kill=body.get("confirm_kill") is True,reason=body.get("reason",""))
+            elif action=="authorize_elyum_replacement": result=self.service.authorize_full_video_replacement(project_id,body["request_id"],reason=body.get("reason",""),confirm_replace=body.get("confirm_replace") is True)
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))
             elif action=="regenerate": result=self.service.regenerate(project_id,body["request_id"],body.get("reason","operator requested regeneration"))
             elif action=="edit_prompt": result=self.service.edit_prompt(project_id,body["request_id"],body.get("prompt",""))

@@ -102,7 +102,7 @@ class Goal54SliceEProductSurfaceTests(unittest.TestCase):
         text = script.read_text(encoding="utf-8")
         for token in ("fullVideoProviderSurface", "Accept exact preview", "Reject exact preview",
                       "Keep / unlock", "Kill rejected preview", "Retry clean output download",
-                      "confirm_spend:true", "confirm_kill:true"):
+                      "Authorize one replacement", "confirm_spend:true", "confirm_kill:true", "confirm_replace:true"):
             self.assertIn(token, text)
 
 

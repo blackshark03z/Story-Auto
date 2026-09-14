@@ -162,4 +162,6 @@ Production mutation must proceed through the bounded slices in this plan with ex
 
 ## Immediate next executable step
 
-Slices A–E are complete and regression-verified. The next executable step is Slice F bounded production UAT. Prepare the UAT fixture, exact acceptance evidence and read-only provider/budget preflight first. Do not enable ordinary Elyum routing or create an unbounded provider task merely because engineering slices are complete.
+Slices A–E are complete and regression-verified. Slice F's canonical offline production UAT is also regression-verified, and the fresh read-only provider/budget preflight is recorded in `docs/GOAL54_PRODUCTION_SLICE_F_EVIDENCE.md`.
+
+The next executable step is the bounded live production acceptance surface. Use only the gated production adapter and the qualified `seedance-2-fast-i2v` / 4-second / 480p / <=44-Credit envelope. Re-run read-only balance/estimate before each new provider generation, stop if the fresh quote/balance gate fails, preserve exact request/job/reference/local-hash provenance, and require an explicit visual oracle before Keep/unlock. Do not enable ordinary Elyum routing merely because the offline UAT is complete.

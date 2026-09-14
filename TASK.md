@@ -451,4 +451,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - The production reconciler now understands Elyum same-job resume, same-clientRef reconciliation, preview review, Keep/Kill, clean-output acquisition and ambiguous consequence states without falling through Flow recovery semantics.
 - Accept/Reject remain provider-free review decisions; Keep and Kill remain separate explicit consequence confirmations. Clean-output reacquisition after confirmed Keep is acquisition-only and cannot call Keep a second time.
 - Slice E focused UI/product gate: `22 passed`; application regression: `18 passed, 2 subtests passed`; broader regression: `99 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; full hermetic regression: `765 passed, 283 subtests passed`.
-- No live provider call or Credit mutation occurred. Elyum remains production-disabled. Next work is Slice F: bounded production UAT with read-only preflight before any live provider mutation.
+- No live provider call or Credit mutation occurred in Slice E. Elyum remains production-disabled.
+- Slice F engineering/UAT harness is now qualified; evidence: `docs/GOAL54_PRODUCTION_SLICE_F_EVIDENCE.md`.
+- Offline two-shot production UAT covers fresh dispatch, same-job reload/resume, insufficient-credit fail-closed, exact continuity handoff, manual reject -> explicit Kill -> separately authorized replacement, explicit Keep, clean-output provenance, final render and idempotent rerender through canonical production services.
+- Slice F verification: focused `29 passed`; broader `120 passed, 2 subtests passed`; full hermetic `767 passed, 283 subtests passed`; `SECURITY_GATE=PASS`.
+- Fresh read-only Elyum preflight: slot 1 balance 30, slot 2 balance 110, quote 44 Credits for the qualified 4s/480p request. No provider mutation occurred in preflight.
+- Remaining boundary is one bounded live production acceptance surface with exact provenance and explicit visual oracle before Keep. Ordinary Elyum routing remains disabled until that boundary and the routing-promotion decision are accepted.

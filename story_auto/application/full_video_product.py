@@ -76,7 +76,9 @@ def _continuation_text(status: str, attempt: dict[str, Any] | None, routing_enab
     if status in {"KEEP_AMBIGUOUS", "KILL_AMBIGUOUS", "KEEP_DISPATCHING", "KILL_DISPATCHING"}:
         return "A provider consequence outcome is ambiguous. Automatic retry is blocked until it is reconciled."
     if status == "KILLED":
-        return "The rejected provider result was killed. Story Auto will not create a replacement automatically."
+        return "The rejected provider result was killed. A replacement requires a separate explicit Owner authorization."
+    if status in {"REPLACEMENT_AUTHORIZED", "PRE_DISPATCH"} and isinstance(attempt, dict) and attempt.get("replacement_authorized") is True:
+        return "The Owner authorized exactly one replacement attempt. Continue will preflight it before any provider mutation."
     if status == "SUCCEEDED":
         return "The clean output is acquired locally and hash-bound to the accepted preview."
     if status == "CREDIT_BLOCKED":
@@ -115,6 +117,8 @@ def full_video_provider_product_view(paths, config) -> dict[str, Any] | None:
         action = "REACQUIRE_KEPT_OUTPUT"
     elif status in {"KEEP_AMBIGUOUS", "KILL_AMBIGUOUS", "KEEP_DISPATCHING", "KILL_DISPATCHING"}:
         action = "RECONCILE_CONSEQUENCE"
+    elif status == "KILLED":
+        action = "AUTHORIZE_REPLACEMENT"
     return {
         "provider_id": provider_id,
         "provider_label": _PROVIDER_LABELS.get(provider_id, provider_id),
@@ -140,5 +144,5 @@ def full_video_provider_product_view(paths, config) -> dict[str, Any] | None:
         "selected_path": selected.get("path") if isinstance(selected, dict) else None,
         "selected_sha256": selected.get("sha256") if isinstance(selected, dict) else None,
         "action": action,
-        "owner_decision_required": action in {"REVIEW_PREVIEW", "KEEP_PREVIEW", "KILL_PREVIEW", "RECONCILE_CONSEQUENCE"},
+        "owner_decision_required": action in {"REVIEW_PREVIEW", "KEEP_PREVIEW", "KILL_PREVIEW", "RECONCILE_CONSEQUENCE", "AUTHORIZE_REPLACEMENT"},
     }

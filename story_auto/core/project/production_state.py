@@ -552,6 +552,11 @@ class ProductionStateReconciler:
                             "human_message": "The rejected Elyum result was killed. A replacement generation requires a separate explicit decision.",
                             "affected_request_id": request_id, "requires_owner_decision": True,
                             "provider_dispatches_per_continue": 0, "next_action": "Review recovery"}
+                if isinstance(latest, dict) and latest.get("replacement_authorized") is True and latest.get("dispatch_confirmed") is not True:
+                    return {**base, "status": "RECOVERY_READY", "reason_code": "ELYUM_REPLACEMENT_AUTHORIZED",
+                            "human_message": "The Owner authorized one replacement attempt. Continue will preflight that exact attempt before provider mutation.",
+                            "affected_request_id": request_id, "automatic_recovery_available": True,
+                            "provider_dispatches_per_continue": 1, "next_action": "Continue production"}
                 if latest_status in {"FAILED_TERMINAL", "PREVIEW_ACQUISITION_FAILED"}:
                     return {**base, "status": "NEEDS_ATTENTION", "reason_code": entry.get("failure_class") or "ELYUM_PROVIDER_TERMINAL",
                             "human_message": "The Elyum attempt ended without a usable production asset. Story Auto will not silently create a replacement.",
