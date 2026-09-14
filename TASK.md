@@ -435,4 +435,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Rejected/replaced source assets invalidate or supersede old bindings; a target reference cannot change after that target has entered any provider boundary.
 - Targeted continuity/provider tests: `11 passed`; broader planning/BytePlus/application/release regression: `55 passed, 2 subtests passed`; compile/diff checks PASS.
 - Full hermetic regression reached `748 passed, 283 subtests passed`; its sole security-gate failure was a pre-existing signed-looking synthetic Elyum fixture. After hardening that fixture, `SECURITY_GATE=PASS` and focused Elyum + hardening tests passed `18/18`, closing the differential qualification gate.
-- Elyum remains production-disabled. Next implementation work is Slice C: production Elyum service adapter consuming the exact Slice B reference snapshot.
+- Slice C is engineering-complete; evidence: `docs/GOAL54_PRODUCTION_SLICE_C_EVIDENCE.md`.
+- The gated Elyum production adapter now uses only canonical generation-manifest state plus the exact Slice B continuity snapshot; research ledgers are not production state.
+- Stable `client_ref` and continuity ownership are persisted before provider create; ambiguous create replays only the same clientRef, known jobs resume only the same job, and locked preview acquisition is local/hash-bound with no automatic Keep/Kill.
+- Cross-run preview reuse is blocked and a materialized production attempt freezes its reference binding before provider mutation.
+- Slice C regression: `79 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; compile/diff checks PASS. No live provider call or Credit mutation occurred.
+- Elyum remains production-disabled. Next implementation work is Slice D: explicit preview-review / Keep-unlock / clean-output consequence and recovery state.

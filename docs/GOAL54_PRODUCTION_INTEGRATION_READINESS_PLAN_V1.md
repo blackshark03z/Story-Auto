@@ -91,7 +91,9 @@ The lifecycle must define:
 
 Do not reuse the old Flow entity-reference chain automatically; Goal 54 continuity is shot-to-shot production continuity, not merely character reference generation.
 
-### Slice C — Elyum production service adapter
+### Slice C — Elyum production service adapter — COMPLETE
+
+Engineering evidence: `docs/GOAL54_PRODUCTION_SLICE_C_EVIDENCE.md`.
 
 Promote only the minimal proven parts of `story_auto/providers/elyum_seedance/` into a production service that conforms to the generation-manifest authority model.
 

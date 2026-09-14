@@ -1,4 +1,4 @@
-"""Elyum MCP client used only by the bounded Goal 54 research path.
+"""Elyum MCP transport shared by bounded Goal 54 research and gated production code.
 
 The provider contract is task based:
 

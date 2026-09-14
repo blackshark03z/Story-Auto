@@ -154,6 +154,12 @@ def _target_provider_boundary_entered(manifest: dict[str, Any], request_id: str)
             continue
         if isinstance(attempt.get("provider_job_id"), str) and attempt["provider_job_id"]:
             return True
+        # A production attempt freezes the exact reference snapshot before any
+        # provider mutation. Once that snapshot/client identity exists, rebinding
+        # would silently change the logical request even if upload/create has not
+        # happened yet.
+        if isinstance(attempt.get("continuity_reference"), dict) or isinstance(attempt.get("client_ref"), str):
+            return True
         if attempt.get("dispatch_confirmed") is True or attempt.get("provider_boundary_entered_at") is not None:
             return True
         if attempt.get("provider_execution_state") not in {None, "NOT_STARTED"}:
@@ -445,15 +451,21 @@ def _resolve_continuity_reference_locked(paths, project_id: str, run_id: str, ta
     return _snapshot(run, binding)
 
 
+def resolve_continuity_reference_under_lock(paths, project_id: str, run_id: str,
+                                            target_request_id: str) -> dict[str, Any]:
+    """Resolve exact reference truth while the caller already owns ProjectLock."""
+    requests_value, requests_sha = _load_requests(paths)
+    state = _load_state(paths, project_id)
+    return _resolve_continuity_reference_locked(paths, project_id, run_id, target_request_id,
+                                                requests_value, requests_sha, state)
+
+
 def resolve_continuity_reference(runtime_root: Path | str, project_id: str, run_id: str,
                                  target_request_id: str) -> dict[str, Any]:
     runtime = RuntimeLayout.from_root(runtime_root)
     paths, _config = load_project(runtime, project_id)
     with ProjectLock(paths.runtime, project_id):
-        requests_value, requests_sha = _load_requests(paths)
-        state = _load_state(paths, project_id)
-        return _resolve_continuity_reference_locked(paths, project_id, run_id, target_request_id,
-                                                    requests_value, requests_sha, state)
+        return resolve_continuity_reference_under_lock(paths, project_id, run_id, target_request_id)
 
 
 def reconcile_continuity_run(runtime_root: Path | str, project_id: str, run_id: str) -> dict[str, Any]:

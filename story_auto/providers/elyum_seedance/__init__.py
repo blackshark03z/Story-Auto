@@ -1,7 +1,7 @@
-"""Research-only Elyum Seedance provider for Goal 54.
+"""Elyum Seedance transport, Goal 54 research tools, and gated production adapter.
 
-This package is intentionally not wired into production routing. It exists to
-qualify Elyum's API-first task/recovery contract before any routing decision.
+Production routing remains disabled by the Full Video provider capability
+contract. Research state and production manifest state remain strictly separate.
 """
 from .client import (
     DEFAULT_ENDPOINT,
@@ -17,6 +17,7 @@ from .research import (
     resume_experiment_preview,
     run_experiment_preview,
 )
+from .service import ElyumProductionError, elyum_production_readiness, execute_elyum_generation
 
 __all__ = [
     "DEFAULT_ENDPOINT",
@@ -29,4 +30,7 @@ __all__ = [
     "run_experiment_preview",
     "keep_experiment_preview",
     "kill_experiment_preview",
+    "ElyumProductionError",
+    "elyum_production_readiness",
+    "execute_elyum_generation",
 ]
