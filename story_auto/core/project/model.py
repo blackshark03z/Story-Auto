@@ -9,6 +9,7 @@ from typing import Any
 
 from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.visual.ambient import AMBIENT_STYLES
+from story_auto.core.full_video_provider import FullVideoProviderError, resolve_full_video_provider
 from .execution import execution_mode
 from .quality_policy import QC_POLICY_SETTING, validate_qc_policy, settings_with_default_qc_policy
 from .paths import ProjectPaths, RuntimeLayout
@@ -92,6 +93,14 @@ class ProjectConfig:
             raise ProjectValidationError("ambient_story requires settings.ambient_style to be quiet_verdict or hidden_mastery")
         if ambient_style is not None and ambient_style not in AMBIENT_STYLES:
             raise ProjectValidationError("settings.ambient_style must be quiet_verdict or hidden_mastery")
+        full_video_provider = self.settings.get("full_video_provider")
+        if full_video_provider is not None:
+            if self.render_mode != "full_video_ai":
+                raise ProjectValidationError("settings.full_video_provider is only valid for full_video_ai")
+            try:
+                resolve_full_video_provider(self.settings)
+            except FullVideoProviderError as error:
+                raise ProjectValidationError(error.failure_class) from error
         if self.render_mode == "full_image":
             object.__setattr__(self, "settings", {**self.settings, "full_image": resolve_full_image_settings(self.settings)})
         tts = self.settings.get("tts")

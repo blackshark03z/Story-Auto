@@ -144,7 +144,7 @@ local-only presentation changes do not invalidate Flow requests.
 Current production routing is explicit rather than inferred:
 
 - `full_image` visual generation → `providers/flow/*` (`google_flow`), using the accepted dedicated browser/session boundary.
-- `full_video_ai` visual generation → `providers/byteplus_seedance/*` (`byteplus_seedance`), using BytePlus ModelArk's documented asynchronous task API.
+- `full_video_ai` visual generation uses a narrow capability-aware provider snapshot. `byteplus_seedance` remains the default/production-enabled path through `providers/byteplus_seedance/*` and BytePlus ModelArk's documented asynchronous task API. Goal 54 also records the qualified `elyum_seedance` I2V capability shape, but production dispatch remains disabled until its continuity lifecycle and production adapter are accepted.
 - `providers/gemini_media/*` remains a non-routing experimental media adapter unless a later accepted decision changes production routing.
 - Elyum is currently a bounded Goal 54 research candidate/revisit trigger only. Until runtime qualification and an accepted routing decision exist, it is not part of production architecture.
 

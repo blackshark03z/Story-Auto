@@ -12,6 +12,9 @@ from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.audio import SRT_TIMELINE_TOLERANCE_SECONDS
 from story_auto.core.checkpoint import CheckpointStore, canonical_json, fingerprint
 from story_auto.core.content import narration_hash, parse_content_markdown
+from story_auto.core.full_video_provider import (FullVideoProviderError, full_video_provider_snapshot,
+                                                 require_production_full_video_provider,
+                                                 resolve_full_video_provider)
 from story_auto.core.gemini_qc import (MOTION_PLAN_VERSION, GeminiQCError,
                                        compile_flow_motion_prompt, plan_motion,
                                        validate_motion_plan)
@@ -424,7 +427,8 @@ def _media_settings(config) -> dict[str, Any]:
     clip_seconds = float(settings.get("provider_video_clip_seconds", 8.0))
     if not math.isfinite(clip_seconds) or clip_seconds < .5 or clip_seconds > 30:
         raise PlanningError("MEDIA_POLICY_INVALID", "provider_video_clip_seconds must be between .5 and 30")
-    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20)),"provider_video_clip_seconds":clip_seconds,"ambient_style":config.settings.get("ambient_style"),"full_image":resolve_full_image_settings(config.settings) if config.render_mode == "full_image" else None}
+    full_video_provider = resolve_full_video_provider(config.settings) if config.render_mode == "full_video_ai" else None
+    return {"hook_seconds":float(settings.get("hook_seconds", 55)),"motion_spike_threshold":int(settings.get("motion_spike_threshold", 8)),"overrides":settings.get("overrides", {}),"max_attempts":int(settings.get("max_attempts", 2)),"aspect_ratio":settings.get("aspect_ratio", "16:9"),"large_batch_request_threshold":int(settings.get("large_batch_request_threshold", 20)),"provider_video_clip_seconds":clip_seconds,"ambient_style":config.settings.get("ambient_style"),"full_image":resolve_full_image_settings(config.settings) if config.render_mode == "full_image" else None,"full_video_provider":full_video_provider}
 
 def compile_media_plan(project_id: str, shot_plan: dict[str, Any], render_mode: str, settings: dict[str, Any]) -> dict[str, Any]:
     if render_mode not in {"hybrid_hook", "full_video_ai", "ambient_story", "full_image"}: raise PlanningError("MEDIA_POLICY_INVALID")
@@ -536,6 +540,12 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
     ambient = media_plan.get("render_mode") == "ambient_story"
     full_image = media_plan.get("render_mode") == "full_image"
     full_video = media_plan.get("render_mode") == "full_video_ai"
+    provider_snapshot = None
+    if full_video:
+        try:
+            provider_snapshot = require_production_full_video_provider(settings)
+        except FullVideoProviderError as error:
+            raise PlanningError(error.failure_class) from error
     if ambient:
         ambient_style = ambient_style or media_plan.get("ambient_style")
         style_directive = ambient_prompt_directive(ambient_style)
@@ -600,12 +610,12 @@ def compile_generation_requests(project_id: str, shot_plan: dict[str, Any], medi
                 prompt = compile_video_prompt(subject_motion=shot["action"], environmental_motion="subtle scene-appropriate movement", camera_motion=shot["camera_intent"], timing=f"part {part_index} of {part_count}, continuous action across {part_duration:.3f} seconds")
             request_fingerprint = (_hash_text(canonical_json(seed)) if media["media_type"] == "VIDEO"
                                    else _hash_text(repr(seed)))
-            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":"byteplus_seedance" if full_video and media["media_type"] == "VIDEO" else "google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":request_fingerprint,**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
+            requests.append({"request_id":request_id,"purpose":"SHOT","shot_id":shot["shot_id"],"media_type":media["media_type"],"requirement":media["requirement"],"provider":provider_snapshot["provider_id"] if full_video and media["media_type"] == "VIDEO" else "google_flow","prompt":prompt,"visual_policy":visual_policy,"output_count":1,"execution_tier":"STANDARD_PRODUCTION","reference_asset_ids":refs,"depends_on":deps,"part_index":part_index,"part_count":part_count,"target_start":part_start,"target_end":part_end,"target_duration":part_duration,"aspect_ratio":settings["aspect_ratio"],"priority":media["generation_priority"],"fingerprint":request_fingerprint,**({"ambient_style":ambient_style,"scene_state":shot.get("story_state"),"semantic_target":shot.get("visual_anchor_kind"),"visual_brief":brief,"supportive_anchor_justification":shot.get("long_anchor_justification"),"prompt_budget":{"compiled_chars":len(prompt),"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else {})})
             part_start = part_end
     requests.sort(key=lambda r:(r["priority"], r["purpose"] != "REFERENCE", r.get("shot_id", ""), r.get("part_index", 0), r["request_id"]))
     required_videos = sum(r.get("requirement") == "REQUIRED" and r["media_type"] == "VIDEO" for r in requests)
     estimate = {"reference_image_requests":sum(r["purpose"] == "REFERENCE" for r in requests),"shot_image_requests":sum(r["purpose"] == "SHOT" and r["media_type"] == "IMAGE" for r in requests),"required_video_requests":required_videos,"preferred_video_requests":sum(r.get("requirement") == "PREFERRED" and r["media_type"] == "VIDEO" for r in requests),"total_generation_requests":len(requests),"max_attempts_per_request":settings["max_attempts"],"worst_case_attempt_count":len(requests)*settings["max_attempts"],"large_batch_request_threshold":settings["large_batch_request_threshold"],"requires_later_execution_confirmation":media_plan["render_mode"] == "full_video_ai" or len(requests) >= settings["large_batch_request_threshold"]}
-    policy = ({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE","image_prompt_budget":{"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else ({"full_image":media_plan.get("full_image"),"temporal_video_qc":"NOT_APPLICABLE","video_provider_submissions_allowed":False} if full_image else {}))
+    policy = ({"ambient_style":ambient_style,"temporal_video_qc":"NOT_APPLICABLE","image_prompt_budget":{"internal_target":AMBIENT_IMAGE_PROMPT_INTERNAL_TARGET,"provider_hard_limit":FLOW_IMAGE_PROMPT_HARD_LIMIT,"strategy":"PRIORITY_AWARE_STRUCTURED"}} if ambient else ({"full_image":media_plan.get("full_image"),"temporal_video_qc":"NOT_APPLICABLE","video_provider_submissions_allowed":False} if full_image else ({"full_video_provider_snapshot": provider_snapshot} if full_video else {})))
     return {"schema_version":REQUEST_SCHEMA_VERSION,"project_id":project_id,"prompt_version":AMBIENT_GENERATION_PROMPT_VERSION if ambient else (FULL_IMAGE_GENERATION_PROMPT_VERSION if full_image else GENERATION_PROMPT_VERSION),"requests":requests,"guardrail_estimate":estimate,"provider_execution_authorized":False,"review_status":"VALIDATED",**policy}
 
 def apply_motion_plans(generation_requests: dict[str, Any], shot_plan: dict[str, Any],
@@ -923,6 +933,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
         media_sha=sha256_file(media_path); generation_media_sha=_hash_text(repr(_generation_media_plan_identity(media_plan)))
         request_inputs={"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_semantic_sha256":generation_media_sha,"prompt_version":request_producer} if (ambient or full_image) else {"shot_plan_sha256":shot_sha,"continuity_sha256":continuity_sha,"media_plan_sha256":media_sha,"prompt_version":GENERATION_PROMPT_VERSION,"motion_plan_version":MOTION_PLAN_VERSION}
         request_settings={"aspect_ratio":media_settings["aspect_ratio"],"max_attempts":media_settings["max_attempts"],"provider_video_clip_seconds":media_settings["provider_video_clip_seconds"]}
+        if config.render_mode == "full_video_ai": request_settings["full_video_provider"] = media_settings["full_video_provider"]
         if ambient: request_settings["ambient_style"] = ambient_style
         if full_image: request_settings["full_image_generation_policy"] = "IMAGE_ONLY"
         request_path=paths.artifact_path("output/generation_requests.json"); request_fp=fingerprint(stage_name="generation_requests",producer_version=request_producer,artifact_schema_version=REQUEST_SCHEMA_VERSION,direct_inputs=request_inputs,settings=request_settings); decision=checkpoints.decide("generation_requests",request_fp)

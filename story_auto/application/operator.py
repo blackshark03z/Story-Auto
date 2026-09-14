@@ -20,6 +20,8 @@ from story_auto.application.production_queries import ProductionQueries
 from story_auto.application.flow_product import product_flow_status, required_capabilities, render_mode_availability
 from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
+from story_auto.core.full_video_provider import (DEFAULT_FULL_VIDEO_PROVIDER, FullVideoProviderError,
+                                                 require_production_full_video_provider)
 from story_auto.core.planning import approve_plan, approve_shot_plan, run_planning_stages, run_visual_planning_stages
 from story_auto.core.project import (AUTO_ACCEPT, MANUAL_REVIEW, ProjectConfig, RuntimeLayout, create_project,
                                      effective_qc_policy, execution_mode, load_project, stage_policy, validate_qc_policy)
@@ -382,6 +384,9 @@ class OperatorService:
         # the existing image-only AUTO_ACCEPT policy covers video.
         if effective_render_mode == "full_video_ai":
             resolved_settings["qc_policy"] = MANUAL_REVIEW
+            # Snapshot the provider on project creation. Historical projects
+            # without this field remain BytePlus-compatible via the resolver.
+            resolved_settings.setdefault("full_video_provider", DEFAULT_FULL_VIDEO_PROVIDER)
         mode=execution_mode(resolved_settings)
         flow_required = effective_render_mode == "full_image"
         source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
@@ -518,8 +523,16 @@ class OperatorService:
         awaiting_provider=any(counts.get(name) for name in {"PENDING","NOT_DISPATCHED","FAILED_RETRYABLE"})
         if mode!="RENDER_ONLY" and awaiting_provider and not blocked:
             if config.render_mode=="full_video_ai":
-                seedance_status=seedance_readiness()
-                if seedance_status["status"]!="READY": blocked.append(seedance_status.get("reason_code") or "CREDENTIAL_MISSING")
+                try:
+                    provider_snapshot = require_production_full_video_provider(config.settings)
+                except FullVideoProviderError as error:
+                    blocked.append(error.failure_class)
+                else:
+                    if provider_snapshot["provider_id"] == "byteplus_seedance":
+                        seedance_status=seedance_readiness()
+                        if seedance_status["status"]!="READY": blocked.append(seedance_status.get("reason_code") or "CREDENTIAL_MISSING")
+                    else:
+                        blocked.append("FULL_VIDEO_PROVIDER_NOT_PRODUCTION_ENABLED")
             elif flow_status["status"]!="CONNECTED":
                 blocked.append(flow_status["code"])
         shot_groups={}
@@ -1203,6 +1216,12 @@ class OperatorService:
         self._require_available_render_mode(config)
         if execution_mode(config.settings)=="RENDER_ONLY": raise OperatorServiceError("RENDER_ONLY does not submit visual provider requests.")
         if config.render_mode == "full_video_ai":
+            try:
+                provider_snapshot = require_production_full_video_provider(config.settings)
+            except FullVideoProviderError as error:
+                raise OperatorServiceError(error.failure_class) from error
+            if provider_snapshot["provider_id"] != "byteplus_seedance":
+                raise OperatorServiceError("FULL_VIDEO_PROVIDER_NOT_PRODUCTION_ENABLED")
             self.set_pause(project_id,False)
             return execute_seedance_generation(self.runtime.root, project_id, client=seedance_client,
                                                request_ids=request_ids, max_requests=max_requests)

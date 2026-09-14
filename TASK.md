@@ -422,4 +422,12 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Technical/provenance verification is complete; no Keep/Kill occurred.
 - Owner explicitly approved the exact RQ2 locked preview on 2026-09-14 as `PASS`.
 - Aggregate Goal 54 repeatability verdict is now `REPEATABILITY_QUALIFIED`: X3 accepted/kept, RQ1 PASS, RQ2 PASS, zero critical failures and zero visual-quality redispatches. No RQ3 was run or is authorized.
-- Production routing remains unchanged until bounded integration slices are implemented and accepted. Next executable work is Slice A of `docs/GOAL54_PRODUCTION_INTEGRATION_READINESS_PLAN_V1.md`: capability-aware Full Video provider contract + durable provider snapshot, preserving BytePlus as default.
+- Production routing remains unchanged until bounded integration slices are implemented and accepted.
+
+## Goal 54 production integration Slice A checkpoint
+- Slice A is complete; evidence: `docs/GOAL54_PRODUCTION_SLICE_A_EVIDENCE.md`.
+- Full Video now has a narrow capability-aware provider contract and durable generation-request provider snapshot.
+- BytePlus remains the default and only production-enabled provider; historical projects without the new setting still resolve to BytePlus without mutation.
+- Elyum is represented as the qualified I2V capability shape but remains production-disabled and fails closed before dispatch until continuity lifecycle + production adapter work land.
+- Targeted regression: `21 passed`; broader application/release/binding regression: `53 passed, 6 subtests passed`; compile and diff checks PASS.
+- Next executable work is Slice B: continuity-reference lifecycle. No Elyum production dispatch is authorized yet.

@@ -61,7 +61,9 @@ The production contract must distinguish at least:
 
 ## Proposed implementation slices after repeatability qualification
 
-### Slice A — Capability contract and provider selection
+### Slice A — Capability contract and provider selection — COMPLETE
+
+Engineering evidence: `docs/GOAL54_PRODUCTION_SLICE_A_EVIDENCE.md`.
 
 Introduce a narrow Full Video provider capability contract. Preserve BytePlus as the default and existing-project behavior. Do not create a broad cross-product provider framework.
 
@@ -152,4 +154,4 @@ Production mutation must proceed through the bounded slices in this plan with ex
 
 ## Immediate next executable step
 
-Start Slice A: define the narrow capability-aware Full Video provider contract and durable provider snapshot while preserving BytePlus as the default and maintaining existing-project behavior. Then proceed to Slice B continuity-reference lifecycle before enabling any Elyum production dispatch.
+Slice A is complete and regression-verified. Start Slice B continuity-reference lifecycle before enabling any Elyum production dispatch: canonical first-shot anchor, deterministic accepted-shot frame extraction, SHA binding, request/job ownership, stale-frame prevention and rejection/replacement behavior.
