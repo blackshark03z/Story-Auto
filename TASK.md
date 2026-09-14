@@ -445,4 +445,10 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Keep/Kill consequence intent is persisted before provider mutation; ambiguous Keep/Kill outcomes fail closed and cannot auto-retry.
 - A confirmed Keep followed by local output-acquisition failure recovers acquisition-only and cannot spend a second time; only validated, duration-checked, hash-bound clean output becomes `selected_asset`.
 - Slice D broader regression: `85 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; full hermetic regression: `761 passed, 283 subtests passed`.
-- No live provider call or Credit mutation occurred. Elyum remains production-disabled. Next implementation work is Slice E: product UI / observability.
+- No live provider call or Credit mutation occurred. Elyum remains production-disabled.
+- Slice E is engineering-complete; evidence: `docs/GOAL54_PRODUCTION_SLICE_E_EVIDENCE.md`.
+- The ordinary project workspace now projects configured Full Video provider truth, routing state, durable provider-job presence, preflight/budget evidence, exact locked-preview SHA and safe continuation semantics from canonical artifacts only.
+- The production reconciler now understands Elyum same-job resume, same-clientRef reconciliation, preview review, Keep/Kill, clean-output acquisition and ambiguous consequence states without falling through Flow recovery semantics.
+- Accept/Reject remain provider-free review decisions; Keep and Kill remain separate explicit consequence confirmations. Clean-output reacquisition after confirmed Keep is acquisition-only and cannot call Keep a second time.
+- Slice E focused UI/product gate: `22 passed`; application regression: `18 passed, 2 subtests passed`; broader regression: `99 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; full hermetic regression: `765 passed, 283 subtests passed`.
+- No live provider call or Credit mutation occurred. Elyum remains production-disabled. Next work is Slice F: bounded production UAT with read-only preflight before any live provider mutation.

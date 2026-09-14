@@ -18,6 +18,7 @@ from story_auto.application.import_readiness import inspect_import_readiness, no
 from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
 from story_auto.application.flow_product import product_flow_status, required_capabilities, render_mode_availability
+from story_auto.application.full_video_product import full_video_provider_product_view
 from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.full_video_provider import (DEFAULT_FULL_VIDEO_PROVIDER, FullVideoProviderError,
@@ -43,6 +44,9 @@ from story_auto.providers.flow import live as flow_live
 from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
 from story_auto.providers.byteplus_seedance import execute_seedance_generation, seedance_readiness
+from story_auto.providers.elyum_seedance import (kill_elyum_preview as kill_elyum_locked_preview,
+                                                keep_elyum_preview as keep_elyum_locked_preview,
+                                                review_elyum_preview as review_elyum_locked_preview)
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -325,6 +329,7 @@ class OperatorService:
             },
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),
+            "full_video_provider":full_video_provider_product_view(paths, config),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -1209,6 +1214,22 @@ class OperatorService:
                         or activation.get("input_dispatched") is not False):
                     return False
         return True
+
+    def review_full_video_preview(self, project_id: str, request_id: str, *, decision: str, reason: str) -> dict[str, Any]:
+        """Record an Owner decision against the exact locked Elyum preview."""
+        return review_elyum_locked_preview(self.runtime.root, project_id, request_id, decision=decision, reason=reason)
+
+    def keep_full_video_preview(self, project_id: str, request_id: str, *, confirm_spend: bool,
+                                client=None, output_fetcher=None) -> dict[str, Any]:
+        """Execute or resume the explicit Elyum Keep/clean-output consequence."""
+        return keep_elyum_locked_preview(self.runtime.root, project_id, request_id, client=client,
+                                         confirm_spend=confirm_spend, output_fetcher=output_fetcher)
+
+    def kill_full_video_preview(self, project_id: str, request_id: str, *, confirm_kill: bool,
+                                reason: str, client=None) -> dict[str, Any]:
+        """Execute the explicit Elyum Kill consequence for an Owner-rejected preview."""
+        return kill_elyum_locked_preview(self.runtime.root, project_id, request_id, client=client,
+                                         confirm_kill=confirm_kill, reason=reason)
 
     def generate(self, project_id: str, *, request_ids: set[str] | None=None, executor: FlowExecutor | None=None,
                  max_requests: int | None=None, seedance_client=None) -> dict[str, Any]:

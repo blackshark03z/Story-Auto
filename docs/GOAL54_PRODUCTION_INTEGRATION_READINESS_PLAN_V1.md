@@ -127,7 +127,9 @@ At minimum model separately:
 
 A known job must always resume; an ambiguous or terminal attempt must never silently create a replacement task.
 
-### Slice E — Product UI / observability
+### Slice E — Product UI / observability — COMPLETE
+
+Engineering evidence: `docs/GOAL54_PRODUCTION_SLICE_E_EVIDENCE.md`.
 
 Only after runtime semantics are accepted:
 - show the configured Full Video provider truthfully;
@@ -160,4 +162,4 @@ Production mutation must proceed through the bounded slices in this plan with ex
 
 ## Immediate next executable step
 
-Slice A is complete and regression-verified. Start Slice B continuity-reference lifecycle before enabling any Elyum production dispatch: canonical first-shot anchor, deterministic accepted-shot frame extraction, SHA binding, request/job ownership, stale-frame prevention and rejection/replacement behavior.
+Slices A–E are complete and regression-verified. The next executable step is Slice F bounded production UAT. Prepare the UAT fixture, exact acceptance evidence and read-only provider/budget preflight first. Do not enable ordinary Elyum routing or create an unbounded provider task merely because engineering slices are complete.

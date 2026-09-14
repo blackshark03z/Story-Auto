@@ -216,6 +216,57 @@ function projectHeader(snapshot) {
   $('#backHome').addEventListener('click', () => showHome(true));
 }
 
+function fullVideoProviderSurface(snapshot) {
+  const provider = snapshot.full_video_provider;
+  if (!provider) return '';
+  const budget = provider.budget || {};
+  const budgetParts = [];
+  if (budget.balance !== null && budget.balance !== undefined) budgetParts.push(`Balance ${esc(budget.balance)} credits`);
+  if (budget.estimate_credits !== null && budget.estimate_credits !== undefined) budgetParts.push(`Quote ${esc(budget.estimate_credits)} credits`);
+  if (budget.max_credits !== null && budget.max_credits !== undefined) budgetParts.push(`Bound ${esc(budget.max_credits)} credits`);
+  if (budget.unlock_credits !== null && budget.unlock_credits !== undefined) budgetParts.push(`Keep/unlock ${esc(budget.unlock_credits)} credits`);
+  const routing = provider.routing_enabled ? 'Production enabled' : 'Integration staged — production routing remains locked until Goal 54 UAT is accepted.';
+  const preview = provider.preview_path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,provider.preview_path)}" aria-label="Exact locked Elyum preview"></video>` : '';
+  let controls = '';
+  if (provider.action === 'REVIEW_PREVIEW') {
+    controls = `<div class="field"><label>Review reason<input data-elyum-review-reason type="text" autocomplete="off" placeholder="Why this exact preview is acceptable or should be rejected"></label><small>This reason is bound to the exact preview SHA-256.</small></div><div class="button-row"><button class="button-primary" data-elyum-review="ACCEPT" data-request-id="${esc(provider.request_id)}" type="button">Accept exact preview</button><button data-elyum-review="REJECT" data-request-id="${esc(provider.request_id)}" type="button">Reject exact preview</button></div>`;
+  } else if (provider.action === 'KEEP_PREVIEW') {
+    const cost = budget.unlock_credits !== null && budget.unlock_credits !== undefined ? ` (${esc(budget.unlock_credits)} credits)` : '';
+    controls = `<div class="button-row"><button class="button-primary" data-elyum-keep data-request-id="${esc(provider.request_id)}" type="button">Keep / unlock${cost}</button></div>`;
+  } else if (provider.action === 'KILL_PREVIEW') {
+    controls = `<div class="button-row"><button data-elyum-kill data-request-id="${esc(provider.request_id)}" type="button">Kill rejected preview</button></div>`;
+  } else if (provider.action === 'REACQUIRE_KEPT_OUTPUT') {
+    controls = `<div class="button-row"><button class="button-primary" data-elyum-reacquire data-request-id="${esc(provider.request_id)}" type="button">Retry clean output download</button></div>`;
+  }
+  const exact = provider.preview_sha256 ? `<details class="disclosure"><summary>Exact acceptance surface</summary><div class="technical">Preview SHA-256: ${esc(provider.preview_sha256)}${provider.selected_sha256 ? `\nSelected SHA-256: ${esc(provider.selected_sha256)}` : ''}</div></details>` : '';
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">FULL VIDEO PROVIDER</p><h2>${esc(provider.provider_label)}</h2><p>${esc(routing)}</p></div><span class="status-chip ${provider.owner_decision_required ? 'attention' : provider.status === 'SUCCEEDED' ? 'success' : ''}">${esc(provider.status)}</span></div><div class="choice-grid"><div class="choice"><strong>Continuation safety</strong><small>${esc(provider.continuation_behavior)}</small></div><div class="choice"><strong>Provider state</strong><small>${provider.known_job ? 'A durable provider job is already known. Continue must resume it.' : 'No durable provider job is currently bound to this request.'}</small></div>${budgetParts.length ? `<div class="choice"><strong>Budget / preflight</strong><small>${budgetParts.map(esc).join(' · ')}</small></div>` : ''}</div>${preview}${controls}${provider.action === 'RECONCILE_CONSEQUENCE' ? '<div class="attention-card"><div><strong>Consequence reconciliation required</strong><p>Story Auto will not repeat Keep or Kill automatically because the provider outcome is ambiguous.</p></div></div>' : ''}${exact}</section>`;
+}
+
+function bindFullVideoProviderControls() {
+  document.querySelectorAll('[data-elyum-review]').forEach(button => button.addEventListener('click', async () => {
+    const decision = button.dataset.elyumReview;
+    const input = button.closest('.surface')?.querySelector('[data-elyum-review-reason]');
+    const reason = input?.value?.trim() || '';
+    if (!reason) { toast('Add a reason for this exact preview decision.',true); input?.focus(); return; }
+    await runAction('review_elyum_preview', decision === 'ACCEPT' ? 'Recording preview acceptance…' : 'Recording preview rejection…', {request_id:button.dataset.requestId,decision,reason});
+  }));
+  document.querySelectorAll('[data-elyum-keep]').forEach(button => button.addEventListener('click', async () => {
+    const provider = state.snapshot?.full_video_provider || {};
+    const credits = provider.budget?.unlock_credits;
+    const suffix = credits !== null && credits !== undefined ? ` This may spend ${credits} provider credits.` : ' This may spend provider credits.';
+    if (!window.confirm(`Keep and unlock this exact accepted preview?${suffix}`)) return;
+    await runAction('keep_elyum_preview','Keeping and acquiring the clean output…',{request_id:button.dataset.requestId,confirm_spend:true});
+  }));
+  document.querySelectorAll('[data-elyum-kill]').forEach(button => button.addEventListener('click', async () => {
+    const reason = state.snapshot?.full_video_provider?.preview_review?.reason || 'Owner rejected the exact locked preview.';
+    if (!window.confirm('Kill this rejected provider result? Story Auto will not create a replacement automatically.')) return;
+    await runAction('kill_elyum_preview','Killing the rejected provider result…',{request_id:button.dataset.requestId,confirm_kill:true,reason});
+  }));
+  document.querySelectorAll('[data-elyum-reacquire]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('keep_elyum_preview','Retrying clean output acquisition without another Keep…',{request_id:button.dataset.requestId,confirm_spend:false});
+  }));
+}
+
 function renderProject() {
   const workspace=state.snapshot, production=workspace.production, blocker=production.blocker, action=production.next_action, flow=production.flow;
   projectHeader(workspace);
@@ -232,11 +283,13 @@ function renderProject() {
   ${state.error ? errorCard(state.error) : ''}
   ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? 'Visual planning needs another attempt' : blocker.reason_code === 'STUCK_PENDING' ? 'Flow generation appears stuck' : 'Action needed'}</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${blocker.reason_code === 'STUCK_PENDING' ? '<div class="button-row"><button class="button-primary" data-project-action="recheck_flow_generation" type="button">Recheck status</button><button data-project-action="open_flow_project" type="button">Open Flow project</button></div>' : primary}${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? `<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(blocker.reason_code)}</div></details>` : ''}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
+  ${fullVideoProviderSurface(workspace)}
   <section class="surface"><div class="surface-head"><div><h2>Output and preview</h2><p>${workspace.final_path ? 'Your latest final video is ready.' : 'Your final video will appear here when production is complete.'}</p></div></div>${workspace.final_path ? `<a class="button button-primary" href="${assetUrl(workspace.project_id,workspace.final_path)}" target="_blank" rel="noopener">Open final video</a>` : '<div class="empty-library"><p>No final video yet.</p></div>'}</section>
   <section class="surface"><div class="surface-head"><div><h2>Project summary</h2><p>These are the effective settings saved with this project.</p></div></div><dl class="summary-list"><div class="summary-row"><dt>Source</dt><dd>${esc(workspace.summary.source)}</dd></div>${workspace.summary.narrator ? `<div class="summary-row"><dt>Narrator</dt><dd>${esc(workspace.summary.narrator)}</dd></div>` : ''}<div class="summary-row"><dt>Style</dt><dd>${esc(workspace.summary.style)}</dd></div><div class="summary-row"><dt>Quality review</dt><dd>${esc(workspace.summary.quality)}</dd></div><div class="summary-row"><dt>Waveform</dt><dd>${esc(workspace.summary.waveform)}</dd></div><div class="summary-row"><dt>Resolution</dt><dd>${esc(workspace.summary.resolution)}</dd></div></dl></section>
   <details class="surface disclosure"><summary>More actions</summary><div class="button-row">${production.active_stage === 'PLAN' ? '<button id="reviewPlan" type="button">Review plan</button>' : ''}<button id="reviewProject" type="button">Review visuals</button>${workspace.can_render_again ? '<button id="renderAgain" type="button">Render final video again</button>' : ''}</div></details>
   <details class="surface disclosure" id="projectDetails"><summary>Advanced, Diagnostics, and History</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details>`;
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
+  bindFullVideoProviderControls();
   document.querySelectorAll('[data-rebind-flow]').forEach(button => button.addEventListener('click', async () => {
     if (!window.confirm('Use the currently validated Flow project for future requests? Existing request history will remain unchanged.')) return;
     await runAction('rebind_flow_project','Rebinding future Flow requests…', {explicit_owner_decision:true});

@@ -336,8 +336,6 @@ def keep_elyum_preview(runtime_root: Path | str, project_id: str, request_id: st
                        client: ElyumSeedanceClient | None = None, confirm_spend: bool = False,
                        output_fetcher: Callable[[str, Path], None] | None = None) -> dict[str, Any]:
     """Explicitly Keep one Owner-accepted preview, never retrying ambiguous spend."""
-    if confirm_spend is not True:
-        raise ElyumProductionError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
     paths, _config = _require_elyum_project(runtime_root, project_id)
     active = client or ElyumSeedanceClient()
     if active.readiness().get("status") != "READY":
@@ -368,6 +366,8 @@ def keep_elyum_preview(runtime_root: Path | str, project_id: str, request_id: st
                     attempt["kept_output_urls"] = urls
                     atomic_write_json(manifest_path, manifest)
             return _acquire_kept_output(paths, manifest_path, manifest, entry, attempt, request_id, urls, fetcher)
+        if confirm_spend is not True:
+            raise ElyumProductionError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
         if status != "KEEP_REQUIRED" or entry.get("status") != "KEEP_REQUIRED":
             raise ElyumProductionError("ELYUM_KEEP_NOT_ALLOWED")
         if not _preview_valid(paths, attempt):

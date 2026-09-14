@@ -293,7 +293,7 @@ class ElyumProductionServiceTests(unittest.TestCase):
         self.assertEqual(boundary["status"], "KEEP_ACQUISITION_REQUIRED")
         self.assertEqual(client.keep_calls, 1)
         recovered = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
-                                       confirm_spend=True, output_fetcher=self._fetch)
+                                       output_fetcher=self._fetch)
         self.assertEqual(recovered["status"], "SUCCEEDED")
         self.assertEqual(client.keep_calls, 1)
 
@@ -308,7 +308,7 @@ class ElyumProductionServiceTests(unittest.TestCase):
         self.assertEqual(first["status"], "KEEP_ACQUISITION_REQUIRED")
         self.assertEqual(client.keep_calls, 1)
         second = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
-                                    confirm_spend=True, output_fetcher=self._fetch)
+                                    output_fetcher=self._fetch)
         self.assertEqual(second["status"], "SUCCEEDED")
         self.assertEqual(client.keep_calls, 1)
 

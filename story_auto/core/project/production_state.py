@@ -503,6 +503,60 @@ class ProductionStateReconciler:
                             "affected_request_id": request_id, "requires_owner_decision": True,
                             "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
                             "next_action": "Review recovery"}
+            if entry.get("provider") == "elyum_seedance":
+                attempts = entry.get("attempts") if isinstance(entry.get("attempts"), list) else []
+                latest = attempts[-1] if attempts and isinstance(attempts[-1], dict) else None
+                latest_status = latest.get("status") if isinstance(latest, dict) else status
+                if status == "COST_BLOCKED":
+                    return {**base, "status": "BLOCKED", "reason_code": "ELYUM_COST_BOUND_EXCEEDED",
+                            "human_message": "The Elyum quote exceeds this project's configured credit bound. No provider generation was created.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review provider access"}
+                if latest_status in {"GENERATING", "WAIT_UNAVAILABLE", "SUBMITTED"} and isinstance(latest, dict) and isinstance(latest.get("provider_job_id"), str):
+                    return {**base, "status": "RECOVERY_READY", "reason_code": "ELYUM_JOB_RESUME_READY",
+                            "human_message": "The identified Elyum job can be polled again without creating another generation.",
+                            "affected_request_id": request_id, "automatic_recovery_available": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Continue production"}
+                if latest_status == "REPLAY_SAME_CLIENT_REF" or status == "AMBIGUOUS":
+                    return {**base, "status": "RECOVERY_READY", "reason_code": "ELYUM_CLIENT_REF_REPLAY_READY",
+                            "human_message": "The create outcome is ambiguous. Recovery may reuse only the saved client identity; a new logical attempt is not authorized.",
+                            "affected_request_id": request_id, "automatic_recovery_available": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Continue production"}
+                if latest_status == "PREVIEW_READY":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_PREVIEW_REVIEW_REQUIRED",
+                            "human_message": "The exact locked Elyum preview is ready for your quality decision.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review visuals"}
+                if latest_status == "KEEP_REQUIRED":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_KEEP_REQUIRED",
+                            "human_message": "The accepted preview requires explicit Keep/unlock before it can become a clean production asset.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review visuals"}
+                if latest_status == "PREVIEW_REJECTED":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_KILL_REQUIRED",
+                            "human_message": "The rejected preview is awaiting an explicit Kill decision. No replacement generation will be created automatically.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review visuals"}
+                if latest_status == "KEEP_ACQUISITION_REQUIRED":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_CLEAN_OUTPUT_ACQUISITION_REQUIRED",
+                            "human_message": "Keep is already confirmed. Retry only the clean-output download; do not Keep again.",
+                            "affected_request_id": request_id, "requires_owner_decision": False,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review visuals"}
+                if latest_status in {"KEEP_AMBIGUOUS", "KEEP_DISPATCHING", "KILL_AMBIGUOUS", "KILL_DISPATCHING"}:
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_CONSEQUENCE_AMBIGUOUS",
+                            "human_message": "The Elyum Keep/Kill outcome is ambiguous. Story Auto will not repeat the consequence automatically.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review recovery"}
+                if latest_status == "KILLED":
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": "ELYUM_PREVIEW_KILLED",
+                            "human_message": "The rejected Elyum result was killed. A replacement generation requires a separate explicit decision.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review recovery"}
+                if latest_status in {"FAILED_TERMINAL", "PREVIEW_ACQUISITION_FAILED"}:
+                    return {**base, "status": "NEEDS_ATTENTION", "reason_code": entry.get("failure_class") or "ELYUM_PROVIDER_TERMINAL",
+                            "human_message": "The Elyum attempt ended without a usable production asset. Story Auto will not silently create a replacement.",
+                            "affected_request_id": request_id, "requires_owner_decision": True,
+                            "provider_dispatches_per_continue": 0, "next_action": "Review recovery"}
             # This local import deliberately reuses the exact Slice 3 durable
             # evidence normalization; it only reads evidence and cannot reach
             # the provider adapter from the compact projection.
