@@ -13,7 +13,8 @@ from story_auto.core.full_video_continuity import FullVideoContinuityError, bind
 from story_auto.core.full_video_provider import full_video_provider_snapshot
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 from story_auto.providers.elyum_seedance import ElyumSeedanceError
-from story_auto.providers.elyum_seedance.service import ElyumProductionError, execute_elyum_generation
+from story_auto.providers.elyum_seedance.service import (ElyumProductionError, execute_elyum_generation,
+    keep_elyum_preview, kill_elyum_preview, review_elyum_preview)
 
 
 FFMPEG = shutil.which("ffmpeg") and shutil.which("ffprobe")
@@ -22,17 +23,23 @@ FFMPEG = shutil.which("ffmpeg") and shutil.which("ffprobe")
 class FakeElyumClient:
     provider = "elyum_seedance"
 
-    def __init__(self, *, balance=100, estimate=44, make_outcomes=None, wait_outcomes=None, on_make=None):
+    def __init__(self, *, balance=100, estimate=44, make_outcomes=None, wait_outcomes=None, on_make=None,
+                 keep_outcome=None, kill_outcome=None, job_status_outcome=None):
         self.balance = balance
         self.estimate = estimate
         self.make_outcomes = list(make_outcomes or [("job_prod_1", {})])
         self.wait_outcomes = list(wait_outcomes or [{"status": "done", "genId": "gen_prod_1",
                                                       "url": "https://elyum.invalid/preview.mp4", "unlockCredits": 20}])
         self.on_make = on_make
+        self.keep_outcome = {"status": "kept", "videoUrl": "https://elyum.invalid/final.mp4"} if keep_outcome is None else keep_outcome
+        self.kill_outcome = {"status": "killed"} if kill_outcome is None else kill_outcome
+        self.job_status_outcome = job_status_outcome or {"status": "done", "videoUrl": "https://elyum.invalid/final.mp4"}
         self.upload_calls = 0
         self.make_calls = []
         self.wait_calls = []
         self.keep_calls = 0
+        self.kill_calls = 0
+        self.job_status_calls = 0
 
     def readiness(self):
         return {"status": "READY", "reason_code": None}
@@ -81,9 +88,30 @@ class FakeElyumClient:
     def unlock_credits(result):
         return result.get("unlockCredits")
 
+    @staticmethod
+    def downloadable_urls(result):
+        if not isinstance(result, dict):
+            return []
+        value = result.get("videoUrl") or result.get("url")
+        return [value] if isinstance(value, str) and value else []
+
     def keep(self, *_args, **_kwargs):
         self.keep_calls += 1
-        raise AssertionError("production preview execution must never keep automatically")
+        if isinstance(self.keep_outcome, Exception):
+            raise self.keep_outcome
+        return self.keep_outcome
+
+    def kill(self, *_args, **_kwargs):
+        self.kill_calls += 1
+        if isinstance(self.kill_outcome, Exception):
+            raise self.kill_outcome
+        return self.kill_outcome
+
+    def job_status(self, *_args, **_kwargs):
+        self.job_status_calls += 1
+        if isinstance(self.job_status_outcome, Exception):
+            raise self.job_status_outcome
+        return self.job_status_outcome
 
 
 @unittest.skipUnless(FFMPEG, "FFmpeg integration requires ffmpeg and ffprobe")
@@ -125,6 +153,13 @@ class ElyumProductionServiceTests(unittest.TestCase):
 
     def _manifest(self):
         return read_json(self.paths.artifact_path("output/generation_manifest.json"))
+
+    def _preview_ready(self, client=None):
+        active = client or FakeElyumClient()
+        result = execute_elyum_generation(self.runtime.root, "prj_elyum_prod", run_id="run_prod", client=active,
+                                          dispatch_authorized=True, preview_fetcher=self._fetch)
+        self.assertEqual(result["status"], "PREVIEW_READY")
+        return active
 
     def test_dispatch_requires_explicit_authority(self):
         client = FakeElyumClient()
@@ -218,6 +253,117 @@ class ElyumProductionServiceTests(unittest.TestCase):
                                      dispatch_authorized=True, preview_fetcher=self._fetch)
         self.assertEqual(caught.exception.failure_class, "ELYUM_CONTINUITY_SNAPSHOT_MISMATCH")
         self.assertEqual(len(client.make_calls), 1)
+
+    def test_owner_accept_creates_keep_boundary_and_keep_is_single_spend_then_idempotent(self):
+        client = self._preview_ready()
+        before_waits = len(client.wait_calls)
+        reviewed = review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                                        decision="ACCEPT", reason="Owner accepts exact locked preview")
+        self.assertEqual(reviewed["status"], "KEEP_REQUIRED")
+        boundary = execute_elyum_generation(self.runtime.root, "prj_elyum_prod", run_id="run_prod", client=client,
+                                            dispatch_authorized=True, preview_fetcher=self._fetch)
+        self.assertEqual(boundary["status"], "KEEP_REQUIRED")
+        self.assertEqual(len(client.wait_calls), before_waits)
+        with self.assertRaises(ElyumProductionError) as caught:
+            keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                               output_fetcher=self._fetch)
+        self.assertEqual(caught.exception.failure_class, "ELYUM_KEEP_CONFIRMATION_REQUIRED")
+        kept = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                  confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(kept["status"], "SUCCEEDED")
+        self.assertEqual(client.keep_calls, 1)
+        entry = self._manifest()["requests"][0]
+        self.assertEqual(entry["selected_asset"]["production_qc"], "OWNER_ACCEPTED")
+        self.assertEqual(entry["selected_asset"]["source_preview_sha256"], reviewed["preview_sha256"])
+        again = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                   confirm_spend=True, output_fetcher=self._fetch)
+        self.assertTrue(again["idempotent"])
+        self.assertEqual(client.keep_calls, 1)
+
+    def test_missing_clean_output_recovers_acquisition_without_second_keep(self):
+        client = self._preview_ready()
+        review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                             decision="ACCEPT", reason="Owner accepts preview")
+        kept = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                  confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(kept["status"], "SUCCEEDED")
+        self.paths.artifact_path(kept["path"]).unlink()
+        boundary = execute_elyum_generation(self.runtime.root, "prj_elyum_prod", run_id="run_prod", client=client,
+                                            dispatch_authorized=True, preview_fetcher=self._fetch)
+        self.assertEqual(boundary["status"], "KEEP_ACQUISITION_REQUIRED")
+        self.assertEqual(client.keep_calls, 1)
+        recovered = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                       confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(recovered["status"], "SUCCEEDED")
+        self.assertEqual(client.keep_calls, 1)
+
+    def test_keep_success_with_acquisition_failure_retries_download_only(self):
+        client = self._preview_ready()
+        review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                             decision="ACCEPT", reason="Owner accepts preview")
+        def fail_fetch(_url, _destination):
+            raise RuntimeError("offline fixture acquisition failure")
+        first = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                   confirm_spend=True, output_fetcher=fail_fetch)
+        self.assertEqual(first["status"], "KEEP_ACQUISITION_REQUIRED")
+        self.assertEqual(client.keep_calls, 1)
+        second = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                    confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(second["status"], "SUCCEEDED")
+        self.assertEqual(client.keep_calls, 1)
+
+    def test_ambiguous_keep_is_never_retried_automatically(self):
+        transient = ElyumSeedanceError("PROVIDER_TRANSIENT")
+        client = self._preview_ready(FakeElyumClient(keep_outcome=transient))
+        review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                             decision="ACCEPT", reason="Owner accepts preview")
+        first = keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                   confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(first["status"], "KEEP_AMBIGUOUS")
+        self.assertEqual(client.keep_calls, 1)
+        with self.assertRaises(ElyumProductionError) as caught:
+            keep_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                               confirm_spend=True, output_fetcher=self._fetch)
+        self.assertEqual(caught.exception.failure_class, "ELYUM_KEEP_OUTCOME_AMBIGUOUS")
+        self.assertEqual(client.keep_calls, 1)
+
+    def test_reject_then_explicit_kill_is_single_consequence_and_no_redispatch(self):
+        client = self._preview_ready()
+        reviewed = review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                                        decision="REJECT", reason="Owner rejects visible drift")
+        self.assertEqual(reviewed["status"], "PREVIEW_REJECTED")
+        with self.assertRaises(ElyumProductionError) as caught:
+            kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                               reason="Rejected preview")
+        self.assertEqual(caught.exception.failure_class, "ELYUM_KILL_CONFIRMATION_REQUIRED")
+        killed = kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                    confirm_kill=True, reason="Rejected preview")
+        self.assertEqual(killed["status"], "KILLED")
+        self.assertEqual(client.kill_calls, 1)
+        before_make = len(client.make_calls)
+        boundary = execute_elyum_generation(self.runtime.root, "prj_elyum_prod", run_id="run_prod", client=client,
+                                            dispatch_authorized=True, preview_fetcher=self._fetch)
+        self.assertEqual(boundary["status"], "KILLED")
+        self.assertEqual(len(client.make_calls), before_make)
+        again = kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                   confirm_kill=True, reason="Rejected preview")
+        self.assertTrue(again["idempotent"])
+        self.assertEqual(client.kill_calls, 1)
+
+    def test_ambiguous_kill_is_never_retried_automatically(self):
+        transient = ElyumSeedanceError("PROVIDER_TRANSIENT")
+        client = self._preview_ready(FakeElyumClient(kill_outcome=transient))
+        review_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first",
+                             decision="REJECT", reason="Owner rejects preview")
+        first = kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                                   confirm_kill=True, reason="Rejected preview")
+        self.assertEqual(first["status"], "KILL_AMBIGUOUS")
+        self.assertEqual(client.kill_calls, 1)
+        with self.assertRaises(ElyumProductionError) as caught:
+            kill_elyum_preview(self.runtime.root, "prj_elyum_prod", "req_first", client=client,
+                               confirm_kill=True, reason="Rejected preview")
+        self.assertEqual(caught.exception.failure_class, "ELYUM_KILL_OUTCOME_AMBIGUOUS")
+        self.assertEqual(client.kill_calls, 1)
 
 
 if __name__ == "__main__":

@@ -109,7 +109,9 @@ Required semantics:
 
 Research ledger files must not become production state. Production must use canonical project artifacts/manifests.
 
-### Slice D — Recovery and consequence state
+### Slice D — Recovery and consequence state — COMPLETE
+
+Engineering evidence: `docs/GOAL54_PRODUCTION_SLICE_D_EVIDENCE.md`.
 
 Extend compact production recovery without weakening BytePlus behavior.
 

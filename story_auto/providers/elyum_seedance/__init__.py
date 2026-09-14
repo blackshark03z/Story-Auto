@@ -17,7 +17,8 @@ from .research import (
     resume_experiment_preview,
     run_experiment_preview,
 )
-from .service import ElyumProductionError, elyum_production_readiness, execute_elyum_generation
+from .service import (ElyumProductionError, elyum_production_readiness, execute_elyum_generation,
+                      kill_elyum_preview, keep_elyum_preview, review_elyum_preview)
 
 __all__ = [
     "DEFAULT_ENDPOINT",
@@ -33,4 +34,7 @@ __all__ = [
     "ElyumProductionError",
     "elyum_production_readiness",
     "execute_elyum_generation",
+    "review_elyum_preview",
+    "keep_elyum_preview",
+    "kill_elyum_preview",
 ]

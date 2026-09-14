@@ -440,4 +440,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Stable `client_ref` and continuity ownership are persisted before provider create; ambiguous create replays only the same clientRef, known jobs resume only the same job, and locked preview acquisition is local/hash-bound with no automatic Keep/Kill.
 - Cross-run preview reuse is blocked and a materialized production attempt freezes its reference binding before provider mutation.
 - Slice C regression: `79 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; compile/diff checks PASS. No live provider call or Credit mutation occurred.
-- Elyum remains production-disabled. Next implementation work is Slice D: explicit preview-review / Keep-unlock / clean-output consequence and recovery state.
+- Slice D is engineering-complete; evidence: `docs/GOAL54_PRODUCTION_SLICE_D_EVIDENCE.md`.
+- Locked-preview Owner review is now SHA-bound and provider-free; acceptance moves to explicit `KEEP_REQUIRED`, rejection to explicit `PREVIEW_REJECTED`.
+- Keep/Kill consequence intent is persisted before provider mutation; ambiguous Keep/Kill outcomes fail closed and cannot auto-retry.
+- A confirmed Keep followed by local output-acquisition failure recovers acquisition-only and cannot spend a second time; only validated, duration-checked, hash-bound clean output becomes `selected_asset`.
+- Slice D broader regression: `85 passed, 2 subtests passed`; `SECURITY_GATE=PASS`; full hermetic regression: `761 passed, 283 subtests passed`.
+- No live provider call or Credit mutation occurred. Elyum remains production-disabled. Next implementation work is Slice E: product UI / observability.

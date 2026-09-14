@@ -134,6 +134,46 @@ def _preview_valid(paths, attempt: dict[str, Any]) -> bool:
     return metadata.get("sha256") == asset.get("sha256")
 
 
+def _selected_valid(paths, entry: dict[str, Any]) -> bool:
+    selected = entry.get("selected_asset")
+    if (entry.get("status") != "SUCCEEDED" or not isinstance(selected, dict)
+            or selected.get("production_qc") != "OWNER_ACCEPTED"
+            or not isinstance(selected.get("path"), str)):
+        return False
+    path = paths.artifact_path(selected["path"])
+    if not path.is_file():
+        return False
+    try:
+        metadata = validate_video(path)
+    except AssetValidationError:
+        return False
+    return metadata.get("sha256") == selected.get("sha256")
+
+
+def _find_entry(manifest: dict[str, Any], request_id: str) -> dict[str, Any]:
+    matches = [item for item in manifest.get("requests", [])
+               if isinstance(item, dict) and item.get("request_id") == request_id]
+    if len(matches) != 1:
+        raise ElyumProductionError("ELYUM_REQUEST_NOT_FOUND")
+    return matches[0]
+
+
+def _latest_attempt(entry: dict[str, Any]) -> dict[str, Any]:
+    attempts = entry.get("attempts")
+    latest = attempts[-1] if isinstance(attempts, list) and attempts else None
+    if not isinstance(latest, dict):
+        raise ElyumProductionError("ELYUM_ATTEMPT_NOT_FOUND")
+    return latest
+
+
+def _require_elyum_project(runtime_root: Path | str, project_id: str):
+    runtime = RuntimeLayout.from_root(runtime_root)
+    paths, config = load_project(runtime, project_id)
+    if config.render_mode != "full_video_ai" or resolve_full_video_provider(config.settings) != PROVIDER_ID:
+        raise ElyumProductionError("ELYUM_PRODUCTION_MODE_INVALID")
+    return paths, config
+
+
 def _record_preflight(entry: dict[str, Any], *, balance: int, estimate: int, max_credits: int) -> None:
     entry.setdefault("preflight_events", []).append({
         "observed_at": _now(), "balance": int(balance), "estimate_credits": int(estimate),
@@ -199,6 +239,220 @@ def elyum_production_readiness(client: ElyumSeedanceClient | None = None) -> dic
     return (client or ElyumSeedanceClient()).readiness()
 
 
+def review_elyum_preview(runtime_root: Path | str, project_id: str, request_id: str, *,
+                         decision: str, reason: str) -> dict[str, Any]:
+    """Record the Owner oracle for one exact locked preview without provider calls."""
+    decision = str(decision or "").upper()
+    if decision not in {"ACCEPT", "REJECT"}:
+        raise ElyumProductionError("ELYUM_PREVIEW_DECISION_INVALID")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ElyumProductionError("ELYUM_PREVIEW_REVIEW_REASON_REQUIRED")
+    paths, _config = _require_elyum_project(runtime_root, project_id)
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        entry = _find_entry(manifest, request_id)
+        attempt = _latest_attempt(entry)
+        existing = attempt.get("preview_review")
+        expected_status = "KEEP_REQUIRED" if decision == "ACCEPT" else "PREVIEW_REJECTED"
+        if (isinstance(existing, dict) and existing.get("decision") == decision
+                and attempt.get("status") == expected_status):
+            return {"status": expected_status, "project_id": project_id, "request_id": request_id,
+                    "preview_sha256": existing.get("preview_sha256"), "idempotent": True}
+        if attempt.get("status") != "PREVIEW_READY" or entry.get("status") != "PREVIEW_READY":
+            raise ElyumProductionError("ELYUM_PREVIEW_NOT_REVIEWABLE")
+        if not _preview_valid(paths, attempt):
+            raise ElyumProductionError("ELYUM_PREVIEW_ASSET_INVALID")
+        preview = attempt["preview_asset"]
+        review = {
+            "reviewed_at": _now(), "actor": "OWNER", "decision": decision,
+            "reason": reason.strip(), "preview_path": preview["path"],
+            "preview_sha256": preview["sha256"], "gen_id": attempt.get("gen_id"),
+            "unlock_credits": attempt.get("unlock_credits"),
+        }
+        attempt["preview_review"] = review
+        if decision == "ACCEPT":
+            preview["production_qc"] = "OWNER_ACCEPTED"
+            attempt.update({"status": "KEEP_REQUIRED", "failure_class": None})
+            entry.update({"status": "KEEP_REQUIRED", "failure_class": None, "updated_at": review["reviewed_at"]})
+        else:
+            preview["production_qc"] = "REJECTED"
+            attempt.update({"status": "PREVIEW_REJECTED", "failure_class": "PREVIEW_REJECTED"})
+            entry.update({"status": "PREVIEW_REJECTED", "failure_class": "PREVIEW_REJECTED",
+                          "updated_at": review["reviewed_at"]})
+        atomic_write_json(manifest_path, manifest)
+        return {"status": attempt["status"], "project_id": project_id, "request_id": request_id,
+                "preview_sha256": preview["sha256"], "gen_id": attempt.get("gen_id"),
+                "unlock_credits": attempt.get("unlock_credits")}
+
+
+def _acquire_kept_output(paths, manifest_path: Path, manifest: dict[str, Any], entry: dict[str, Any],
+                         attempt: dict[str, Any], request_id: str, urls: list[str],
+                         output_fetcher: Callable[[str, Path], None]) -> dict[str, Any]:
+    if not urls:
+        attempt.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "ELYUM_KEPT_OUTPUT_URL_MISSING"})
+        entry.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "ELYUM_KEPT_OUTPUT_URL_MISSING",
+                      "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        return {"status": "KEEP_ACQUISITION_REQUIRED", "project_id": manifest["project_id"],
+                "request_id": request_id, "failure_class": "ELYUM_KEPT_OUTPUT_URL_MISSING"}
+    number = int(attempt["attempt"])
+    relative = f"assets/video/{request_id}/attempt_{number:03d}_kept.mp4"
+    destination = paths.artifact_path(relative)
+    try:
+        output_fetcher(urls[0], destination)
+        metadata = validate_video(destination)
+    except Exception as error:
+        destination.unlink(missing_ok=True)
+        attempt.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "ELYUM_KEPT_OUTPUT_ACQUISITION_FAILED"})
+        entry.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "ELYUM_KEPT_OUTPUT_ACQUISITION_FAILED",
+                      "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        return {"status": "KEEP_ACQUISITION_REQUIRED", "project_id": manifest["project_id"],
+                "request_id": request_id, "failure_class": "ELYUM_KEPT_OUTPUT_ACQUISITION_FAILED"}
+    target = float(attempt.get("provider_settings", {}).get("target_duration") or 0.0)
+    if target > 0 and float(metadata.get("duration_seconds") or 0.0) + 0.10 < target:
+        destination.unlink(missing_ok=True)
+        attempt.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "VIDEO_TOO_SHORT"})
+        entry.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "VIDEO_TOO_SHORT", "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        return {"status": "KEEP_ACQUISITION_REQUIRED", "project_id": manifest["project_id"],
+                "request_id": request_id, "failure_class": "VIDEO_TOO_SHORT"}
+    review = attempt.get("preview_review") or {}
+    selected = {
+        "path": relative, "sha256": metadata["sha256"], "attempt": number,
+        "source_provider_attempt": number, "metadata": metadata,
+        "production_qc": "OWNER_ACCEPTED", "source_preview_sha256": review.get("preview_sha256"),
+        "owner_reviewed_at": review.get("reviewed_at"),
+    }
+    attempt.update({"status": "SUCCEEDED", "failure_class": None, "asset_path": relative,
+                    "asset_sha256": metadata["sha256"], "completed_at": _now()})
+    entry.update({"status": "SUCCEEDED", "failure_class": None, "selected_asset": selected, "updated_at": _now()})
+    atomic_write_json(manifest_path, manifest)
+    return {"status": "SUCCEEDED", "project_id": manifest["project_id"], "request_id": request_id,
+            "path": relative, "sha256": metadata["sha256"], "kept": True}
+
+
+def keep_elyum_preview(runtime_root: Path | str, project_id: str, request_id: str, *,
+                       client: ElyumSeedanceClient | None = None, confirm_spend: bool = False,
+                       output_fetcher: Callable[[str, Path], None] | None = None) -> dict[str, Any]:
+    """Explicitly Keep one Owner-accepted preview, never retrying ambiguous spend."""
+    if confirm_spend is not True:
+        raise ElyumProductionError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
+    paths, _config = _require_elyum_project(runtime_root, project_id)
+    active = client or ElyumSeedanceClient()
+    if active.readiness().get("status") != "READY":
+        raise ElyumProductionError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    fetcher = output_fetcher or _default_preview_fetcher
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        entry = _find_entry(manifest, request_id)
+        if _selected_valid(paths, entry):
+            return {"status": "SUCCEEDED", "project_id": project_id, "request_id": request_id,
+                    "path": entry["selected_asset"]["path"], "sha256": entry["selected_asset"]["sha256"],
+                    "kept": True, "idempotent": True}
+        attempt = _latest_attempt(entry)
+        status = attempt.get("status")
+        if status in {"KEEP_AMBIGUOUS", "KEEP_DISPATCHING"}:
+            raise ElyumProductionError("ELYUM_KEEP_OUTCOME_AMBIGUOUS")
+        if status == "KEEP_ACQUISITION_REQUIRED":
+            if attempt.get("keep_confirmed") is not True:
+                raise ElyumProductionError("ELYUM_KEEP_STATE_INVALID")
+            urls = list(attempt.get("kept_output_urls") or [])
+            if not urls and isinstance(attempt.get("provider_job_id"), str):
+                try:
+                    observed = active.job_status(attempt["provider_job_id"], thumbnails=False)
+                    urls = list(active.downloadable_urls(observed))
+                except ElyumSeedanceError:
+                    urls = []
+                if urls:
+                    attempt["kept_output_urls"] = urls
+                    atomic_write_json(manifest_path, manifest)
+            return _acquire_kept_output(paths, manifest_path, manifest, entry, attempt, request_id, urls, fetcher)
+        if status != "KEEP_REQUIRED" or entry.get("status") != "KEEP_REQUIRED":
+            raise ElyumProductionError("ELYUM_KEEP_NOT_ALLOWED")
+        if not _preview_valid(paths, attempt):
+            raise ElyumProductionError("ELYUM_PREVIEW_ASSET_INVALID")
+        gen_id = attempt.get("gen_id")
+        if not isinstance(gen_id, str) or not gen_id:
+            raise ElyumProductionError("ELYUM_GEN_ID_MISSING")
+        intent = {
+            "action": "KEEP", "recorded_at": _now(), "gen_id": gen_id,
+            "preview_sha256": attempt["preview_asset"]["sha256"],
+            "unlock_credits": attempt.get("unlock_credits"),
+        }
+        attempt["consequence_intent"] = intent
+        attempt.update({"status": "KEEP_DISPATCHING", "failure_class": None,
+                        "keep_calls_started": int(attempt.get("keep_calls_started", 0)) + 1})
+        entry.update({"status": "OWNER_DECISION_REQUIRED", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        try:
+            result = active.keep(gen_id)
+        except ElyumSeedanceError as error:
+            attempt.update({"status": "KEEP_AMBIGUOUS", "failure_class": error.failure_class,
+                            "keep_ambiguous_at": _now()})
+            entry.update({"status": "OWNER_DECISION_REQUIRED", "failure_class": "KEEP_OUTCOME_AMBIGUOUS",
+                          "updated_at": _now()})
+            atomic_write_json(manifest_path, manifest)
+            return {"status": "KEEP_AMBIGUOUS", "project_id": project_id, "request_id": request_id,
+                    "failure_class": error.failure_class}
+        urls = list(active.downloadable_urls(result))
+        attempt.update({"status": "KEEP_CONFIRMED", "keep_confirmed": True, "kept_at": _now(),
+                        "kept_output_urls": urls, "failure_class": None})
+        entry.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        return _acquire_kept_output(paths, manifest_path, manifest, entry, attempt, request_id, urls, fetcher)
+
+
+def kill_elyum_preview(runtime_root: Path | str, project_id: str, request_id: str, *,
+                       client: ElyumSeedanceClient | None = None, confirm_kill: bool = False,
+                       reason: str) -> dict[str, Any]:
+    """Explicitly Kill a rejected preview; ambiguous consequence is never retried."""
+    if confirm_kill is not True:
+        raise ElyumProductionError("ELYUM_KILL_CONFIRMATION_REQUIRED")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ElyumProductionError("ELYUM_KILL_REASON_REQUIRED")
+    paths, _config = _require_elyum_project(runtime_root, project_id)
+    active = client or ElyumSeedanceClient()
+    if active.readiness().get("status") != "READY":
+        raise ElyumProductionError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    with ProjectLock(paths.runtime, project_id):
+        manifest_path, manifest = _manifest(paths, project_id)
+        entry = _find_entry(manifest, request_id)
+        attempt = _latest_attempt(entry)
+        if attempt.get("status") == "KILLED" and entry.get("status") == "KILLED":
+            return {"status": "KILLED", "project_id": project_id, "request_id": request_id, "idempotent": True}
+        if attempt.get("status") in {"KILL_AMBIGUOUS", "KILL_DISPATCHING"}:
+            raise ElyumProductionError("ELYUM_KILL_OUTCOME_AMBIGUOUS")
+        if attempt.get("status") != "PREVIEW_REJECTED" or entry.get("status") != "PREVIEW_REJECTED":
+            raise ElyumProductionError("ELYUM_KILL_NOT_ALLOWED")
+        gen_id = attempt.get("gen_id")
+        if not isinstance(gen_id, str) or not gen_id:
+            raise ElyumProductionError("ELYUM_GEN_ID_MISSING")
+        attempt["consequence_intent"] = {
+            "action": "KILL", "recorded_at": _now(), "gen_id": gen_id,
+            "preview_sha256": attempt.get("preview_asset", {}).get("sha256"), "reason": reason.strip(),
+        }
+        attempt.update({"status": "KILL_DISPATCHING", "failure_class": None,
+                        "kill_calls_started": int(attempt.get("kill_calls_started", 0)) + 1})
+        entry.update({"status": "OWNER_DECISION_REQUIRED", "failure_class": None, "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        try:
+            active.kill(gen_id, reason=reason.strip())
+        except ElyumSeedanceError as error:
+            attempt.update({"status": "KILL_AMBIGUOUS", "failure_class": error.failure_class,
+                            "kill_ambiguous_at": _now()})
+            entry.update({"status": "OWNER_DECISION_REQUIRED", "failure_class": "KILL_OUTCOME_AMBIGUOUS",
+                          "updated_at": _now()})
+            atomic_write_json(manifest_path, manifest)
+            return {"status": "KILL_AMBIGUOUS", "project_id": project_id, "request_id": request_id,
+                    "failure_class": error.failure_class}
+        attempt.update({"status": "KILLED", "failure_class": "PREVIEW_REJECTED", "killed_at": _now(),
+                        "kill_reason": reason.strip()})
+        entry.update({"status": "KILLED", "failure_class": "PREVIEW_REJECTED", "updated_at": _now()})
+        atomic_write_json(manifest_path, manifest)
+        return {"status": "KILLED", "project_id": project_id, "request_id": request_id}
+
+
 def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_id: str,
                              client: ElyumSeedanceClient | None = None,
                              request_ids: set[str] | None = None, max_requests: int | None = 1,
@@ -253,6 +507,24 @@ def execute_elyum_generation(runtime_root: Path | str, project_id: str, *, run_i
             entry = _request_entry(manifest, request)
             attempts = entry.get("attempts") if isinstance(entry.get("attempts"), list) else []
             latest = attempts[-1] if attempts else None
+            if _selected_valid(paths, entry):
+                continue
+            if entry.get("status") == "SUCCEEDED" and isinstance(latest, dict) and latest.get("keep_confirmed") is True:
+                latest.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "CLEAN_OUTPUT_INVALID"})
+                entry.update({"status": "KEEP_ACQUISITION_REQUIRED", "failure_class": "CLEAN_OUTPUT_INVALID", "updated_at": _now()})
+                atomic_write_json(manifest_path, manifest)
+                return {"status": "KEEP_ACQUISITION_REQUIRED", "project_id": project_id,
+                        "request_id": request["request_id"], "provider": PROVIDER_ID,
+                        "new_submissions": 0, "resumed_tasks": 0, "failure_class": "CLEAN_OUTPUT_INVALID"}
+            consequence_boundaries = {"KEEP_REQUIRED", "PREVIEW_REJECTED", "KEEP_AMBIGUOUS", "KEEP_DISPATCHING",
+                                      "KEEP_ACQUISITION_REQUIRED", "KILL_AMBIGUOUS", "KILL_DISPATCHING", "KILLED"}
+            if isinstance(latest, dict) and latest.get("status") in consequence_boundaries:
+                reference = latest.get("continuity_reference")
+                if not isinstance(reference, dict) or reference.get("run_id") != run_id:
+                    raise ElyumProductionError("ELYUM_CONTINUITY_SNAPSHOT_MISMATCH")
+                return {"status": latest["status"], "project_id": project_id, "request_id": request["request_id"],
+                        "provider": PROVIDER_ID, "new_submissions": 0, "resumed_tasks": 0,
+                        "failure_class": latest.get("failure_class")}
             if isinstance(latest, dict) and latest.get("status") == "PREVIEW_READY" and _preview_valid(paths, latest):
                 reference = latest.get("continuity_reference")
                 if not isinstance(reference, dict) or reference.get("run_id") != run_id:
