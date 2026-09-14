@@ -420,4 +420,6 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - A transient wait was recovered only against that same job; RQ2 is now `PREVIEW_READY` with `gen_id=g_2a349ebe471d24bb37a8e9d6`.
 - Exact local locked preview SHA-256: `56aee3514dcccca429c918f4d92e0a6768d0b09f889f29dc59fd481b58575598`; contact-sheet SHA-256: `511d5b30cc6c3decb8983c0786b32acbaa6394fd85cd4040dbbbc065c59df5bf`.
 - Technical/provenance verification is complete; no Keep/Kill occurred.
-- Repeatability is `PENDING_RQ2_VISUAL_ORACLE`. RQ1 is already `PASS`; RQ2 must independently reach `PASS` or `PASS_WITH_MINOR_DRIFT` with zero critical failures to promote the method to `REPEATABILITY_QUALIFIED`. No RQ3 rescue run is allowed.
+- Owner explicitly approved the exact RQ2 locked preview on 2026-09-14 as `PASS`.
+- Aggregate Goal 54 repeatability verdict is now `REPEATABILITY_QUALIFIED`: X3 accepted/kept, RQ1 PASS, RQ2 PASS, zero critical failures and zero visual-quality redispatches. No RQ3 was run or is authorized.
+- Production routing remains unchanged until bounded integration slices are implemented and accepted. Next executable work is Slice A of `docs/GOAL54_PRODUCTION_INTEGRATION_READINESS_PLAN_V1.md`: capability-aware Full Video provider contract + durable provider snapshot, preserving BytePlus as default.

@@ -1,7 +1,7 @@
 # Goal 54 — RQ2 Preview Evidence
 
 Date: 2026-09-14
-Status: TECHNICAL_VERIFIED / VISUAL_PENDING
+Status: OWNER_APPROVED / PASS
 
 ## Qualification position
 
@@ -55,14 +55,18 @@ Contact sheet:
 
 This binds the exact acceptance surface to the durable provider identity without relying on gallery order, filenames, timestamps or UI recency.
 
-## Current verdict boundary
+## Owner visual verdict and aggregate outcome
 
-Technical/provenance qualification is complete. The exact RQ2 locked preview still requires direct visual classification against the frozen X3 rubric. Automated or structural evidence must not be promoted into a visual PASS under CADS Acceptance Surface Provenance.
+On 2026-09-14 the Owner reviewed the exact locally provenance-bound RQ2 locked preview (SHA-256 `56aee3514dcccca429c918f4d92e0a6768d0b09f889f29dc59fd481b58575598`) and explicitly approved RQ2 as `PASS`.
 
-Therefore repeatability remains `PENDING_RQ2_VISUAL_ORACLE`:
+Aggregate repeatability outcome:
 
-- RQ1: `OWNER_APPROVED / PASS`
-- RQ2: `TECHNICAL_VERIFIED / VISUAL_PENDING`
-- RQ3: forbidden by the frozen plan
+- baseline X3: accepted and kept;
+- RQ1: `OWNER_APPROVED / PASS`;
+- RQ2: `OWNER_APPROVED / PASS`;
+- critical failures across repeats: `0`;
+- visual-quality redispatches: `0`;
+- provider recovery: idempotent/same-job only;
+- RQ3: not run and forbidden by the frozen plan.
 
-If the exact RQ2 preview is `PASS` or `PASS_WITH_MINOR_DRIFT` with zero critical failures, Goal 54 may record `REPEATABILITY_QUALIFIED`. Otherwise record `NOT_REPEATABLE`. Locked-preview evidence is sufficient; Keep/Kill is a separate consequence and is not required for qualification.
+Goal 54 therefore promotes the frozen X3 continuity method from `RESEARCH_CANDIDATE` to `REPEATABILITY_QUALIFIED`. Keep/Kill for RQ2 remains a separate consequence and was not required for this qualification verdict.

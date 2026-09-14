@@ -1,7 +1,7 @@
 # Goal 54 — Full Video Production Integration Readiness Plan V1
 
 Date: 2026-09-13
-Status: PLANNING_ONLY / PRODUCTION_ROUTING_UNCHANGED
+Status: IMPLEMENTATION_READY / REPEATABILITY_QUALIFIED / PRODUCTION_ROUTING_UNCHANGED
 
 ## Purpose
 
@@ -146,17 +146,10 @@ UAT must include at least:
 
 ## Promotion boundaries
 
-Do not implement production routing to Elyum while RQ1/RQ2 repeatability is incomplete.
+RQ1 and RQ2 are both Owner-approved PASS and the aggregate method is now `REPEATABILITY_QUALIFIED`. This clears the research gate for production-integration implementation, but it does not itself switch production routing or authorize unbounded provider spend.
 
-Current Goal 54 state remains `RESEARCH_CANDIDATE` because RQ1 is budget-blocked. Planning and interface design may proceed, but production mutation must wait for:
-
-1. RQ1 accepted;
-2. RQ2 accepted;
-3. aggregate `REPEATABILITY_QUALIFIED` verdict;
-4. explicit integration implementation task/acceptance based on this plan.
-
-If repeatability fails, retain the research evidence but do not add Elyum to the production provider path.
+Production mutation must proceed through the bounded slices in this plan with explicit acceptance and regression protection for the existing BytePlus path. Elyum must remain unavailable to ordinary production routing until the required runtime state, continuity lifecycle, recovery semantics, cost policy, observability and bounded UAT are implemented and accepted.
 
 ## Immediate next executable step
 
-The next provider action remains RQ1 only. It is currently `BLOCKED_BUDGET` at live balance `30` versus quote `44` for the exact frozen contract. No lower-cost substitute is valid repeatability evidence because changing model/duration/settings would change the experiment.
+Start Slice A: define the narrow capability-aware Full Video provider contract and durable provider snapshot while preserving BytePlus as the default and maintaining existing-project behavior. Then proceed to Slice B continuity-reference lifecycle before enabling any Elyum production dispatch.
