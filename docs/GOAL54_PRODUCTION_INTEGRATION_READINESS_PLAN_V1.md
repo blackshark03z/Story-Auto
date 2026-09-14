@@ -75,7 +75,9 @@ Acceptance:
 - unsupported capability combinations fail before dispatch;
 - no automatic fallback across providers after an ambiguous or charged request.
 
-### Slice B — Continuity-reference lifecycle
+### Slice B — Continuity-reference lifecycle — COMPLETE
+
+Engineering evidence: `docs/GOAL54_PRODUCTION_SLICE_B_EVIDENCE.md`.
 
 Add the missing production concept required by the validated Elyum method: a deterministic continuity source for each I2V request.
 

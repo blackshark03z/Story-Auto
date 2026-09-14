@@ -22,11 +22,15 @@ class FullVideoProviderContractTests(unittest.TestCase):
         self.assertEqual(snapshot["generation_mode"],"t2v")
         self.assertTrue(snapshot["production_enabled"])
         self.assertEqual(snapshot["reference_image_policy"],"NOT_REQUIRED")
+        self.assertEqual(snapshot["continuity_reference_policy"],"NONE")
+        self.assertEqual(snapshot["initial_anchor_policy"],"NONE")
 
     def test_elyum_is_known_but_fail_closed_until_continuity_lifecycle_lands(self):
         snapshot=full_video_provider_snapshot({"full_video_provider":"elyum_seedance"})
         self.assertEqual(snapshot["generation_mode"],"i2v")
         self.assertEqual(snapshot["reference_image_policy"],"REQUIRED")
+        self.assertEqual(snapshot["continuity_reference_policy"],"SHOT_TO_SHOT_ACCEPTED_FRAME")
+        self.assertEqual(snapshot["initial_anchor_policy"],"EXPLICIT_CANONICAL_ANCHOR")
         self.assertFalse(snapshot["production_enabled"])
         with self.assertRaises(FullVideoProviderError) as caught:
             require_production_full_video_provider({"full_video_provider":"elyum_seedance"})

@@ -51,12 +51,12 @@ class ElyumSeedanceClientTests(unittest.TestCase):
         payload = {
             "status": "done",
             "locked": True,
-            "url": "https://elyum.ai/media/g_fixture/p0.mp4?sig=x",
+            "url": "https://elyum.ai/media/g_fixture/p0.mp4?preview=fixture",
             "unlockCredits": 20,
         }
         self.assertEqual(
             ElyumSeedanceClient.preview_urls(payload),
-            ["https://elyum.ai/media/g_fixture/p0.mp4?sig=x"],
+            ["https://elyum.ai/media/g_fixture/p0.mp4?preview=fixture"],
         )
         self.assertEqual(ElyumSeedanceClient.unlock_credits(payload), 20)
 

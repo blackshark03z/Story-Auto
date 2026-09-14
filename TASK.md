@@ -430,4 +430,9 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - BytePlus remains the default and only production-enabled provider; historical projects without the new setting still resolve to BytePlus without mutation.
 - Elyum is represented as the qualified I2V capability shape but remains production-disabled and fails closed before dispatch until continuity lifecycle + production adapter work land.
 - Targeted regression: `21 passed`; broader application/release/binding regression: `53 passed, 6 subtests passed`; compile and diff checks PASS.
-- Next executable work is Slice B: continuity-reference lifecycle. No Elyum production dispatch is authorized yet.
+- Slice B is now engineering-complete; evidence: `docs/GOAL54_PRODUCTION_SLICE_B_EVIDENCE.md`.
+- Canonical I2V continuity state is run-scoped and generation-request-hash-scoped; the first request requires an explicit canonical anchor and later requests derive a deterministic hash-bound frame only from the immediate prior accepted video.
+- Rejected/replaced source assets invalidate or supersede old bindings; a target reference cannot change after that target has entered any provider boundary.
+- Targeted continuity/provider tests: `11 passed`; broader planning/BytePlus/application/release regression: `55 passed, 2 subtests passed`; compile/diff checks PASS.
+- Full hermetic regression reached `748 passed, 283 subtests passed`; its sole security-gate failure was a pre-existing signed-looking synthetic Elyum fixture. After hardening that fixture, `SECURITY_GATE=PASS` and focused Elyum + hardening tests passed `18/18`, closing the differential qualification gate.
+- Elyum remains production-disabled. Next implementation work is Slice C: production Elyum service adapter consuming the exact Slice B reference snapshot.
