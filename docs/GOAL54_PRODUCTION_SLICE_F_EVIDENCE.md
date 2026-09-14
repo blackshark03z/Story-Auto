@@ -1,7 +1,7 @@
 # Goal 54 — Production Integration Slice F Evidence
 
 Date: 2026-09-14
-Status: UAT_ENGINEERING_COMPLETE / LIVE_PRODUCT_ORACLE_PENDING / PRODUCTION_ROUTING_UNCHANGED
+Status: LIVE_PREVIEW_READY / VISUAL_ORACLE_PENDING / PRODUCTION_ROUTING_UNCHANGED
 
 ## Scope
 
@@ -55,8 +55,39 @@ Full hermetic repository regression on the same Slice F working tree:
 
 - `767 passed, 283 subtests passed`.
 
+## Bounded live production acceptance surface
+
+Candidate source baseline before live provider mutation: `8b4e34fb7ea61dd80181e28fb25334880b5ec8a5` (`Goal54_prepare_production_slice_F_UAT`). The live probe uses an isolated UAT runtime outside the Git repository and the gated production adapter; ordinary production routing remains disabled.
+
+The first live attempt used credential slot 2 after the recorded balance/quote gate. Exact production identities/evidence:
+
+- project: `prj_goal54_live_uat_20260914a`;
+- run: `run_goal54_live_uat_20260914a`;
+- request: `req_live_1`;
+- provider/model: `elyum_seedance` / `seedance-2-fast-i2v`;
+- reference SHA-256: `93dd897729c6370e7cf78b80a1052ac671ff03a36fa824392a75ba198b42a325`;
+- durable `client_ref`: `story-auto-prod-9774e1166ea7720219ce9fc6241bdf490c2d616e3328c596`;
+- durable provider job: `cos_leYmn4yuIWZosURXvTRbUo:a1056a5a-f249-4695-8a5e-93eb048ccdd5`;
+- provider generation: `g_f62ed08940b12f17afdac0ac`;
+- `provider_submissions=1`, `attempt_count=1`.
+
+The initial wait cycle ended `WAIT_UNAVAILABLE`. A new local invocation recovered only the exact saved provider job; it did not upload again, create again, or create a second logical attempt. That same job reached `PREVIEW_READY`.
+
+Exact local locked acceptance surface:
+
+- preview SHA-256: `a8c72a65008492638863ccfa31e0e59267e756c6d1d68a538883c0149e92a0f8`;
+- contact-sheet SHA-256: `8cfa8716c1602ba2a7de8b360684d8d8db819661f619eab8bb2d544cb96e9d91`;
+- H.264, 836x480, 24 fps, 4.041667 seconds, 140051 bytes;
+- provider reports `unlock_credits=20`.
+
+A post-preview read-only preflight reports slot 2 balance `90` and the same 4-second/480p quote `44`. Slot 1 remains at `30`. This is recorded only as provider account/consequence evidence; no inference is made about final spend before Keep/unlock.
+
+The exact locked preview was opened locally for the Product visual oracle. No Keep or Kill has run.
+
 ## Remaining acceptance boundary
 
-The production lifecycle itself is engineering-qualified and the adversarial UAT matrix is covered without external mutation. The remaining Goal 54 Slice F boundary is a bounded live production acceptance surface using the gated production adapter under the same qualified envelope.
+Transport, identity, local acquisition and same-job recovery are now live-verified through the production adapter. The remaining Slice F boundary is the explicit visual oracle for the exact locked preview above. Do not infer Product acceptance from transport success.
 
-Do not infer visual Product acceptance from transport success. A live locked preview must retain exact request/job/reference/local-hash provenance and must receive an explicit acceptance oracle before Keep/unlock. Until that live boundary is closed, Elyum remains `production_enabled=false` and ordinary production routing must remain unchanged.
+If the exact preview passes, record that decision against its SHA-256, execute the explicit Keep/unlock consequence, verify/hash-bind the clean output, render the bounded final fixture, and only then evaluate the routing-promotion decision. If it fails, record rejection and follow the explicit consequence/replacement policy without automatic redispatch.
+
+Until this live boundary is closed, Elyum remains `production_enabled=false` and ordinary production routing must remain unchanged.
