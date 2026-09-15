@@ -244,6 +244,52 @@ function fullVideoProviderSurface(snapshot) {
   return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">FULL VIDEO PROVIDER</p><h2>${esc(provider.provider_label)}</h2><p>${esc(routing)}</p></div><span class="status-chip ${provider.owner_decision_required ? 'attention' : provider.status === 'SUCCEEDED' ? 'success' : ''}">${esc(provider.status)}</span></div><div class="choice-grid"><div class="choice"><strong>Continuation safety</strong><small>${esc(provider.continuation_behavior)}</small></div><div class="choice"><strong>Provider state</strong><small>${provider.known_job ? 'A durable provider job is already known. Continue must resume it.' : 'No durable provider job is currently bound to this request.'}</small></div>${budgetParts.length ? `<div class="choice"><strong>Budget / preflight</strong><small>${budgetParts.map(esc).join(' · ')}</small></div>` : ''}</div>${preview}${controls}${provider.action === 'RECONCILE_CONSEQUENCE' ? '<div class="attention-card"><div><strong>Consequence reconciliation required</strong><p>Story Auto will not repeat Keep or Kill automatically because the provider outcome is ambiguous.</p></div></div>' : ''}${exact}</section>`;
 }
 
+function openingBuilderSurface(snapshot) {
+  const opening = snapshot.opening_builder;
+  if (!opening) return '';
+  if (opening.status === 'NOT_CONFIGURED') {
+    return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder</h2><p>The manual opening contract has not been prepared for this project yet. If canonical opening video requests already exist, Story Auto can convert their exact prompts into manual slots without calling a provider.</p></div><span class="status-chip">NOT CONFIGURED</span></div><div class="button-row"><button data-opening-prepare type="button">Prepare opening prompts</button></div><small>Hybrid Visual remains release-disabled; this action only materializes the local prompt/slot contract.</small></section>`;
+  }
+  const target = opening.render_target || {};
+  const slots = (opening.slots || []).map(slot => {
+    const ready = slot.status === 'READY' && slot.asset_ready;
+    const preview = ready && slot.normalized_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,slot.normalized_asset.path)}" aria-label="${esc(slot.slot_id)} normalized opening clip"></video>` : '';
+    const source = slot.source_asset ? `<small>Imported ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip imported yet.</small>';
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}–${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : 'MISSING'}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button><label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label></div>${source}${preview}</article>`;
+  }).join('');
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Generate these clips externally or later by API, then import each result into its exact slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
+}
+
+async function openingFilePayload(file) {
+  const encoded = await new Promise((resolve,reject) => { const reader=new FileReader(); reader.onload=() => resolve(String(reader.result).split(',')[1] || ''); reader.onerror=reject; reader.readAsDataURL(file); });
+  return {filename:file.name,base64:encoded};
+}
+
+function bindOpeningBuilderControls() {
+  document.querySelectorAll('[data-opening-prepare]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('prepare_opening_builder','Preparing exact opening prompts from the saved plan…');
+  }));
+  document.querySelectorAll('[data-opening-copy-all]').forEach(button => button.addEventListener('click', async () => {
+    const text = state.snapshot?.opening_builder?.copy_all_prompts || '';
+    if (!text) return;
+    try { await navigator.clipboard.writeText(text); toast('Opening prompt pack copied.'); }
+    catch (_) { toast('Clipboard access is unavailable in this browser.',true); }
+  }));
+  document.querySelectorAll('[data-opening-copy]').forEach(button => button.addEventListener('click', async () => {
+    const slot = (state.snapshot?.opening_builder?.slots || []).find(item => item.slot_id === button.dataset.openingCopy);
+    if (!slot?.prompt) return;
+    try { await navigator.clipboard.writeText(slot.prompt); toast(`${slot.slot_id} prompt copied.`); }
+    catch (_) { toast('Clipboard access is unavailable in this browser.',true); }
+  }));
+  document.querySelectorAll('[data-opening-import]').forEach(input => input.addEventListener('change', async event => {
+    const file = event.target.files?.[0]; if (!file) return;
+    try {
+      const imported_video = await openingFilePayload(file);
+      await runAction('import_opening_clip',`Normalizing ${input.dataset.openingImport}…`,{slot_id:input.dataset.openingImport,imported_video});
+    } catch (error) { toast(friendlyError(error).message,true); }
+  }));
+}
+
 function bindFullVideoProviderControls() {
   document.querySelectorAll('[data-elyum-review]').forEach(button => button.addEventListener('click', async () => {
     const decision = button.dataset.elyumReview;
@@ -297,12 +343,14 @@ function renderProject() {
   ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? 'Visual planning needs another attempt' : blocker.reason_code === 'STUCK_PENDING' ? 'Flow generation appears stuck' : 'Action needed'}</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${blocker.reason_code === 'STUCK_PENDING' ? '<div class="button-row"><button class="button-primary" data-project-action="recheck_flow_generation" type="button">Recheck status</button><button data-project-action="open_flow_project" type="button">Open Flow project</button></div>' : primary}${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? `<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(blocker.reason_code)}</div></details>` : ''}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
   ${fullVideoProviderSurface(workspace)}
+  ${openingBuilderSurface(workspace)}
   <section class="surface"><div class="surface-head"><div><h2>Output and preview</h2><p>${workspace.final_path ? 'Your latest final video is ready.' : 'Your final video will appear here when production is complete.'}</p></div></div>${workspace.final_path ? `<a class="button button-primary" href="${assetUrl(workspace.project_id,workspace.final_path)}" target="_blank" rel="noopener">Open final video</a>` : '<div class="empty-library"><p>No final video yet.</p></div>'}</section>
   <section class="surface"><div class="surface-head"><div><h2>Project summary</h2><p>These are the effective settings saved with this project.</p></div></div><dl class="summary-list"><div class="summary-row"><dt>Source</dt><dd>${esc(workspace.summary.source)}</dd></div>${workspace.summary.narrator ? `<div class="summary-row"><dt>Narrator</dt><dd>${esc(workspace.summary.narrator)}</dd></div>` : ''}<div class="summary-row"><dt>Style</dt><dd>${esc(workspace.summary.style)}</dd></div><div class="summary-row"><dt>Quality review</dt><dd>${esc(workspace.summary.quality)}</dd></div><div class="summary-row"><dt>Waveform</dt><dd>${esc(workspace.summary.waveform)}</dd></div><div class="summary-row"><dt>Resolution</dt><dd>${esc(workspace.summary.resolution)}</dd></div></dl></section>
   <details class="surface disclosure"><summary>More actions</summary><div class="button-row">${production.active_stage === 'PLAN' ? '<button id="reviewPlan" type="button">Review plan</button>' : ''}<button id="reviewProject" type="button">Review visuals</button>${workspace.can_render_again ? '<button id="renderAgain" type="button">Render final video again</button>' : ''}</div></details>
   <details class="surface disclosure" id="projectDetails"><summary>Advanced, Diagnostics, and History</summary><div id="technicalContent" class="technical">Technical details load only when opened.</div></details>`;
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
   bindFullVideoProviderControls();
+  bindOpeningBuilderControls();
   document.querySelectorAll('[data-rebind-flow]').forEach(button => button.addEventListener('click', async () => {
     if (!window.confirm('Use the currently validated Flow project for future requests? Existing request history will remain unchanged.')) return;
     await runAction('rebind_flow_project','Rebinding future Flow requests…', {explicit_owner_decision:true});

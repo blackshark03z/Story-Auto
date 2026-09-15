@@ -464,3 +464,32 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Root cause: the V1 prompt over-constrained movement (`almost locked`, `mostly steady`, tiny hand motion, subtle blink only) and named historical X2 despite the production continuity snapshot being bound to the supplied X3 frame.
 - Correction SoT: `docs/GOAL54_LIVE_UAT_MOTION_ACTING_CORRECTION_V1.md`. Replacement attempts now support immutable `replacement_prompt` + SHA-256 + distinct clientRef provenance, and the UI exposes the full revised prompt before authorization.
 - Ordinary Elyum routing remains disabled. Next consequence boundary is explicit Kill of the rejected preview, then a separately authorized one-attempt V2 replacement behind a fresh balance/quote preflight.
+
+## Hybrid Visual / Opening Builder — accepted product direction (2026-09-15)
+
+- This is a new feature track and is **not part of Goal 54**. Implementation has not started.
+- Product decision SoT: `docs/decisions/0004-hybrid-visual-opening-builder.md`.
+- Research baseline: `docs/HYBRID_VISUAL_RESEARCH_V1.md`.
+- Keep Full Image and Full Video AI as separate modes; add a distinct `Hybrid Visual` mode.
+- Narration/audio remains the canonical timeline. Subtitles and waveform run continuously across all visual-source changes.
+- Opening Builder target is approximately **15–20 seconds**, normally decomposed into stable 5–10 second slots. Each slot receives an exact prompt/continuity snapshot and durable slot ID.
+- Manual external generation is first-class: user copies one/all opening prompts, generates clips outside Story Auto, then imports each clip back into the exact slot. Slot binding, not filename guessing, is authoritative.
+- API generation is an alternate acquisition path for the same opening slots; manual/API clips converge on the same normalized asset contract.
+- Imported visual clips are probed, normalized and SHA-bound; embedded clip audio is ignored by default so Story Auto master narration/BGM/subtitle/waveform remain authoritative.
+- After the opening, V1 mixes still-image blocks (restrained Ken Burns/pan/zoom/crossfade) with semantically relevant stock-video blocks. Do not use globally random stock.
+- Pexels is the proposed first stock provider. Current official endpoint/restrictions/rate-limit/attribution findings are recorded in the research doc; selection must be relevance-filtered, deterministic, cached and provenance-bound.
+- V1 intentionally does **not** insert AI video repeatedly throughout the body. Mid-body AI-video slots are deferred until the Hybrid Visual slot/import/compositor path is stable.
+- Recommended sequence: H1 slot/planner contract -> H2 manual Opening Builder -> H3 optional opening API -> H4 Pexels body slots -> H5 full mixed compositor/UAT.
+- Next implementation should begin with H1/H2 and prove a complete provider-independent manual opening round-trip before adding new paid/provider-dependent paths.
+
+### Hybrid Visual H1/H2 checkpoint (2026-09-16)
+
+- H1/H2 engineering is complete while `hybrid_hook` remains release-disabled (`FEATURE_NOT_AVAILABLE`); evidence: `docs/HYBRID_VISUAL_H1_H2_EVIDENCE.md`.
+- Canonical `output/opening_manifest.json` now owns 15–20 second opening plans as 2–4 stable `OPENING_O*` slots of 5–10 seconds with exact prompt/context hashes and render-target snapshot.
+- Manual external generation is implemented as exact-slot import, not filename guessing: FFprobe validation -> durable source copy -> FFmpeg normalization -> embedded-audio stripping -> source/normalized SHA binding.
+- Materially short clips fail closed; small duration mismatch is repaired locally within a bounded tolerance. Longer clips are trimmed to the slot duration.
+- Replacing one opening slot preserves prior asset provenance in slot-local replacement history and cannot silently rewrite other slots or the opening plan.
+- Workspace/UI exposes shared continuity, exact prompt copy, copy-all prompt pack, per-slot import/replace, normalized preview, and readiness for existing/development `hybrid_hook` projects without bypassing the release guard.
+- Targeted Opening Builder: 7/7 PASS, including canonical generation-request -> manual prompt-slot materialization with request identity and continuity context. Regression: Full Image 7 + Render 19 + Application 18 + Goal54 surface 4 = 48 PASS. Python compile and JavaScript syntax gates PASS.
+- Python runtime dependencies lost after SSD migration were restored from repo `requirements.txt`; no Playwright browser install was performed.
+- Next product slice is H3/H4 only after this checkpoint is durable: optional opening API acquisition using the same slots, then semantic Pexels body slots. Do not release-enable Hybrid Visual merely because H1/H2 backend/UI exists.

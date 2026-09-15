@@ -30,6 +30,10 @@ from story_auto.core.project.lock import ProjectLock
 from story_auto.core.publishing import finalize_thumbnail, prepare_thumbnail_request, run_publishing_metadata
 from story_auto.core.render import resolve_render_plan, resolve_render_settings, run_render_stages
 from story_auto.core.visual import ambient_style_label, temporal_video_qc_applicability
+from story_auto.core.visual.opening_builder import (configure_opening_builder as configure_hybrid_opening,
+                                                     import_opening_clip as import_hybrid_opening_clip,
+                                                     opening_builder_view as hybrid_opening_view,
+                                                     prepare_opening_builder_from_plan as prepare_hybrid_opening)
 from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
@@ -331,6 +335,7 @@ class OperatorService:
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),
             "full_video_provider":full_video_provider_product_view(paths, config),
+            "opening_builder":hybrid_opening_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -346,6 +351,32 @@ class OperatorService:
             return filename,base64.b64decode(encoded,validate=True)
         except Exception as error:
             raise OperatorServiceError("IMPORT_SOURCE_INVALID") from error
+
+    def opening_builder(self, project_id: str) -> dict[str, Any] | None:
+        _paths, config = self._project(project_id)
+        if config.render_mode != "hybrid_hook":
+            return None
+        return hybrid_opening_view(self.runtime.root, project_id)
+
+    def configure_opening_builder(self, project_id: str, *, shared_context: str,
+                                  slots: list[dict[str, Any]]) -> dict[str, Any]:
+        return configure_hybrid_opening(self.runtime.root, project_id, shared_context=shared_context, slot_specs=slots)
+
+    def prepare_opening_builder(self, project_id: str) -> dict[str, Any]:
+        return prepare_hybrid_opening(self.runtime.root, project_id)
+
+    def import_opening_clip(self, project_id: str, *, slot_id: str,
+                            imported_video: dict[str, Any] | None) -> dict[str, Any]:
+        filename, payload = self._decoded_import(imported_video, fallback_name=f"{slot_id}.mp4", limit=96_000_000)
+        temporary_dir = self.runtime.temp / uuid.uuid4().hex
+        temporary_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            source = temporary_dir / Path(filename).name
+            source.write_bytes(payload)
+            return import_hybrid_opening_clip(self.runtime.root, project_id, slot_id, source,
+                                              original_filename=filename)
+        finally:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
 
     def inspect_imports(self, *, source_mode: str, imported_audio: dict[str, Any] | None,
                         imported_srt: dict[str, Any] | None) -> dict[str, Any]:
