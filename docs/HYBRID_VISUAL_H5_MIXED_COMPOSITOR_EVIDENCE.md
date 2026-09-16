@@ -103,6 +103,37 @@ Observed assertions:
 
 A second proof replaces stock video with an explicit image fallback and reaches READY without a provider call.
 
+## Real-asset local UAT checkpoint — 2026-09-16
+
+A reproducible local UAT harness now exists at `tools/hybrid_visual_uat.py`. It deliberately uses already-accepted Xianxia evidence assets from Goal 54 rather than synthetic color cards:
+
+- `x1c_kept_clean.mp4`, `x2_kept_clean.mp4`, `x3_kept_clean.mp4` feed two 7.5 s Opening Builder slots after local concatenation;
+- `xianxia_anchor_v2.png`, `x2_continuity_frame.png`, and `x3_continuity_frame.png` feed body IMAGE slots and the explicit stock fallback;
+- Windows local `Microsoft Zira Desktop` produces a provider-free narration WAV because the post-SSD Kokoro probe currently reports `KOKORO_MODEL_NOT_FOUND`; Kokoro recovery is tracked as independent environment drift, not an H5 blocker.
+
+Durable local runtime evidence:
+
+- runtime: `../evidence/hybrid_visual_h5_uat/runtime`
+- project: `prj_hybrid_xianxia_uat`
+- preview: `../evidence/hybrid_visual_h5_uat/runtime/projects/prj_hybrid_xianxia_uat/output/hybrid_preview.mp4`
+- preview SHA-256: `7aa58eee8a40dfa014d082cdc6bc297f506ae1627b4cd99c314de791f78851dd`
+- duration: `42.583333` s
+- narration SHA-256: `c83c9a7a9db3f5a488179feee63e665bb2c666cb47aa3ce160c6e4daa7bad276`
+- timeline source kinds: `OPENING_VIDEO, OPENING_VIDEO, IMAGE, IMAGE, IMAGE, STOCK_IMAGE_FALLBACK, IMAGE`
+- visual audio contract: `MUTED_BY_CONTRACT`
+- waveform: enabled
+- release activation: `BLOCKED_UNTIL_E2E_PRODUCT_ACCEPTANCE`
+
+Application-level projection over that exact runtime reports:
+
+- `pipeline_status=FEATURE_NOT_AVAILABLE`
+- `opening_ready=true`
+- `body_slots=5`
+- `hybrid_preview.preview_ready=true`
+- preview readiness `missing=[]`
+
+This is a **machine-observable real-asset UAT PASS** for the manual/fallback Hybrid journey. It is intentionally not owner visual acceptance: a human still needs to watch the preview and decide whether motion, source boundaries, subtitle placement, waveform placement and overall visual quality are acceptable before promotion into the canonical final-render path.
+
 ## What this does not claim
 
 This is not yet Product Acceptance or release qualification for Hybrid Visual. Remaining gates:
