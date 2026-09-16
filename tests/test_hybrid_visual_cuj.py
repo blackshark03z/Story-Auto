@@ -230,7 +230,7 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
                 hybrid.check()
                 surface = page.locator("#wizardContent").inner_text()
                 self.assertIn("HYBRID VISUAL", surface)
-                self.assertIn("15–20s opening video", surface)
+                self.assertIn("15-20s opening video", surface)
                 self.assertNotIn("Coming soon", surface)
                 browser.close()
         finally:

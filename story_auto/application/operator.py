@@ -58,7 +58,9 @@ from story_auto.providers.elyum_seedance import (authorize_elyum_replacement as 
                                                 kill_elyum_preview as kill_elyum_locked_preview,
                                                 keep_elyum_preview as keep_elyum_locked_preview,
                                                 review_elyum_preview as review_elyum_locked_preview)
+from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
+from story_auto.providers.credentials import clear_provider_keys, provider_key_status, set_provider_keys
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -190,7 +192,7 @@ def _updated_at(paths) -> str:
 
 
 def _word_count(narration: str) -> int:
-    return len(re.findall(r"\b[\wâ€™'-]+\b", narration, flags=re.UNICODE))
+    return len(re.findall(r"\b[\wÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢'-]+\b", narration, flags=re.UNICODE))
 
 
 def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any]:
@@ -338,7 +340,7 @@ class OperatorService:
                 "style":config.settings.get("ui",{}).get("production_style", "Natural cinematic"),
                 "quality":"Automatic" if production["quality"]["policy"]==AUTO_ACCEPT else "Manual" if production["quality"]["policy"]==MANUAL_REVIEW else "AI review",
                 "waveform":"On" if full_image.get("audio_visualizer",True) else "Off",
-                "resolution":f"{render.get('width','Default')} Ã— {render.get('height','Default')}",
+                "resolution":f"{render.get('width','Default')} ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â {render.get('height','Default')}",
             },
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),
@@ -630,9 +632,9 @@ class OperatorService:
         if artifacts["generation_requests.json"]:
             ratio=(finished_visuals/total_visuals) if total_visuals else 0
             progress,stage=45+round(35*ratio),"Create visuals"
-            activity=f"Creating visuals â€” {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
+            activity=f"Creating visuals ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
         if counts.get("QC_PENDING"):
-            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality â€” {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
+            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
         if artifacts["render_plan.json"]:
             progress,stage,activity=max(progress,88),"Render","Rendering the final video."
         if artifacts["final.mp4"] and not render_stale:
@@ -986,6 +988,49 @@ class OperatorService:
             "issues":issues,"work_saved":True,"temporal_video_qc":temporal_qc,
         }
 
+    def pexels_connection_status(self) -> dict[str, Any]:
+        credential = provider_key_status("pexels")
+        return {
+            "status": "CONFIGURED" if credential["configured"] else "NOT_CONFIGURED",
+            "reason_code": None if credential["configured"] else "PEXELS_CREDENTIAL_MISSING",
+            "configured": bool(credential["configured"]),
+            "credential_count": int(credential["count"]),
+            "credential_source": credential["source"],
+            "removable": bool(credential["removable"]),
+            "fallback": "IMAGE",
+            "live_verified": False,
+        }
+
+    def save_pexels_key(self, key: str) -> dict[str, Any]:
+        value = str(key or "").strip()
+        if len(value) < 8:
+            raise OperatorServiceError("Enter a valid Pexels API key.")
+        set_provider_keys("pexels", [value])
+        return self.pexels_connection_status()
+
+    def clear_pexels_key(self) -> dict[str, Any]:
+        status = provider_key_status("pexels")
+        if status.get("source") == "ENVIRONMENT":
+            raise OperatorServiceError("Pexels is configured by environment and cannot be removed from Story Auto Settings.")
+        clear_provider_keys("pexels")
+        return self.pexels_connection_status()
+
+    def test_pexels_connection(self) -> dict[str, Any]:
+        client = PexelsClient()
+        if not client.key:
+            return {**self.pexels_connection_status(), "status": "NOT_CONFIGURED",
+                    "reason_code": "PEXELS_CREDENTIAL_MISSING", "live_verified": False}
+        try:
+            result = client.search_videos("nature landscape", orientation="landscape", size="medium",
+                                          locale="en-US", page=1, per_page=1)
+        except PexelsError as error:
+            return {**self.pexels_connection_status(), "status": "ERROR",
+                    "reason_code": error.failure_class, "live_verified": False}
+        return {**self.pexels_connection_status(), "status": "CONNECTED", "reason_code": None,
+                "live_verified": True, "checked_at": datetime.now(timezone.utc).isoformat(),
+                "rate_limit": result.get("rate_limit", {}),
+                "sample_results": len(result.get("videos", []))}
+
     def settings_overview(self) -> dict[str, Any]:
         defaults_payload=self.runtime_defaults.read()
         latest_settings=self.runtime_defaults.creation_snapshot()
@@ -995,6 +1040,7 @@ class OperatorService:
         llm=latest_settings.get("llm",{}) if isinstance(latest_settings,dict) else {}
         flow_status=self.flow_connections.get_connection_status(required_capabilities=[])
         seedance_status=seedance_readiness()
+        pexels_status=self.pexels_connection_status()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
         flow_status={**flow_status,
                      "observed_capabilities":{},
@@ -1012,11 +1058,11 @@ class OperatorService:
         if provider=="kokoro_local":
             kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
             voice_row={"name":"Voice",
-                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} â€” local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
+                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
                        "status":"Ready" if kokoro_readiness.ready else "Needs attention",
                        "technical_code":kokoro_readiness.technical_code}
         else:
-            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} â€” local narrator" if provider else "Choose a narrator for new videos",
+            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â local narrator" if provider else "Choose a narrator for new videos",
                        "status":"Ready" if provider else "Not configured"}
         return {
             "defaults":{"render_mode":defaults_payload["render_mode"],"ambient_style":defaults_payload["ambient_style"],"voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":defaults_payload["visual_style"],
@@ -1027,13 +1073,15 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Full Image visuals","detail":"Google Flow Â· Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
-                {"name":"Full Video visuals","detail":f"BytePlus ModelArk Â· {seedance_status['model']} Â· API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
+                {"name":"Full Image visuals","detail":"Google Flow ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Full Video visuals","detail":f"BytePlus ModelArk ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {seedance_status['model']} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
+                {"name":"Hybrid stock video","detail":"Pexels API - semantic stock - image fallback when unavailable","status":"Ready" if pexels_status["configured"] else "Not configured"},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
             "flow_connection":flow_status,
             "seedance":seedance_status,
+            "pexels":pexels_status,
             "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
@@ -1065,6 +1113,7 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "flow_connection":self._flow_connection_overview(),
             "seedance":seedance_readiness(),
+            "pexels":self.pexels_connection_status(),
         }
 
     def _flow_connection_overview(self) -> dict[str, Any]:

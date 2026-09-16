@@ -538,3 +538,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Browser gates PASS: New video exposes/selects Hybrid Visual; prepared project performs opening import -> Continue -> COMPLETE -> Open final video.
 - Post-promotion qualification: **76 tests PASS**, Python/JS syntax PASS, `SECURITY_GATE=PASS`, `YOUTUBE_AUTO_RUNTIME_IMPORTS=0`.
 - Next work is a separate **Hybrid Quality V2** track (motion/effects, stock relevance, transitions, pacing, subtitle/waveform styling). Do not reopen the accepted CUJ merely because output quality is not yet optimized.
+
+### Hybrid Visual provider-configuration checkpoint (2026-09-16)
+
+- Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.
+- Settings supports Save / Test connection / Remove for Pexels. Saved credentials use the existing Windows DPAPI Story Auto credential store and are never persisted in project/repo artifacts.
+- New Video Hybrid projects project Pexels readiness before creation; missing Pexels explicitly uses generated-image fallback and does not block Run-to-Final.
+- Provider setup targeted verification: 3/3 PASS; existing H4 Pexels suite: 7/7 PASS; no real Pexels request occurred during qualification.
+- Remaining provider-configuration gap is H3 optional Opening API acquisition. Manual Opening Builder remains the accepted fallback and must stay available even when no video API credential is configured.

@@ -76,6 +76,12 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 return self._json(self.service.inspect_imports(source_mode=body.get("source_mode",""),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")))
             if parts==["api","settings","defaults"]:
                 return self._json(self.service.update_runtime_defaults(body.get("defaults",{})))
+            if parts==["api","settings","pexels","save"]:
+                return self._json(self.service.save_pexels_key(body.get("key","")))
+            if parts==["api","settings","pexels","test"]:
+                return self._json(self.service.test_pexels_connection())
+            if parts==["api","settings","pexels","clear"]:
+                return self._json(self.service.clear_pexels_key())
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","full_image"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:

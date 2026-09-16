@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import time
 from typing import Any, Callable
+
+from story_auto.providers.credentials import provider_keys
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -134,7 +136,13 @@ class PexelsClient:
     def __init__(self, *, key: str | None = None,
                  fetch: Callable[[str, dict[str, str], int], tuple[int, dict[str, str], bytes]] | None = None,
                  timeout_seconds: int = 20) -> None:
-        self.key = (key or os.getenv("PEXELS_API_KEY") or "").strip()
+        if key is None:
+            try:
+                resolved = provider_keys("pexels")
+            except Exception:
+                resolved = []
+            key = resolved[0] if resolved else ""
+        self.key = str(key or "").strip()
         self.fetch = fetch or _default_fetch
         self.timeout_seconds = int(timeout_seconds)
 

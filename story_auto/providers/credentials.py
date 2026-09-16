@@ -19,8 +19,8 @@ from story_auto.core.audio.errors import AudioPipelineError
 
 _LEGACY_ENTROPY = b"youtube-auto.credentials.v1"
 _OWN_ENTROPY = b"story-auto.credentials.v1"
-_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys", "gemini": "gemini_api_keys"}
-_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY", "gemini": "GEMINI_API_KEY"}
+_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys", "gemini": "gemini_api_keys", "pexels": "pexels_api_keys", "byteplus_modelark": "byteplus_modelark_api_keys"}
+_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY", "gemini": "GEMINI_API_KEY", "pexels": "PEXELS_API_KEY", "byteplus_modelark": "BYTEPLUS_MODELARK_API_KEY"}
 
 
 class _DataBlob(ctypes.Structure):
@@ -72,6 +72,33 @@ def _write_own_pool(pool: str, values: list[str]) -> None:
     except Exception: payload = {"schema_name": "story-auto-credentials", "schema_version": "1.0.0", "protection": "WINDOWS_DPAPI_CURRENT_USER", "pools": {}}
     payload["pools"][pool] = [{"protection": "WINDOWS_DPAPI_CURRENT_USER", "blob": _protect(value, _OWN_ENTROPY)} for value in values]
     atomic_write_json(path, payload)
+
+
+def set_provider_keys(provider: str, values: list[str]) -> None:
+    """Persist a provider key pool in Story Auto's DPAPI-protected store."""
+    if provider not in _POOL:
+        raise ValueError("unsupported provider")
+    cleaned = []
+    for raw in values:
+        value = str(raw).strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    _write_own_pool(_POOL[provider], cleaned)
+
+
+def clear_provider_keys(provider: str) -> None:
+    set_provider_keys(provider, [])
+
+
+def provider_key_status(provider: str) -> dict[str, object]:
+    """Return non-secret credential readiness; never returns key text."""
+    if provider not in _POOL:
+        raise ValueError("unsupported provider")
+    environment = [value.strip() for value in os.getenv(_ENV[provider], "").split(",") if value.strip()]
+    if environment:
+        return {"configured": True, "count": len(environment), "source": "ENVIRONMENT", "removable": False}
+    own = _read_pool(_store_path("StoryAuto"), _POOL[provider], _OWN_ENTROPY)
+    return {"configured": bool(own), "count": len(own), "source": "DPAPI_STORE" if own else None, "removable": bool(own)}
 
 
 def provider_keys(provider: str) -> list[str]:
