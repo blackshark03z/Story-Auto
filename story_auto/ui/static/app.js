@@ -747,6 +747,7 @@ async function showSettings() {
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
   const flow = state.settings.flow_connection || {};
   const byteplus = state.settings.byteplus || {};
+  const elyum = state.settings.elyum || {};
   const pexels = state.settings.pexels || {};
   const videoProviders = state.settings.video_providers || [];
   const flowLabel = {CONNECTED:'Flow session ready',NOT_CONFIGURED:'Open Flow to connect',AUTH_REQUIRED:'Sign in to Flow to continue',STALE:'Flow session needs confirmation',PROJECT_MISMATCH:'Flow session needs confirmation',CAPABILITY_MISSING:'Flow image creation is unavailable'}[flow.status] || 'Open Flow to connect';
@@ -754,6 +755,9 @@ async function showSettings() {
   const byteplusState = byteplus.configured ? (byteplus.live_verified ? 'Connected' : 'Configured') : 'Not configured';
   const byteplusHelp = byteplus.configured ? 'BytePlus can generate Hybrid opening clips and Full Video tasks. Test connection performs a read-only task-list check.' : 'Add a BytePlus ModelArk API key to enable Generate with API for Hybrid opening slots. Manual import remains available without it.';
   const byteplusDetails = `<section class="settings-section"><h2>Opening API video · BytePlus</h2><p>${esc(byteplusHelp)}</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd id="byteplusLiveStatus">${esc(byteplusState)}</dd></div><div class="summary-row"><dt>Model</dt><dd>${esc(byteplus.model || 'Seedance')}</dd></div><div class="summary-row"><dt>Credential storage</dt><dd>${esc(byteplus.credential_source === 'ENVIRONMENT' ? 'Environment variable' : byteplus.configured ? 'Windows DPAPI · current user' : 'Not configured')}</dd></div></dl><div class="field" style="margin-top:16px"><label for="byteplusApiKey">BytePlus ModelArk API key</label><input id="byteplusApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key to save or replace"><small>The key is encrypted with Windows DPAPI and is never stored in a project or repository.</small></div><div class="button-row" style="margin-top:14px"><button id="saveByteplusKey" type="button">Save key</button><button id="testByteplusKey" type="button" ${byteplus.configured ? '' : 'disabled'}>Test connection</button><button id="clearByteplusKey" class="button-quiet" type="button" ${byteplus.removable ? '' : 'disabled'}>Remove saved key</button></div></section>`;
+  const elyumState = elyum.configured ? (elyum.live_verified ? 'Connected' : 'Configured') : 'Not configured';
+  const elyumHelp = elyum.configured ? 'Elyum is available for read-only connection checks. Hybrid Opening generation remains gated until live model preflight is accepted.' : 'Add an Elyum API key to prepare the secondary Seedance provider. This does not enable generation automatically.';
+  const elyumDetails = `<section class="settings-section"><h2>Opening API video · Elyum</h2><p>${esc(elyumHelp)}</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd id="elyumLiveStatus">${esc(elyumState)}</dd></div><div class="summary-row"><dt>Transport</dt><dd>${esc(elyum.transport || 'MCP Streamable HTTP')}</dd></div><div class="summary-row"><dt>Credential storage</dt><dd>${esc(elyum.credential_source === 'ENVIRONMENT' ? 'Environment variable' : elyum.configured ? 'Windows DPAPI · current user' : 'Not configured')}</dd></div></dl><div class="field" style="margin-top:16px"><label for="elyumApiKey">Elyum API key</label><input id="elyumApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key to save or replace"><small>The key is encrypted with Windows DPAPI and is never stored in a project or repository.</small></div><div class="button-row" style="margin-top:14px"><button id="saveElyumKey" type="button">Save key</button><button id="testElyumKey" type="button" ${elyum.configured ? '' : 'disabled'}>Test connection</button><button id="clearElyumKey" class="button-quiet" type="button" ${elyum.removable ? '' : 'disabled'}>Remove saved key</button></div></section>`;
   const pexelsState = pexels.configured ? (pexels.live_verified ? 'Connected' : 'Configured') : 'Not configured';
   const pexelsHelp = pexels.configured ? 'Pexels can supply semantic stock clips. Use Test connection for a live no-download API check.' : 'Add a Pexels API key to enable semantic stock clips. Hybrid Visual still works without it by using image fallback.';
   const pexelsDetails = `<section class="settings-section"><h2>Hybrid stock video · Pexels</h2><p>${esc(pexelsHelp)}</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd id="pexelsLiveStatus">${esc(pexelsState)}</dd></div><div class="summary-row"><dt>Fallback</dt><dd>Generated image</dd></div><div class="summary-row"><dt>Credential storage</dt><dd>${esc(pexels.credential_source === 'ENVIRONMENT' ? 'Environment variable' : pexels.configured ? 'Windows DPAPI · current user' : 'Not configured')}</dd></div></dl><div class="field" style="margin-top:16px"><label for="pexelsApiKey">Pexels API key</label><input id="pexelsApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste key to save or replace"><small>The key is encrypted with Windows DPAPI and is never stored in a project or repository.</small></div><div class="button-row" style="margin-top:14px"><button id="savePexelsKey" type="button">Save key</button><button id="testPexelsKey" type="button" ${pexels.configured ? '' : 'disabled'}>Test connection</button><button id="clearPexelsKey" class="button-quiet" type="button" ${pexels.removable ? '' : 'disabled'}>Remove saved key</button></div></section>`;
@@ -766,6 +770,7 @@ async function showSettings() {
     ${videoProviderDetails}
     ${flowDetails}
     ${byteplusDetails}
+    ${elyumDetails}
     ${pexelsDetails}
     <section class="settings-section"><h2>Storage</h2><p>Story Auto keeps projects and generated media in its isolated local workspace.</p><dl class="summary-list"><div class="summary-row"><dt>Project location</dt><dd>${esc(state.settings.storage.project_location)}</dd></div><div class="summary-row"><dt>Free space</dt><dd>${state.settings.storage.free_gb} GB</dd></div></dl></section>
     <section class="settings-section"><h2>Advanced</h2><p>Technical configuration and diagnostics for troubleshooting.</p><details class="disclosure"><summary>Provider details</summary><dl class="summary-list"><div class="summary-row"><dt>Voice provider</dt><dd>${esc(state.settings.advanced.tts_provider)}</dd></div>${state.settings.advanced.kokoro_readiness ? `<div class="summary-row"><dt>Kokoro readiness</dt><dd>${esc(state.settings.advanced.kokoro_readiness.technical_code || state.settings.advanced.kokoro_readiness.state)}</dd></div>` : ''}<div class="summary-row"><dt>Gemini model</dt><dd>${esc(state.settings.advanced.gemini_model)}</dd></div><div class="summary-row"><dt>Flow project</dt><dd>${esc(state.settings.advanced.flow_project)}</dd></div><div class="summary-row"><dt>Runtime root</dt><dd>${esc(state.settings.advanced.runtime_root)}</dd></div></dl></details>
@@ -791,6 +796,25 @@ async function showSettings() {
   });
   $('#clearByteplusKey')?.addEventListener('click', async () => {
     try { await api('/api/settings/byteplus/clear',{method:'POST',body:'{}'}); toast('Saved BytePlus key removed.'); await showSettings(); }
+    catch (error) { toast(friendlyError(error).message,true); }
+  });
+  $('#saveElyumKey')?.addEventListener('click', async () => {
+    const key=$('#elyumApiKey').value.trim();
+    if (!key) { toast('Paste an Elyum API key first.',true); $('#elyumApiKey').focus(); return; }
+    try { await api('/api/settings/elyum/save',{method:'POST',body:JSON.stringify({key})}); $('#elyumApiKey').value=''; toast('Elyum key saved securely.'); await showSettings(); }
+    catch (error) { toast(friendlyError(error).message,true); }
+  });
+  $('#testElyumKey')?.addEventListener('click', async event => {
+    const button=event.currentTarget; button.disabled=true; button.textContent='Testing...';
+    try {
+      const result=await api('/api/settings/elyum/test',{method:'POST',body:'{}'});
+      const target=$('#elyumLiveStatus'); if (target) target.textContent=result.status === 'CONNECTED' ? 'Connected' : (result.reason_code || result.status);
+      toast(result.status === 'CONNECTED' ? 'Elyum connection verified.' : `Elyum test: ${result.reason_code || result.status}`, result.status !== 'CONNECTED');
+    } catch (error) { toast(friendlyError(error).message,true); }
+    finally { button.disabled=false; button.textContent='Test connection'; }
+  });
+  $('#clearElyumKey')?.addEventListener('click', async () => {
+    try { await api('/api/settings/elyum/clear',{method:'POST',body:'{}'}); toast('Saved Elyum key removed.'); await showSettings(); }
     catch (error) { toast(friendlyError(error).message,true); }
   });
   $('#savePexelsKey')?.addEventListener('click', async () => {

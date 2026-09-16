@@ -19,8 +19,8 @@ from story_auto.core.audio.errors import AudioPipelineError
 
 _LEGACY_ENTROPY = b"youtube-auto.credentials.v1"
 _OWN_ENTROPY = b"story-auto.credentials.v1"
-_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys", "gemini": "gemini_api_keys", "pexels": "pexels_api_keys", "byteplus_modelark": "byteplus_modelark_api_keys"}
-_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY", "gemini": "GEMINI_API_KEY", "pexels": "PEXELS_API_KEY", "byteplus_modelark": "BYTEPLUS_MODELARK_API_KEY"}
+_POOL = {"elevenlabs": "elevenlabs_api_keys", "typecast": "typecast_api_keys", "gemini": "gemini_api_keys", "pexels": "pexels_api_keys", "byteplus_modelark": "byteplus_modelark_api_keys", "elyum": "elyum_api_keys"}
+_ENV = {"elevenlabs": "ELEVENLABS_API_KEY", "typecast": "TYPECAST_API_KEY", "gemini": "GEMINI_API_KEY", "pexels": "PEXELS_API_KEY", "byteplus_modelark": "BYTEPLUS_MODELARK_API_KEY", "elyum": "ELYUM_API_KEY"}
 
 
 class _DataBlob(ctypes.Structure):

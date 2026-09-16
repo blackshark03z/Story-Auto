@@ -19,6 +19,7 @@ from .research import (
 )
 from .service import (ElyumProductionError, authorize_elyum_replacement, elyum_production_readiness,
                       execute_elyum_generation, kill_elyum_preview, keep_elyum_preview, review_elyum_preview)
+from .opening import (generate_elyum_opening_preview, keep_elyum_opening_preview, kill_elyum_opening_preview, review_elyum_opening_preview)
 
 __all__ = [
     "DEFAULT_ENDPOINT",
@@ -38,4 +39,5 @@ __all__ = [
     "review_elyum_preview",
     "keep_elyum_preview",
     "kill_elyum_preview",
+    "generate_elyum_opening_preview",
 ]

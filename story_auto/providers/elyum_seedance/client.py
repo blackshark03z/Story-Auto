@@ -18,6 +18,8 @@ import json
 import mimetypes
 import os
 from pathlib import Path
+
+from story_auto.providers.credentials import provider_keys
 from typing import Any, Protocol
 import urllib.error
 import urllib.request
@@ -175,7 +177,14 @@ class McpToolSession:
 
 
 def _api_key() -> str:
-    return os.getenv("ELYUM_API_KEY", "").strip()
+    environment = os.getenv("ELYUM_API_KEY", "").strip()
+    if environment:
+        return environment
+    try:
+        values = provider_keys("elyum")
+    except Exception:
+        return ""
+    return values[0].strip() if values else ""
 
 
 def _find_first(node: Any, keys: set[str]) -> Any:

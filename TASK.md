@@ -566,3 +566,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Cross-provider fallback is allowed only before dispatch/effect ambiguity; ambiguous or confirmed effects must reconcile the same provider identity first.
 - Settings exposes the registry read-only. Existing generation routing is intentionally unchanged in this slice.
 - Next bounded slice: promote Elyum credential/readiness + explicit Opening Preview/Keep/Kill path; Dola remains experimental.
+
+### Hybrid Visual Elyum Opening engineering candidate (2026-09-16)
+
+- Provider registry checkpoint `f5254f3` remains authoritative for capability-first routing and pre-dispatch-only provider switching.
+- Elyum Hybrid Opening adapter now has engineering coverage for T2V preflight, deterministic clientRef replay, locked preview review, explicit Keep/Kill consequence boundaries, successful bind into the canonical Opening slot, manual fallback, and cost no-dispatch.
+- Elyum credentials reuse Story Auto Windows DPAPI + environment override and Settings Save/Test/Remove; Test is read-only.
+- Evidence: `docs/HYBRID_VISUAL_ELYUM_OPENING_CANDIDATE_EVIDENCE.md`. Targeted/regression: 28 tests PASS; DPAPI fake-key round-trip PASS.
+- Status: **ENGINEERING_READY / LIVE_MODEL_PREFLIGHT_PENDING / PRODUCTION_ROUTING_DISABLED**. Do not expose live Elyum Generate/Keep/Kill until the exact account-supported T2V model id is proven by live read-only preflight.

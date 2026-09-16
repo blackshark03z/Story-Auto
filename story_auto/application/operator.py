@@ -55,7 +55,8 @@ from story_auto.providers.flow.live import FlowInspector, LiveFlowGenerator
 from story_auto.providers.flow.session import FlowSessionError
 from story_auto.providers.byteplus_seedance import (BytePlusSeedanceClient, BytePlusSeedanceError, execute_seedance_generation,
                                                   generate_opening_slot_api, seedance_readiness)
-from story_auto.providers.elyum_seedance import (authorize_elyum_replacement as authorize_elyum_locked_replacement,
+from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeedanceError,
+                                                authorize_elyum_replacement as authorize_elyum_locked_replacement,
                                                 kill_elyum_preview as kill_elyum_locked_preview,
                                                 keep_elyum_preview as keep_elyum_locked_preview,
                                                 review_elyum_preview as review_elyum_locked_preview)
@@ -1035,6 +1036,48 @@ class OperatorService:
         return {**self.byteplus_connection_status(), "status": "CONNECTED", "reason_code": None,
                 "live_verified": True, "checked_at": datetime.now(timezone.utc).isoformat(),
                 "observed_tasks": len(result.get("items", []))}
+    def elyum_connection_status(self) -> dict[str, Any]:
+        credential = provider_key_status("elyum")
+        return {
+            "status": "CONFIGURED" if credential["configured"] else "NOT_CONFIGURED",
+            "reason_code": None if credential["configured"] else "ELYUM_CREDENTIAL_MISSING",
+            "configured": bool(credential["configured"]),
+            "credential_count": int(credential["count"]),
+            "credential_source": credential["source"],
+            "removable": bool(credential["removable"]),
+            "provider": "Elyum",
+            "transport": "MCP_STREAMABLE_HTTP",
+            "live_verified": False,
+        }
+
+    def save_elyum_key(self, key: str) -> dict[str, Any]:
+        value = str(key or "").strip()
+        if len(value) < 12:
+            raise OperatorServiceError("Enter a valid Elyum API key.")
+        set_provider_keys("elyum", [value])
+        return self.elyum_connection_status()
+
+    def clear_elyum_key(self) -> dict[str, Any]:
+        status = provider_key_status("elyum")
+        if status.get("source") == "ENVIRONMENT":
+            raise OperatorServiceError("Elyum is configured by environment and cannot be removed from Story Auto Settings.")
+        clear_provider_keys("elyum")
+        return self.elyum_connection_status()
+
+    def test_elyum_connection(self) -> dict[str, Any]:
+        client = ElyumSeedanceClient()
+        if client.readiness().get("status") != "READY":
+            return {**self.elyum_connection_status(), "status": "NOT_CONFIGURED",
+                    "reason_code": "ELYUM_CREDENTIAL_MISSING", "live_verified": False}
+        try:
+            balance = client.account_balance()
+        except ElyumSeedanceError as error:
+            return {**self.elyum_connection_status(), "status": "ERROR",
+                    "reason_code": error.failure_class, "live_verified": False}
+        return {**self.elyum_connection_status(), "status": "CONNECTED", "reason_code": None,
+                "live_verified": True, "checked_at": datetime.now(timezone.utc).isoformat(),
+                "balance": int(balance)}
+
     def pexels_connection_status(self) -> dict[str, Any]:
         credential = provider_key_status("pexels")
         return {
@@ -1088,6 +1131,7 @@ class OperatorService:
         flow_status=self.flow_connections.get_connection_status(required_capabilities=[])
         seedance_status=seedance_readiness()
         byteplus_status=self.byteplus_connection_status()
+        elyum_status=self.elyum_connection_status()
         pexels_status=self.pexels_connection_status()
         video_providers=video_provider_catalog()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
@@ -1132,6 +1176,7 @@ class OperatorService:
             "flow_connection":flow_status,
             "seedance":seedance_status,
             "byteplus":byteplus_status,
+            "elyum":elyum_status,
             "pexels":pexels_status,
             "video_providers":video_providers,
             "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
