@@ -556,3 +556,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Success downloads and normalizes through the same silent SHA-bound opening import contract used by manual clips.
 - Evidence: `docs/HYBRID_VISUAL_H3_OPENING_API_EVIDENCE.md`. Targeted H3 suite: 5/5 PASS with mocked provider transport and browser UI; no live provider spend.
 - Provider Configuration Journey is now complete for Hybrid V1: Opening manual/API + Pexels configured/fallback. Quality remains deferred.
+
+### Capability-first video provider registry checkpoint (2026-09-16)
+
+- CADS current HEAD `62cf2aa` was verified aligned with remote before this architecture change.
+- Decision SoT: `docs/decisions/0006-capability-first-video-provider-boundary.md`; evidence: `docs/VIDEO_PROVIDER_REGISTRY_EVIDENCE.md`.
+- `Seedance` is now modeled as a capability/model family independent of provider identity.
+- Canonical catalog: BytePlus Tier A/direct API; Elyum Tier A/MCP candidate; Dola Tier B/experimental session; Manual external Tier C/always available.
+- Cross-provider fallback is allowed only before dispatch/effect ambiguity; ambiguous or confirmed effects must reconcile the same provider identity first.
+- Settings exposes the registry read-only. Existing generation routing is intentionally unchanged in this slice.
+- Next bounded slice: promote Elyum credential/readiness + explicit Opening Preview/Keep/Kill path; Dola remains experimental.

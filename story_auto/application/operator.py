@@ -62,6 +62,7 @@ from story_auto.providers.elyum_seedance import (authorize_elyum_replacement as 
 from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
 from story_auto.providers.credentials import clear_provider_keys, provider_key_status, set_provider_keys
+from story_auto.providers.video_generation import video_provider_catalog
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -1088,6 +1089,7 @@ class OperatorService:
         seedance_status=seedance_readiness()
         byteplus_status=self.byteplus_connection_status()
         pexels_status=self.pexels_connection_status()
+        video_providers=video_provider_catalog()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
         flow_status={**flow_status,
                      "observed_capabilities":{},
@@ -1131,6 +1133,7 @@ class OperatorService:
             "seedance":seedance_status,
             "byteplus":byteplus_status,
             "pexels":pexels_status,
+            "video_providers":video_providers,
             "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }

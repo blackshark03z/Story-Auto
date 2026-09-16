@@ -94,7 +94,7 @@ The exact source-of-truth for final composition: selected asset(s), trims, fit/c
 
 ### hybrid_hook
 
-- Opening ~55s: `VIDEO / REQUIRED` by default.
+- Opening 15–20s: stable `OPENING_O*` video slots acquired manually or through an explicit provider action; body timing remains narration-owned.
 - Body: `IMAGE / REQUIRED` by default.
 - Motion spikes: `VIDEO / PREFERRED` or `VIDEO / REQUIRED` as explicitly planned.
 - A preferred spike may fall back only when the media plan explicitly permits it and the fallback is recorded.
@@ -140,6 +140,13 @@ subtitle preset, and transition settings remain local render inputs, so
 local-only presentation changes do not invalidate Flow requests.
 
 ## Provider boundaries
+
+Video generation is capability-first rather than provider-first. `Seedance` is a model family/capability requirement; BytePlus, Elyum and later providers are replaceable realizations behind a canonical registry/adapter boundary. The canonical request owns semantic intent, duration/aspect/resolution/reference requirements and effect identity; provider adapters own authentication, transport, provider job/preview state, retry/reconciliation and acquisition.
+
+Cross-provider fallback is legal only before an external effect is confirmed or ambiguous. Once dispatch may have occurred, recovery must reconcile the same provider effect identity before any replacement/provider switch. Manual external generation remains an always-available Hybrid Opening acquisition path and converges to the same normalized/hash-bound slot contract.
+
+Provider lifecycle is not forced into one universal state machine: BytePlus uses async task identity/polling, while Elyum preserves estimate/balance + locked preview + explicit Keep/Kill consequence semantics. Dola/session automation remains experimental until a stable provider contract is qualified.
+
 
 Current production routing is explicit rather than inferred:
 
