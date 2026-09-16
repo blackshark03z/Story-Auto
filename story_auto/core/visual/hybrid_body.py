@@ -14,6 +14,8 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from PIL import Image
+
 from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
@@ -250,6 +252,65 @@ def apply_pexels_search_result(runtime_root: Path | str, project_id: str, slot_i
         slot["selected_at"] = _now()
         plan["updated_at"] = _now()
         atomic_write_json(path, plan)
+        return deepcopy(plan)
+
+
+def adopt_hybrid_body_image(runtime_root: Path | str, project_id: str, slot_id: str,
+                            source_path: Path | str, *, original_filename: str | None = None,
+                            as_stock_fallback: bool = False) -> dict[str, Any]:
+    """Bind one explicit local image to an IMAGE slot or STOCK_VIDEO fallback."""
+    source = Path(source_path)
+    if not source.is_file():
+        raise HybridBodyError("HYBRID_IMAGE_SOURCE_MISSING")
+    try:
+        with Image.open(source) as image:
+            width, height = image.size
+            image.verify()
+    except Exception as error:
+        raise HybridBodyError("HYBRID_IMAGE_SOURCE_INVALID") from error
+    if width <= 0 or height <= 0:
+        raise HybridBodyError("HYBRID_IMAGE_SOURCE_INVALID")
+    paths, _config = _require_project(runtime_root, project_id)
+    with ProjectLock(paths.runtime, project_id):
+        plan_path = paths.artifact_path(HYBRID_BODY_PATH)
+        if not plan_path.is_file():
+            raise HybridBodyError("HYBRID_BODY_PLAN_MISSING")
+        plan = read_json(plan_path)
+        slot = next((item for item in plan.get("slots", []) if isinstance(item, dict) and item.get("slot_id") == slot_id), None)
+        if slot is None:
+            raise HybridBodyError("HYBRID_BODY_SLOT_INVALID")
+        if as_stock_fallback:
+            if slot.get("visual_type") != "STOCK_VIDEO":
+                raise HybridBodyError("HYBRID_STOCK_SLOT_INVALID")
+            asset_key = "fallback_image_asset"
+            history_key = "fallback_replacement_history"
+        else:
+            if slot.get("visual_type") != "IMAGE":
+                raise HybridBodyError("HYBRID_IMAGE_SLOT_INVALID")
+            asset_key = "source_asset"
+            history_key = "replacement_history"
+        digest = sha256_file(source)
+        suffix = source.suffix.lower() if source.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"} else ".png"
+        kind = "fallback" if as_stock_fallback else "image"
+        relative = f"assets/hybrid/images/{slot_id}/{kind}_{digest[:12]}{suffix}"
+        destination = paths.artifact_path(relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        previous = deepcopy(slot.get(asset_key))
+        if not destination.is_file() or sha256_file(destination) != digest:
+            shutil.copy2(source, destination)
+        asset = {"path": relative, "sha256": sha256_file(destination),
+                 "original_filename": Path(original_filename or source.name).name,
+                 "width": width, "height": height, "bound_at": _now()}
+        if previous and previous.get("sha256") != asset["sha256"]:
+            history = slot.setdefault(history_key, [])
+            history.append({"asset": previous, "replaced_at": _now()})
+        slot[asset_key] = asset
+        if as_stock_fallback and slot.get("status") != "READY":
+            slot["status"] = "FALLBACK_IMAGE_READY"
+        elif not as_stock_fallback:
+            slot["status"] = "IMAGE_READY"
+        plan["updated_at"] = _now()
+        atomic_write_json(plan_path, plan)
         return deepcopy(plan)
 
 

@@ -34,7 +34,9 @@ from story_auto.core.visual.opening_builder import (configure_opening_builder as
                                                      import_opening_clip as import_hybrid_opening_clip,
                                                      opening_builder_view as hybrid_opening_view,
                                                      prepare_opening_builder_from_plan as prepare_hybrid_opening)
-from story_auto.core.visual.hybrid_body import build_hybrid_body_plan, hybrid_body_view
+from story_auto.core.visual.hybrid_body import (adopt_hybrid_body_image, build_hybrid_body_plan,
+                                                hybrid_body_view)
+from story_auto.core.visual.hybrid_render import hybrid_preview_view, render_hybrid_preview
 from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
@@ -339,6 +341,7 @@ class OperatorService:
             "full_video_provider":full_video_provider_product_view(paths, config),
             "opening_builder":hybrid_opening_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "hybrid_body":hybrid_body_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
+            "hybrid_preview":hybrid_preview_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -373,6 +376,24 @@ class OperatorService:
 
     def resolve_hybrid_stock_slot(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return resolve_pexels_stock_slot(self.runtime.root, project_id, slot_id)
+
+    def import_hybrid_body_image(self, project_id: str, *, slot_id: str,
+                                 imported_image: dict[str, Any] | None,
+                                 as_stock_fallback: bool = False) -> dict[str, Any]:
+        filename, payload = self._decoded_import(imported_image, fallback_name=f"{slot_id}.png", limit=48_000_000)
+        temporary_dir = self.runtime.temp / uuid.uuid4().hex
+        temporary_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            source = temporary_dir / Path(filename).name
+            source.write_bytes(payload)
+            return adopt_hybrid_body_image(self.runtime.root, project_id, slot_id, source,
+                                           original_filename=filename,
+                                           as_stock_fallback=as_stock_fallback)
+        finally:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
+
+    def render_hybrid_preview(self, project_id: str) -> dict[str, Any]:
+        return render_hybrid_preview(self.runtime.root, project_id)
 
     def import_opening_clip(self, project_id: str, *, slot_id: str,
                             imported_video: dict[str, Any] | None) -> dict[str, Any]:

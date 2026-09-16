@@ -506,3 +506,16 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - H4 targeted tests: 7/7 PASS using mocked API/network plus real FFmpeg normalization. No live Pexels request occurred.
 - H3 opening-API acquisition remains optional/deferred because manual opening is already Product Acceptance-capable at the slot level; it must reuse the H1/H2 slot contract rather than fork it.
 - Next required product slice is H5 mixed compositor + exact E2E UAT. Hybrid Visual must not be release-enabled before H5 proves opening -> images/effects -> stock -> images with narration/subtitle/waveform continuous from t=0 to final.
+
+### Hybrid Visual H5 mixed compositor checkpoint (2026-09-16)
+
+- H5 provider-free mixed preview foundation is implemented; evidence: `docs/HYBRID_VISUAL_H5_MIXED_COMPOSITOR_EVIDENCE.md`.
+- Body IMAGE slots now accept explicit local images with durable SHA binding/replacement history; STOCK_VIDEO slots can carry an explicit image fallback without changing their semantic slot identity.
+- Preview readiness fails closed until Opening Builder is READY, every body IMAGE has an image, and every stock slot has either a normalized stock video or image fallback.
+- `render_hybrid_preview(...)` composes Opening Builder + image motion + stock/fallback + image motion on the exact alignment master clock, then delegates narration/subtitles/waveform/BGM to the existing Story Auto compositor.
+- Every visual source is silent by contract; opening/stock clips with embedded source audio are rejected unless their normalized local asset has already stripped audio.
+- Development artifacts are `output/hybrid_preview.mp4` + manifest/subtitles only; H5 deliberately does not write `output/final.mp4` and does not release-enable `hybrid_hook`.
+- H5 focused real-FFmpeg suite: 2/2 PASS. Synthetic 36s proof includes source changes `OPENING_VIDEO -> IMAGE -> STOCK_VIDEO -> IMAGE`, exact slot continuity, one final master audio stream, canonical narration SHA, subtitles and waveform.
+- UI now supports body image/fallback import and a readiness-gated `Render mixed preview` action for existing/development Hybrid projects.
+- Remaining gate is one owner-visible exact E2E UAT on representative content, then any UX/quality corrections, Product Acceptance, final-render promotion and only afterward release activation.
+- H3 opening API acquisition remains optional and must reuse the H1/H2 slots if implemented; it is not required to validate the manual low-cost Hybrid V1 journey.

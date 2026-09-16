@@ -122,6 +122,8 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="prepare_opening_builder": result=self.service.prepare_opening_builder(project_id)
             elif action=="plan_hybrid_body": result=self.service.plan_hybrid_body(project_id)
             elif action=="resolve_hybrid_stock_slot": result=self.service.resolve_hybrid_stock_slot(project_id,slot_id=body.get("slot_id",""))
+            elif action=="import_hybrid_body_image": result=self.service.import_hybrid_body_image(project_id,slot_id=body.get("slot_id",""),imported_image=body.get("imported_image"),as_stock_fallback=body.get("as_stock_fallback") is True)
+            elif action=="render_hybrid_preview": result=self.service.render_hybrid_preview(project_id)
             elif action=="import_opening_clip": result=self.service.import_opening_clip(project_id,slot_id=body.get("slot_id",""),imported_video=body.get("imported_video"))
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))
             elif action=="regenerate": result=self.service.regenerate(project_id,body["request_id"],body.get("reason","operator requested regeneration"))

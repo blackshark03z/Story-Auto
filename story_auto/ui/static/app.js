@@ -266,13 +266,25 @@ function hybridBodySurface(snapshot) {
   if (!body) return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID BODY</p><h2>Images + semantic stock video</h2><p>Plan the body from the master narration clock. This is provider-free; Pexels is searched only when a stock slot is explicitly resolved later.</p></div><span class="status-chip">NOT PLANNED</span></div><div class="button-row"><button data-hybrid-body-plan type="button">Plan body recipe</button></div></section>`;
   const stock = (body.slots || []).filter(slot => slot.visual_type === 'STOCK_VIDEO');
   const images = (body.slots || []).filter(slot => slot.visual_type === 'IMAGE');
+  const imageRows = images.map(slot => {
+    const ready = !!slot.source_asset;
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}–${esc(slot.end)}s</strong><small>${esc(slot.effect || 'SLOW_PUSH')} · ${esc(slot.semantic_context || '')}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'IMAGE READY' : 'IMAGE NEEDED'}</span></div><div class="button-row"><label class="button">${ready ? 'Replace image' : 'Import image'}<input data-hybrid-image-import="${esc(slot.slot_id)}" data-stock-fallback="false" type="file" accept="image/*" hidden></label></div></article>`;
+  }).join('');
   const stockRows = stock.map(slot => {
     const attribution = slot.attribution || {};
     const credit = attribution.source_url ? `<a href="${esc(attribution.source_url)}" target="_blank" rel="noopener">${esc(attribution.text || 'Pexels source')}</a>` : 'Not selected yet';
-    const resolve = slot.status === 'PLANNED' || slot.status === 'FALLBACK_IMAGE_REQUIRED' ? `<button data-hybrid-stock-resolve="${esc(slot.slot_id)}" type="button">Find relevant Pexels clip</button>` : '';
-    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}–${esc(slot.end)}s</strong><small>${esc(slot.provider_query || '')}</small></div><span class="status-chip ${slot.status === 'READY' ? 'success' : ''}">${esc(slot.status)}</span></div><small>${credit}</small>${resolve ? `<div class="button-row">${resolve}</div>` : ''}</article>`;
+    const pexelsReady = slot.status === 'READY' && !!slot.normalized_asset;
+    const fallbackReady = !!slot.fallback_image_asset;
+    const resolve = !pexelsReady ? `<button data-hybrid-stock-resolve="${esc(slot.slot_id)}" type="button">Find relevant Pexels clip</button>` : '';
+    const fallback = `<label class="button">${fallbackReady ? 'Replace fallback image' : 'Import image fallback'}<input data-hybrid-image-import="${esc(slot.slot_id)}" data-stock-fallback="true" type="file" accept="image/*" hidden></label>`;
+    const stateLabel = pexelsReady ? 'PEXELS READY' : fallbackReady ? 'IMAGE FALLBACK READY' : slot.status;
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}–${esc(slot.end)}s</strong><small>${esc(slot.provider_query || '')}</small></div><span class="status-chip ${pexelsReady || fallbackReady ? 'success' : 'attention'}">${esc(stateLabel)}</span></div><small>${credit}</small><div class="button-row">${resolve}${fallback}</div></article>`;
   }).join('');
-  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID BODY</p><h2>${images.length} image slots + ${stock.length} stock-video slots</h2><p>Timing follows narration. Stock failures fall back to images; selected assets are deterministic and cached.</p></div><span class="status-chip">PLANNED</span></div><p><a href="https://www.pexels.com/" target="_blank" rel="noopener">Stock videos provided by Pexels</a></p><div class="choice-grid">${stockRows || '<div class="choice"><small>No stock slots in this body duration.</small></div>'}</div></section>`;
+  const preview = snapshot.hybrid_preview || {};
+  const previewMissing = (preview.readiness?.missing || []).length;
+  const previewVideo = preview.preview_ready && preview.preview_path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,preview.preview_path)}" aria-label="Hybrid Visual mixed preview"></video>` : '';
+  const previewAction = preview.readiness?.ready ? '<button class="button-primary" data-hybrid-preview-render type="button">Render mixed preview</button>' : `<small>${previewMissing} visual slot${previewMissing === 1 ? '' : 's'} still need an asset before mixed preview.</small>`;
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID BODY</p><h2>${images.length} image slots + ${stock.length} stock-video slots</h2><p>Timing follows narration. Imported visual audio is ignored; narration, subtitles and waveform remain continuous master tracks.</p></div><span class="status-chip">PLANNED</span></div><p><a href="https://www.pexels.com/" target="_blank" rel="noopener">Stock videos provided by Pexels</a></p><div class="choice-grid">${imageRows}${stockRows}</div><div class="surface-head"><div><h3>Mixed preview</h3><p>Opening → images/effects → stock/fallback → images, on the exact narration clock.</p></div><div class="button-row">${previewAction}</div></div>${previewVideo}</section>`;
 }
 
 function bindHybridBodyControls() {
@@ -281,6 +293,16 @@ function bindHybridBodyControls() {
   }));
   document.querySelectorAll('[data-hybrid-stock-resolve]').forEach(button => button.addEventListener('click', async () => {
     await runAction('resolve_hybrid_stock_slot','Finding and normalizing one relevant Pexels clip…',{slot_id:button.dataset.hybridStockResolve});
+  }));
+  document.querySelectorAll('[data-hybrid-image-import]').forEach(input => input.addEventListener('change', async event => {
+    const file = event.target.files?.[0]; if (!file) return;
+    try {
+      const imported_image = await openingFilePayload(file);
+      await runAction('import_hybrid_body_image',`Binding ${input.dataset.hybridImageImport} image…`,{slot_id:input.dataset.hybridImageImport,imported_image,as_stock_fallback:input.dataset.stockFallback === 'true'});
+    } catch (error) { toast(friendlyError(error).message,true); }
+  }));
+  document.querySelectorAll('[data-hybrid-preview-render]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('render_hybrid_preview','Rendering mixed Hybrid Visual preview with master audio/subtitles/waveform…');
   }));
 }
 
