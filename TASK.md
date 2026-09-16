@@ -546,3 +546,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - New Video Hybrid projects project Pexels readiness before creation; missing Pexels explicitly uses generated-image fallback and does not block Run-to-Final.
 - Provider setup targeted verification: 3/3 PASS; existing H4 Pexels suite: 7/7 PASS; no real Pexels request occurred during qualification.
 - Remaining provider-configuration gap is H3 optional Opening API acquisition. Manual Opening Builder remains the accepted fallback and must stay available even when no video API credential is configured.
+
+### Hybrid Visual H3 Opening API checkpoint (2026-09-16)
+
+- Optional BytePlus Seedance T2V acquisition now reuses the canonical Opening Builder slots; manual external generation/import remains first-class.
+- `Run/Continue` never auto-spends on Opening API. The owner explicitly chooses `Generate with API` per exact slot.
+- BytePlus credentials use the shared Story Auto DPAPI credential boundary with Settings Save/Test/Remove and environment override support.
+- Provider intent is persisted before POST; known task IDs resume without new POST; ambiguous POST is never blindly redispatched.
+- Success downloads and normalizes through the same silent SHA-bound opening import contract used by manual clips.
+- Evidence: `docs/HYBRID_VISUAL_H3_OPENING_API_EVIDENCE.md`. Targeted H3 suite: 5/5 PASS with mocked provider transport and browser UI; no live provider spend.
+- Provider Configuration Journey is now complete for Hybrid V1: Opening manual/API + Pexels configured/fallback. Quality remains deferred.

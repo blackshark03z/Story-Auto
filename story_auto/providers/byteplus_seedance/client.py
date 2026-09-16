@@ -17,6 +17,7 @@ import urllib.request
 from urllib.parse import urlparse
 
 from story_auto.core.resources import ensure_free_space
+from story_auto.providers.credentials import provider_keys
 from story_auto.providers.flow.validation import validate_video
 
 
@@ -112,7 +113,11 @@ def _api_key() -> str:
         value = os.getenv(name, "").strip()
         if value:
             return value
-    return ""
+    try:
+        values = provider_keys("byteplus_modelark")
+    except Exception:
+        values = []
+    return values[0] if values else ""
 
 
 class BytePlusSeedanceClient:

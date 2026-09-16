@@ -82,6 +82,12 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 return self._json(self.service.test_pexels_connection())
             if parts==["api","settings","pexels","clear"]:
                 return self._json(self.service.clear_pexels_key())
+            if parts==["api","settings","byteplus","save"]:
+                return self._json(self.service.save_byteplus_key(body.get("key","")))
+            if parts==["api","settings","byteplus","test"]:
+                return self._json(self.service.test_byteplus_connection())
+            if parts==["api","settings","byteplus","clear"]:
+                return self._json(self.service.clear_byteplus_key())
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","full_image"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:
@@ -130,6 +136,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="resolve_hybrid_stock_slot": result=self.service.resolve_hybrid_stock_slot(project_id,slot_id=body.get("slot_id",""))
             elif action=="import_hybrid_body_image": result=self.service.import_hybrid_body_image(project_id,slot_id=body.get("slot_id",""),imported_image=body.get("imported_image"),as_stock_fallback=body.get("as_stock_fallback") is True)
             elif action=="render_hybrid_preview": result=self.service.render_hybrid_preview(project_id)
+            elif action=="generate_opening_api": result=self.service.generate_opening_api(project_id,slot_id=body.get("slot_id",""))
             elif action=="import_opening_clip": result=self.service.import_opening_clip(project_id,slot_id=body.get("slot_id",""),imported_video=body.get("imported_video"))
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))
             elif action=="regenerate": result=self.service.regenerate(project_id,body["request_id"],body.get("reason","operator requested regeneration"))

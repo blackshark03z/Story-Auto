@@ -1,6 +1,7 @@
 """Direct BytePlus ModelArk Seedance video provider."""
 from .client import BytePlusSeedanceClient, BytePlusSeedanceError, DEFAULT_MODEL
 from .service import execute_seedance_generation, seedance_readiness
+from .opening import generate_opening_slot_api
 
 __all__ = [
     "BytePlusSeedanceClient",
@@ -8,4 +9,5 @@ __all__ = [
     "DEFAULT_MODEL",
     "execute_seedance_generation",
     "seedance_readiness",
+    "generate_opening_slot_api",
 ]
