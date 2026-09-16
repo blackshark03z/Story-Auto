@@ -260,6 +260,30 @@ function openingBuilderSurface(snapshot) {
   return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Generate these clips externally or later by API, then import each result into its exact slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
 }
 
+function hybridBodySurface(snapshot) {
+  if (!snapshot.opening_builder || snapshot.opening_builder.status === 'NOT_CONFIGURED') return '';
+  const body = snapshot.hybrid_body;
+  if (!body) return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID BODY</p><h2>Images + semantic stock video</h2><p>Plan the body from the master narration clock. This is provider-free; Pexels is searched only when a stock slot is explicitly resolved later.</p></div><span class="status-chip">NOT PLANNED</span></div><div class="button-row"><button data-hybrid-body-plan type="button">Plan body recipe</button></div></section>`;
+  const stock = (body.slots || []).filter(slot => slot.visual_type === 'STOCK_VIDEO');
+  const images = (body.slots || []).filter(slot => slot.visual_type === 'IMAGE');
+  const stockRows = stock.map(slot => {
+    const attribution = slot.attribution || {};
+    const credit = attribution.source_url ? `<a href="${esc(attribution.source_url)}" target="_blank" rel="noopener">${esc(attribution.text || 'Pexels source')}</a>` : 'Not selected yet';
+    const resolve = slot.status === 'PLANNED' || slot.status === 'FALLBACK_IMAGE_REQUIRED' ? `<button data-hybrid-stock-resolve="${esc(slot.slot_id)}" type="button">Find relevant Pexels clip</button>` : '';
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}–${esc(slot.end)}s</strong><small>${esc(slot.provider_query || '')}</small></div><span class="status-chip ${slot.status === 'READY' ? 'success' : ''}">${esc(slot.status)}</span></div><small>${credit}</small>${resolve ? `<div class="button-row">${resolve}</div>` : ''}</article>`;
+  }).join('');
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID BODY</p><h2>${images.length} image slots + ${stock.length} stock-video slots</h2><p>Timing follows narration. Stock failures fall back to images; selected assets are deterministic and cached.</p></div><span class="status-chip">PLANNED</span></div><p><a href="https://www.pexels.com/" target="_blank" rel="noopener">Stock videos provided by Pexels</a></p><div class="choice-grid">${stockRows || '<div class="choice"><small>No stock slots in this body duration.</small></div>'}</div></section>`;
+}
+
+function bindHybridBodyControls() {
+  document.querySelectorAll('[data-hybrid-body-plan]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('plan_hybrid_body','Planning Hybrid Visual body from narration…');
+  }));
+  document.querySelectorAll('[data-hybrid-stock-resolve]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('resolve_hybrid_stock_slot','Finding and normalizing one relevant Pexels clip…',{slot_id:button.dataset.hybridStockResolve});
+  }));
+}
+
 async function openingFilePayload(file) {
   const encoded = await new Promise((resolve,reject) => { const reader=new FileReader(); reader.onload=() => resolve(String(reader.result).split(',')[1] || ''); reader.onerror=reject; reader.readAsDataURL(file); });
   return {filename:file.name,base64:encoded};
@@ -344,6 +368,7 @@ function renderProject() {
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
   ${fullVideoProviderSurface(workspace)}
   ${openingBuilderSurface(workspace)}
+  ${hybridBodySurface(workspace)}
   <section class="surface"><div class="surface-head"><div><h2>Output and preview</h2><p>${workspace.final_path ? 'Your latest final video is ready.' : 'Your final video will appear here when production is complete.'}</p></div></div>${workspace.final_path ? `<a class="button button-primary" href="${assetUrl(workspace.project_id,workspace.final_path)}" target="_blank" rel="noopener">Open final video</a>` : '<div class="empty-library"><p>No final video yet.</p></div>'}</section>
   <section class="surface"><div class="surface-head"><div><h2>Project summary</h2><p>These are the effective settings saved with this project.</p></div></div><dl class="summary-list"><div class="summary-row"><dt>Source</dt><dd>${esc(workspace.summary.source)}</dd></div>${workspace.summary.narrator ? `<div class="summary-row"><dt>Narrator</dt><dd>${esc(workspace.summary.narrator)}</dd></div>` : ''}<div class="summary-row"><dt>Style</dt><dd>${esc(workspace.summary.style)}</dd></div><div class="summary-row"><dt>Quality review</dt><dd>${esc(workspace.summary.quality)}</dd></div><div class="summary-row"><dt>Waveform</dt><dd>${esc(workspace.summary.waveform)}</dd></div><div class="summary-row"><dt>Resolution</dt><dd>${esc(workspace.summary.resolution)}</dd></div></dl></section>
   <details class="surface disclosure"><summary>More actions</summary><div class="button-row">${production.active_stage === 'PLAN' ? '<button id="reviewPlan" type="button">Review plan</button>' : ''}<button id="reviewProject" type="button">Review visuals</button>${workspace.can_render_again ? '<button id="renderAgain" type="button">Render final video again</button>' : ''}</div></details>
@@ -351,6 +376,7 @@ function renderProject() {
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', () => handleProjectAction(button.dataset.projectAction)));
   bindFullVideoProviderControls();
   bindOpeningBuilderControls();
+  bindHybridBodyControls();
   document.querySelectorAll('[data-rebind-flow]').forEach(button => button.addEventListener('click', async () => {
     if (!window.confirm('Use the currently validated Flow project for future requests? Existing request history will remain unchanged.')) return;
     await runAction('rebind_flow_project','Rebinding future Flow requests…', {explicit_owner_decision:true});

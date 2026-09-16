@@ -34,6 +34,7 @@ from story_auto.core.visual.opening_builder import (configure_opening_builder as
                                                      import_opening_clip as import_hybrid_opening_clip,
                                                      opening_builder_view as hybrid_opening_view,
                                                      prepare_opening_builder_from_plan as prepare_hybrid_opening)
+from story_auto.core.visual.hybrid_body import build_hybrid_body_plan, hybrid_body_view
 from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
@@ -52,6 +53,7 @@ from story_auto.providers.elyum_seedance import (authorize_elyum_replacement as 
                                                 kill_elyum_preview as kill_elyum_locked_preview,
                                                 keep_elyum_preview as keep_elyum_locked_preview,
                                                 review_elyum_preview as review_elyum_locked_preview)
+from story_auto.providers.pexels.service import resolve_pexels_stock_slot
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
 from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available_voices
@@ -336,6 +338,7 @@ class OperatorService:
             "flow":production.get("flow"),
             "full_video_provider":full_video_provider_product_view(paths, config),
             "opening_builder":hybrid_opening_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
+            "hybrid_body":hybrid_body_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -364,6 +367,12 @@ class OperatorService:
 
     def prepare_opening_builder(self, project_id: str) -> dict[str, Any]:
         return prepare_hybrid_opening(self.runtime.root, project_id)
+
+    def plan_hybrid_body(self, project_id: str) -> dict[str, Any]:
+        return build_hybrid_body_plan(self.runtime.root, project_id)
+
+    def resolve_hybrid_stock_slot(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
+        return resolve_pexels_stock_slot(self.runtime.root, project_id, slot_id)
 
     def import_opening_clip(self, project_id: str, *, slot_id: str,
                             imported_video: dict[str, Any] | None) -> dict[str, Any]:

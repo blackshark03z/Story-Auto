@@ -493,3 +493,16 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Targeted Opening Builder: 7/7 PASS, including canonical generation-request -> manual prompt-slot materialization with request identity and continuity context. Regression: Full Image 7 + Render 19 + Application 18 + Goal54 surface 4 = 48 PASS. Python compile and JavaScript syntax gates PASS.
 - Python runtime dependencies lost after SSD migration were restored from repo `requirements.txt`; no Playwright browser install was performed.
 - Next product slice is H3/H4 only after this checkpoint is durable: optional opening API acquisition using the same slots, then semantic Pexels body slots. Do not release-enable Hybrid Visual merely because H1/H2 backend/UI exists.
+
+### Hybrid Visual H4 semantic stock checkpoint (2026-09-16)
+
+- H4 engineering is complete while `hybrid_hook` remains release-disabled; evidence: `docs/HYBRID_VISUAL_H4_PEXELS_EVIDENCE.md`.
+- Pexels official docs were rechecked before implementation; endpoint/auth/search options/default limits/rate-limit headers/24h cache guidance/attribution requirements are updated in `docs/HYBRID_VISUAL_RESEARCH_V1.md`.
+- `output/hybrid_body_plan.json` now deterministically covers the narration timeline after the Opening Builder with repeating image blocks + bounded 5–10s STOCK_VIDEO slots and exact no-gap/no-overlap timing.
+- Stock queries derive from overlapping narration semantics; Pexels is never sampled globally/randomly. Every stock slot has explicit IMAGE fallback.
+- Pexels search response caching, rate-limit observability, creator/source attribution, deterministic top-relevant selection and same-project duplicate avoidance are implemented without persisting the API key.
+- One-stock-slot acquisition is `cached search -> durable selection -> bounded Pexels-domain download -> FFmpeg silent normalization -> SHA-bound local asset`; READY slots are idempotent and do not re-search/download on rerender.
+- Development workspace exposes body recipe/stock query/status plus Pexels attribution/link, but release availability remains `FEATURE_NOT_AVAILABLE`.
+- H4 targeted tests: 7/7 PASS using mocked API/network plus real FFmpeg normalization. No live Pexels request occurred.
+- H3 opening-API acquisition remains optional/deferred because manual opening is already Product Acceptance-capable at the slot level; it must reuse the H1/H2 slot contract rather than fork it.
+- Next required product slice is H5 mixed compositor + exact E2E UAT. Hybrid Visual must not be release-enabled before H5 proves opening -> images/effects -> stock -> images with narration/subtitle/waveform continuous from t=0 to final.

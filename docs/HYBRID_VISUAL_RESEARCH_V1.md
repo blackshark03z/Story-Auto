@@ -98,7 +98,7 @@ The purpose is to prevent visual stasis, not to turn the story video into an eff
 
 ## Pexels API verification
 
-Verified against official Pexels documentation on 2026-09-15:
+Verified against official Pexels documentation on 2026-09-15 and rechecked on 2026-09-16 before H4 implementation:
 
 - current video search endpoint: `GET https://api.pexels.com/v1/videos/search`;
 - Pexels notes that video endpoints under `/v1/videos/` are the current path and the older `/videos/` path is to be deprecated;
@@ -107,7 +107,8 @@ Verified against official Pexels documentation on 2026-09-15:
 - size filtering supports `large` (4K), `medium` (Full HD), `small` (HD);
 - `vi-VN` is a supported locale, although production search may still choose normalized English semantic queries when retrieval quality is better;
 - API authentication uses the `Authorization` header;
-- default documented API limits are 200 requests/hour and 20,000 requests/month; Pexels provides response rate-limit headers and documents a process for requesting higher limits;
+- default documented API limits are 200 requests/hour and 20,000 requests/month; Pexels provides `X-Ratelimit-Limit`, `X-Ratelimit-Remaining`, and `X-Ratelimit-Reset` response headers and documents a process for requesting higher limits;
+- Pexels currently recommends caching search responses; its rate-limit guidance gives roughly 24 hours as a useful cache duration and recommends normalized queries plus larger bounded `per_page` requests rather than repeated searches;
 - API guidance requires a prominent Pexels link and asks applications to credit photographers/creators when possible;
 - Pexels terms apply to API use and should be rechecked before release/promotion.
 
@@ -117,6 +118,7 @@ Official references:
 - https://www.pexels.com/api/
 - https://help.pexels.com/hc/en-us/articles/900005880463-What-are-the-Terms-and-Conditions
 - https://help.pexels.com/hc/en-us/articles/900005852323-How-do-I-get-unlimited-requests
+- https://help.pexels.com/hc/en-us/articles/900006470063-What-steps-can-I-take-to-avoid-hitting-the-rate-limit
 
 ## Pexels production implications
 
