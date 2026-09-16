@@ -14,15 +14,13 @@ independent R3 approval before any runtime recovery, and Trial B has not started
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
-## Production modes in this release
+## Production modes on current main
 
-- **Full Image (`full_image`)** — the only release-supported mode: images only,
-  deterministic local motion, and optional waveform presentation.
-- **Intro Video + Images (`hybrid_hook`)** — **deferred / coming soon**. Its
-  implementation and historical projects are preserved, but creation and
-  production are blocked before provider work.
-- **Full Video (`full_video_ai`)** — **deferred / coming soon**, with the same
-  provider-free release guard.
+The `v1.0.0` tag remains the stable release baseline; the statuses below describe the current post-release `main` product state.
+
+- **Full Image (`full_image`)** — stable/default path: images only, deterministic local motion, and optional waveform presentation.
+- **Hybrid Visual (`hybrid_hook`)** — **Product Flow Accepted / Quality Deferred**: 15–20s Opening Builder, automatic body images, semantic Pexels stock or image fallback, continuous narration/subtitles/waveform, and canonical final render. New UI-created projects carry an explicit CUJ activation flag; historical unflagged Hybrid projects remain fail-closed.
+- **Full Video (`full_video_ai`)** — direct Seedance API path; its provider/quality qualification is tracked separately from Hybrid Visual.
 
 Ambient Story remains preserved as historical development work and is not a
 release-supported creation mode during this freeze.

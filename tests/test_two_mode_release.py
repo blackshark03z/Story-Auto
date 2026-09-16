@@ -10,11 +10,12 @@ from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project
 
 
 class ReleaseModeTests(unittest.TestCase):
-    def test_wizard_exposes_full_image_and_full_video_but_keeps_hybrid_deferred(self):
+    def test_wizard_exposes_full_image_hybrid_and_full_video(self):
         script = (Path(__file__).parents[1] / "story_auto" / "ui" / "static" / "app.js").read_text(encoding="utf-8")
         self.assertIn('value="full_image"', script)
-        self.assertIn('value="hybrid_hook" disabled', script)
-        self.assertIn('Intro Video + Images — Coming soon', script)
+        self.assertIn('name="format" value="hybrid_hook"', script)
+        self.assertNotIn('name="format" value="hybrid_hook" disabled', script)
+        self.assertIn('HYBRID VISUAL', script)
         self.assertIn('name="format" value="full_video_ai"', script)
         self.assertIn('BytePlus async API', script)
         self.assertNotIn('name="format" value="full_video_ai" disabled', script)
@@ -31,6 +32,16 @@ class ReleaseModeTests(unittest.TestCase):
             with self.assertRaisesRegex(OperatorServiceError, "not available in the current release"):
                 app.create_project(project_id="prj_hybrid_new", render_mode="hybrid_hook")
             self.assertFalse((RuntimeLayout.from_root(root).projects / "prj_hybrid_new").exists())
+
+    def test_hybrid_creation_with_explicit_cuj_activation_is_available(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            created = app.create_project(project_id="prj_hybrid_cuj_new", render_mode="hybrid_hook",
+                                         settings={"hybrid_visual": {"cuj_enabled": True, "audio_visualizer": True}})
+            self.assertEqual(created["render_mode"], "hybrid_hook")
+            paths, config = app._project("prj_hybrid_cuj_new")
+            self.assertTrue(config.settings["hybrid_visual"]["cuj_enabled"])
+            self.assertTrue(paths.root.exists())
 
     def test_full_video_creation_is_available_and_forces_manual_video_review(self):
         with tempfile.TemporaryDirectory() as root:

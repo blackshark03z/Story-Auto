@@ -259,6 +259,47 @@ def prepare_opening_builder_from_plan(runtime_root: Path | str, project_id: str)
                                      shared_context=_canonical_shared_context(paths), slot_specs=specs)
 
 
+def prepare_opening_builder_from_alignment(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+    """Create the manual 15–20s opening pack directly from canonical timing.
+
+    This CUJ route is provider-free. It deliberately leaves at least five
+    seconds for the Hybrid body and emits three stable 5–6s prompts for normal
+    long-form projects, so manual clips always map back to exact slot IDs.
+    """
+    paths, _config = _require_project(runtime_root, project_id)
+    alignment_path = paths.artifact_path("output/alignment.json")
+    if not alignment_path.is_file():
+        raise OpeningBuilderError("OPENING_ALIGNMENT_MISSING")
+    alignment = read_json(alignment_path)
+    try:
+        master = float(alignment["duration_seconds"])
+    except Exception as error:
+        raise OpeningBuilderError("OPENING_ALIGNMENT_INVALID") from error
+    if master < 20.0:
+        raise OpeningBuilderError("HYBRID_MASTER_TOO_SHORT", str(master))
+    opening_duration = min(18.0, max(15.0, master - 5.0))
+    slot_duration = opening_duration / 3.0
+    segments = [item for item in alignment.get("segments", []) if isinstance(item, dict)]
+    shared = _canonical_shared_context(paths)
+    specs: list[dict[str, Any]] = []
+    cursor = 0.0
+    purposes = ("Hook / establish", "Develop the opening action", "Payoff / transition into body")
+    for index, purpose in enumerate(purposes, 1):
+        start = cursor
+        end = opening_duration if index == 3 else cursor + slot_duration
+        narration = " ".join(str(item.get("text") or "").strip() for item in segments
+                             if float(item.get("end") or 0) > start and float(item.get("start") or 0) < end).strip()
+        prompt = (
+            f"Create one {end-start:.2f}-second cinematic 16:9 opening clip for this exact story beat. "
+            f"Beat {index}/3: {purpose}. Narration context: {narration or 'opening story atmosphere'}. "
+            "Preserve the shared character/location/style continuity. Use natural body and facial motion, restrained camera movement, "
+            "no subtitles, no captions, no logos, no watermark, and no embedded audio requirement."
+        )
+        specs.append({"duration_seconds": round(end-start, 6), "purpose": purpose, "prompt": prompt})
+        cursor = end
+    return configure_opening_builder(runtime_root, project_id, shared_context=shared, slot_specs=specs)
+
+
 def _asset_valid(paths, asset: Any) -> bool:
     if not isinstance(asset, dict):
         return False

@@ -22,6 +22,7 @@ from story_auto.core.project.lock import ProjectLock
 from story_auto.core.render.compiler import compile_video
 from story_auto.core.render.media import MediaError, MediaTarget, probe_media
 from story_auto.core.visual.opening_builder import opening_builder_view
+from story_auto.core.visual.policy import compile_image_prompt, default_visual_policy
 from story_auto.providers.pexels.client import PexelsError, select_candidate
 
 
@@ -145,13 +146,15 @@ def build_hybrid_body_plan(runtime_root: Path | str, project_id: str, *, image_s
     sequence = 1
     image_effect_index = 0
     while cursor < total - .001:
-        for _ in range(image_count):
+        for image_index in range(image_count):
             remaining = total - cursor
             if remaining <= .001:
                 break
-            # Do not leave a tail shorter than a useful stock slot merely to
-            # preserve the nominal image duration; the tail stays IMAGE.
             duration = min(image_seconds, remaining)
+            # If consuming another image would eliminate the stock beat, stop
+            # the image block early after at least one image and reserve >=5s.
+            if image_index > 0 and remaining >= 5.0 and remaining - duration < 5.0:
+                break
             end = cursor + duration
             context = _semantic_text(segments, cursor, end)
             slots.append(_slot(f"BODY_{sequence:04d}", cursor, end, "IMAGE", context,
@@ -364,4 +367,175 @@ def adopt_pexels_stock_video(runtime_root: Path | str, project_id: str, slot_id:
         slot["status"] = "READY"
         plan["updated_at"] = _now()
         atomic_write_json(plan_path, plan)
+        return deepcopy(plan)
+
+
+def compile_hybrid_body_generation_requests(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+    """Create canonical Flow IMAGE requests only for Hybrid body image slots."""
+    paths, _config = _require_project(runtime_root, project_id)
+    plan_path = paths.artifact_path(HYBRID_BODY_PATH)
+    if not plan_path.is_file():
+        raise HybridBodyError("HYBRID_BODY_PLAN_MISSING")
+    with ProjectLock(paths.runtime, project_id):
+        plan = read_json(plan_path)
+        policy = default_visual_policy()
+        requests: list[dict[str, Any]] = []
+        for index, slot in enumerate(plan.get("slots", []), 1):
+            if not isinstance(slot, dict) or slot.get("visual_type") != "IMAGE":
+                continue
+            semantic = str(slot.get("semantic_context") or "Narrated story moment").strip()
+            request_id = "req_hybrid_" + hashlib.sha256(
+                f"{project_id}|{slot.get('slot_id')}|{semantic}".encode("utf-8")
+            ).hexdigest()[:20]
+            prompt = compile_image_prompt(
+                f"Cinematic 16:9 story illustration for this narration beat: {semantic}. "
+                "No text, lettering, subtitles, logo, watermark, collage, or split screen.",
+                policy,
+            )
+            slot["generation_request_id"] = request_id
+            slot["generation_prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+            requests.append({
+                "request_id": request_id,
+                "purpose": "SHOT",
+                "shot_id": str(slot.get("slot_id")),
+                "media_type": "IMAGE",
+                "requirement": "REQUIRED",
+                "provider": "google_flow",
+                "prompt": prompt,
+                "visual_policy": policy,
+                "output_count": 1,
+                "execution_tier": "STANDARD_PRODUCTION",
+                "reference_asset_ids": [],
+                "depends_on": [],
+                "part_index": 1,
+                "part_count": 1,
+                "target_start": float(slot["start"]),
+                "target_end": float(slot["end"]),
+                "target_duration": float(slot["target_duration"]),
+                "aspect_ratio": "16:9",
+                "priority": 1,
+                "fingerprint": hashlib.sha256(
+                    f"{request_id}|{slot.get('generation_prompt_sha256')}".encode("utf-8")
+                ).hexdigest(),
+            })
+        if not requests:
+            raise HybridBodyError("HYBRID_BODY_IMAGE_REQUESTS_EMPTY")
+        value = {
+            "schema_version": "story-auto-generation-requests/1.0.0",
+            "project_id": project_id,
+            "prompt_version": "hybrid-body-image-cuj/1.0.0",
+            "requests": requests,
+            "guardrail_estimate": {
+                "reference_image_requests": 0,
+                "shot_image_requests": len(requests),
+                "required_video_requests": 0,
+                "preferred_video_requests": 0,
+                "total_generation_requests": len(requests),
+                "max_attempts_per_request": 2,
+                "worst_case_attempt_count": len(requests) * 2,
+                "large_batch_request_threshold": 20,
+                "requires_later_execution_confirmation": False,
+            },
+            "provider_execution_authorized": True,
+            "review_status": "VALIDATED",
+            "hybrid_body_plan_sha256": sha256_file(plan_path),
+        }
+        atomic_write_json(paths.artifact_path("output/generation_requests.json"), value)
+        plan["updated_at"] = _now()
+        atomic_write_json(plan_path, plan)
+        return deepcopy(value)
+
+
+def sync_hybrid_body_generated_images(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+    """Bind Flow-selected IMAGE bytes back to exact Hybrid body slots."""
+    paths, _config = _require_project(runtime_root, project_id)
+    manifest_path = paths.artifact_path("output/generation_manifest.json")
+    plan_path = paths.artifact_path(HYBRID_BODY_PATH)
+    if not plan_path.is_file():
+        raise HybridBodyError("HYBRID_BODY_PLAN_MISSING")
+    manifest = read_json(manifest_path) if manifest_path.is_file() else {"requests": []}
+    entries = {str(item.get("request_id")): item for item in manifest.get("requests", []) if isinstance(item, dict)}
+    with ProjectLock(paths.runtime, project_id):
+        plan = read_json(plan_path)
+        changed = False
+        for slot in plan.get("slots", []):
+            if not isinstance(slot, dict) or slot.get("visual_type") != "IMAGE":
+                continue
+            request_id = slot.get("generation_request_id")
+            entry = entries.get(str(request_id)) if request_id else None
+            asset = entry.get("selected_asset") if isinstance(entry, dict) else None
+            if not isinstance(asset, dict):
+                continue
+            relative, digest = asset.get("path"), asset.get("sha256")
+            if not isinstance(relative, str) or not isinstance(digest, str):
+                continue
+            source = paths.artifact_path(relative)
+            if not source.is_file() or sha256_file(source) != digest:
+                continue
+            current = slot.get("source_asset") if isinstance(slot.get("source_asset"), dict) else None
+            if current and current.get("sha256") == digest:
+                continue
+            try:
+                with Image.open(source) as image:
+                    width, height = image.size
+            except Exception:
+                continue
+            slot["source_asset"] = {
+                "path": relative,
+                "sha256": digest,
+                "original_filename": source.name,
+                "width": width,
+                "height": height,
+                "bound_at": _now(),
+                "source": "FLOW_GENERATION",
+                "generation_request_id": request_id,
+            }
+            slot["status"] = "IMAGE_READY"
+            changed = True
+        if changed:
+            plan["updated_at"] = _now()
+            atomic_write_json(plan_path, plan)
+        return deepcopy(plan)
+
+
+def fill_hybrid_stock_image_fallbacks(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+    """Use an already-generated body image as deterministic stock fallback."""
+    paths, _config = _require_project(runtime_root, project_id)
+    plan_path = paths.artifact_path(HYBRID_BODY_PATH)
+    if not plan_path.is_file():
+        raise HybridBodyError("HYBRID_BODY_PLAN_MISSING")
+    with ProjectLock(paths.runtime, project_id):
+        plan = read_json(plan_path)
+        image_assets = [slot.get("source_asset") for slot in plan.get("slots", [])
+                        if isinstance(slot, dict) and slot.get("visual_type") == "IMAGE"
+                        and isinstance(slot.get("source_asset"), dict)]
+        valid_assets = [asset for asset in image_assets
+                        if isinstance(asset.get("path"), str) and isinstance(asset.get("sha256"), str)
+                        and paths.artifact_path(asset["path"]).is_file()
+                        and sha256_file(paths.artifact_path(asset["path"])) == asset["sha256"]]
+        if not valid_assets:
+            return deepcopy(plan)
+        stock_index = 0
+        changed = False
+        for slot in plan.get("slots", []):
+            if not isinstance(slot, dict) or slot.get("visual_type") != "STOCK_VIDEO":
+                continue
+            normalized = slot.get("normalized_asset")
+            if slot.get("status") == "READY" and isinstance(normalized, dict):
+                continue
+            fallback = slot.get("fallback_image_asset")
+            if isinstance(fallback, dict) and isinstance(fallback.get("path"), str):
+                local = paths.artifact_path(fallback["path"])
+                if local.is_file() and sha256_file(local) == fallback.get("sha256"):
+                    continue
+            chosen = deepcopy(valid_assets[stock_index % len(valid_assets)])
+            chosen["source"] = "HYBRID_AUTOMATIC_IMAGE_FALLBACK"
+            chosen["bound_at"] = _now()
+            slot["fallback_image_asset"] = chosen
+            slot["status"] = "FALLBACK_IMAGE_READY"
+            stock_index += 1
+            changed = True
+        if changed:
+            plan["updated_at"] = _now()
+            atomic_write_json(plan_path, plan)
         return deepcopy(plan)

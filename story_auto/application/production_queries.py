@@ -119,7 +119,7 @@ class ProductionQueries:
         from story_auto.core.artifacts import read_json
         from story_auto.application.flow_product import render_mode_availability
         paths, config = load_project(self.runtime, project_id)
-        availability = render_mode_availability(config.render_mode)
+        availability = render_mode_availability(config.render_mode, config.settings)
         state_path = paths.artifact_path("output/production_state.json")
         if not availability["available"]:
             # A card is a read-only surface. Never rewrite an older Full Video

@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import datetime, timezone
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -256,3 +257,54 @@ def hybrid_preview_view(runtime_root: Path | str, project_id: str) -> dict[str, 
             "preview_path": manifest.get("preview_path") if valid else None,
             "preview_sha256": manifest.get("preview_sha256") if valid else None,
             "timeline": deepcopy(manifest.get("timeline", [])) if valid else []}
+
+
+HYBRID_FINAL_VERSION = "story-auto-hybrid-final/1.0.0"
+
+
+def render_hybrid_final(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
+    """Promote the mixed master-track render to canonical final output."""
+    paths, config = _require_project(runtime_root, project_id)
+    preview = render_hybrid_preview(runtime_root, project_id)
+    preview_path = paths.artifact_path(str(preview["preview_path"]))
+    settings, target = resolve_render_settings(config)
+    final = paths.artifact_path("output/final.mp4")
+    candidate = final.with_name("final.hybrid.candidate.mp4")
+    candidate.unlink(missing_ok=True)
+    try:
+        shutil.copy2(preview_path, candidate)
+        metadata = validate_video(candidate, target=target, silent=False,
+                                  expected_duration=float(preview["master_duration_seconds"]), tolerance=.12)
+        os.replace(candidate, final)
+    finally:
+        candidate.unlink(missing_ok=True)
+    metadata = validate_video(final, target=target, silent=False,
+                              expected_duration=float(preview["master_duration_seconds"]), tolerance=.12)
+    input_paths = {
+        "alignment": "output/alignment.json",
+        "opening_manifest": "output/opening_manifest.json",
+        "hybrid_body_plan": HYBRID_BODY_PATH,
+        "hybrid_preview_manifest": HYBRID_PREVIEW_MANIFEST_PATH,
+    }
+    input_hashes = {name: sha256_file(paths.artifact_path(relative)) for name, relative in input_paths.items()}
+    manifest = {
+        "schema_version": HYBRID_FINAL_VERSION,
+        "project_id": project_id,
+        "render_mode": "hybrid_hook",
+        "status": "COMPLETE",
+        "final_path": "output/final.mp4",
+        "final_sha256": metadata["sha256"],
+        "duration_seconds": metadata["duration_seconds"],
+        "streams": {"video": metadata["video"], "audio": metadata["audio"]},
+        "narration_sha256": preview["narration"]["sha256"],
+        "subtitle_sha256": preview["subtitles"]["ass_sha256"],
+        "source_video_audio": "MUTED_BY_CONTRACT",
+        "audio_visualizer": deepcopy(preview["audio_visualizer"]),
+        "timeline": deepcopy(preview["timeline"]),
+        "input_hashes": input_hashes,
+        "producer": {"hybrid_preview_version": HYBRID_PREVIEW_VERSION, "final_version": HYBRID_FINAL_VERSION},
+        "completed_at": _now(),
+    }
+    with ProjectLock(paths.runtime, project_id):
+        atomic_write_json(paths.artifact_path("output/final_manifest.json"), manifest)
+    return deepcopy(manifest)

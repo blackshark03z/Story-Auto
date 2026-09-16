@@ -12,13 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json
+from story_auto.core.artifacts import atomic_write_json, atomic_write_text, read_json, sha256_file
 from story_auto.core.audio import parse_srt_bytes
 from story_auto.application.import_readiness import inspect_import_readiness, not_required_readiness
 from story_auto.application.production_commands import ProductionCommands
 from story_auto.application.production_queries import ProductionQueries
 from story_auto.application.flow_product import product_flow_status, required_capabilities, render_mode_availability
 from story_auto.application.full_video_product import full_video_provider_product_view
+from story_auto.application.hybrid_production import HYBRID_QUALITY_PATH, hybrid_cuj_enabled, hybrid_production_query
 from story_auto.application.runtime_defaults import RuntimeDefaults
 from story_auto.core.content import parse_content_markdown
 from story_auto.core.full_video_provider import (DEFAULT_FULL_VIDEO_PROVIDER, FullVideoProviderError,
@@ -33,10 +34,12 @@ from story_auto.core.visual import ambient_style_label, temporal_video_qc_applic
 from story_auto.core.visual.opening_builder import (configure_opening_builder as configure_hybrid_opening,
                                                      import_opening_clip as import_hybrid_opening_clip,
                                                      opening_builder_view as hybrid_opening_view,
-                                                     prepare_opening_builder_from_plan as prepare_hybrid_opening)
+                                                     prepare_opening_builder_from_plan as prepare_hybrid_opening,
+                                                     prepare_opening_builder_from_alignment as prepare_hybrid_opening_from_alignment)
 from story_auto.core.visual.hybrid_body import (adopt_hybrid_body_image, build_hybrid_body_plan,
-                                                hybrid_body_view)
-from story_auto.core.visual.hybrid_render import hybrid_preview_view, render_hybrid_preview
+                                                compile_hybrid_body_generation_requests, fill_hybrid_stock_image_fallbacks,
+                                                hybrid_body_view, sync_hybrid_body_generated_images)
+from story_auto.core.visual.hybrid_render import hybrid_preview_view, hybrid_preview_readiness, render_hybrid_final, render_hybrid_preview
 from story_auto.pipeline import (adopt_existing_audio, adopt_existing_srt,
                                  run_audio_stages, run_content_stage)
 from story_auto.providers.flow import (
@@ -187,7 +190,7 @@ def _updated_at(paths) -> str:
 
 
 def _word_count(narration: str) -> int:
-    return len(re.findall(r"\b[\w’'-]+\b", narration, flags=re.UNICODE))
+    return len(re.findall(r"\b[\wâ€™'-]+\b", narration, flags=re.UNICODE))
 
 
 def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any]:
@@ -280,33 +283,34 @@ class OperatorService:
         return sorted(result,key=lambda item:item.get("updated_at", ""),reverse=True)
 
     def production_query(self, project_id: str) -> dict[str, Any]:
-        """Canonical Phase A production query; reconciles compact state lazily."""
+        """Canonical product query with a project-gated Hybrid Visual adapter."""
         paths, config = self._project(project_id)
-        unavailable = render_mode_availability(config.render_mode)
-        if not unavailable["available"]:
-            # Do not reconcile or rewrite a historical deferred project just
-            # to apply this release's availability policy.
+        availability = render_mode_availability(config.render_mode, config.settings)
+        if not availability["available"]:
             stages = {name: {"status": "NOT_STARTED", "execution": "BLOCK"} for name in ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")}
             final_present = paths.artifact_path("output/final.mp4").is_file()
-            return {"pipeline_status": unavailable["reason_code"], "active_stage": "SOURCE", "stages": stages,
+            return {"pipeline_status": availability["reason_code"], "active_stage": "SOURCE", "stages": stages,
                     "source_mode": config.settings.get("ui", {}).get("input_source", "STORY_CONTENT"),
-                    "quality": {"policy": config.settings.get("qc_policy", AUTO_ACCEPT)}, "planning": {}, "recovery": {"status": unavailable["reason_code"],
-                    "reason_code": unavailable["reason_code"], "human_message": unavailable["human_message"],
+                    "quality": {"policy": config.settings.get("qc_policy", AUTO_ACCEPT)}, "planning": {}, "recovery": {"status": availability["reason_code"],
+                    "reason_code": availability["reason_code"], "human_message": availability["human_message"],
                     "automatic_recovery_available": False, "provider_dispatches_per_continue": 0,
-                    "requires_owner_decision": False, "next_action": None}, "blocker": {"reason_code": unavailable["reason_code"],
-                    "human_message": unavailable["human_message"], "retryable": False},
+                    "requires_owner_decision": False, "next_action": None}, "blocker": {"reason_code": availability["reason_code"],
+                    "human_message": availability["human_message"], "retryable": False},
                     "next_action": None, "provider_dispatches": 0,
                     "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None}}
+        if hybrid_cuj_enabled(config):
+            flow = product_flow_status(self.flow_connections, project_id, config, request_media_types=["IMAGE"])
+            return hybrid_production_query(paths, config, flow=flow)
         return self.production_queries.production_query(project_id)
 
     def _require_available_render_mode(self, config) -> None:
-        availability = render_mode_availability(config.render_mode)
+        availability = render_mode_availability(config.render_mode, config.settings)
         if not availability["available"]:
             raise FeatureNotAvailableError(availability["human_message"])
 
     def _deferred_feature_result(self, project_id: str) -> dict[str, Any] | None:
         _paths, config = self._project(project_id)
-        availability = render_mode_availability(config.render_mode)
+        availability = render_mode_availability(config.render_mode, config.settings)
         if availability["available"]:
             return None
         return {"project_id": project_id, "outcome": availability["reason_code"],
@@ -334,7 +338,7 @@ class OperatorService:
                 "style":config.settings.get("ui",{}).get("production_style", "Natural cinematic"),
                 "quality":"Automatic" if production["quality"]["policy"]==AUTO_ACCEPT else "Manual" if production["quality"]["policy"]==MANUAL_REVIEW else "AI review",
                 "waveform":"On" if full_image.get("audio_visualizer",True) else "Off",
-                "resolution":f"{render.get('width','Default')} × {render.get('height','Default')}",
+                "resolution":f"{render.get('width','Default')} Ã— {render.get('height','Default')}",
             },
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),
@@ -443,7 +447,7 @@ class OperatorService:
         resolved_settings=self.runtime_defaults.project_snapshot(settings)
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
         effective_render_mode=render_mode or str(defaults["render_mode"])
-        availability = render_mode_availability(effective_render_mode)
+        availability = render_mode_availability(effective_render_mode, resolved_settings)
         if not availability["available"]:
             raise FeatureNotAvailableError(availability["human_message"])
         # Until automated temporal/video semantic QC is accepted, Full Video
@@ -455,7 +459,7 @@ class OperatorService:
             # without this field remain BytePlus-compatible via the resolver.
             resolved_settings.setdefault("full_video_provider", DEFAULT_FULL_VIDEO_PROVIDER)
         mode=execution_mode(resolved_settings)
-        flow_required = effective_render_mode == "full_image"
+        flow_required = effective_render_mode in {"full_image", "hybrid_hook"}
         source_mode=str(resolved_settings.get("ui",{}).get("input_source","STORY_CONTENT"))
         if source_mode not in {"STORY_CONTENT","EXISTING_AUDIO","AUDIO_SRT"}:
             raise OperatorServiceError("INPUT_SOURCE_INVALID")
@@ -626,9 +630,9 @@ class OperatorService:
         if artifacts["generation_requests.json"]:
             ratio=(finished_visuals/total_visuals) if total_visuals else 0
             progress,stage=45+round(35*ratio),"Create visuals"
-            activity=f"Creating visuals — {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
+            activity=f"Creating visuals â€” {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
         if counts.get("QC_PENDING"):
-            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality — {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
+            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality â€” {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
         if artifacts["render_plan.json"]:
             progress,stage,activity=max(progress,88),"Render","Rendering the final video."
         if artifacts["final.mp4"] and not render_stale:
@@ -669,7 +673,7 @@ class OperatorService:
         attention=[{**_ATTENTION.get(code,{"title":"Project needs attention","message":"Review the project details before continuing.","action":"Review project","action_id":"review_project"}),"code":code} for code in blocked]
         ambient_style=config.settings.get("ambient_style") if config.render_mode=="ambient_story" else None
         result={"project_id":project_id,"title":_content_title(content,project_id,publishing),"content_status":content_status,"render_mode":config.render_mode,
-                "format_label":{"hybrid_hook":"Intro Video + Images (Coming soon)","full_video_ai":"Full Video (Coming soon)","ambient_story":"Ambient Story (deferred)","full_image":"Full Image"}[config.render_mode],
+                "format_label":{"hybrid_hook":"Hybrid Visual","full_video_ai":"Full Video","ambient_story":"Ambient Story (deferred)","full_image":"Full Image"}[config.render_mode],
                 "ambient_style":ambient_style,"ambient_style_label":ambient_style_label(ambient_style),
                 "tts_provider":config.settings.get("tts",{}).get("provider","NOT_CONFIGURED"),"narrator":narrator,
                 "planning_status":"ACTION_REQUIRED" if visual_planning.get("status")=="NEEDS_REGENERATION" else ("APPROVED" if review.get("plan_approval",{}).get("status")=="APPROVED" else ("VALIDATED" if artifacts["story_timeline.json"] else "NOT_STARTED")),
@@ -750,12 +754,30 @@ class OperatorService:
             "approve_plan": lambda project_id: self.approve_planning(project_id),
             "approve_shots": lambda project_id: self.approve_planning(project_id, shots=True),
             "visuals": lambda project_id: self._run_visuals_for_production(project_id),
-            "quality": lambda project_id: self.apply_qc_policy(project_id),
+            "quality": lambda project_id: self._quality_for_production(project_id),
             "render": lambda project_id: self.render(project_id),
         }, self.production_queries.record_run, self.production_queries.record_planning_failure)
 
     def _plan_for_production(self, project_id: str) -> Any:
-        paths, _ = self._project(project_id)
+        paths, config = self._project(project_id)
+        if hybrid_cuj_enabled(config):
+            if not all(paths.artifact_path(f"output/{name}").is_file()
+                       for name in ("story_timeline.json", "continuity_bible.json")):
+                run_planning_stages(self.runtime.root, project_id)
+            # Hybrid CUJ uses automatic technical planning acceptance. This is
+            # durable authority for body IMAGE generation, not visual-quality acceptance.
+            approve_plan(self.runtime.root, project_id)
+            opening = hybrid_opening_view(self.runtime.root, project_id)
+            if not opening or opening.get("status") == "NOT_CONFIGURED":
+                prepare_hybrid_opening_from_alignment(self.runtime.root, project_id)
+            if hybrid_body_view(self.runtime.root, project_id) is None:
+                build_hybrid_body_plan(self.runtime.root, project_id)
+            requests = compile_hybrid_body_generation_requests(self.runtime.root, project_id)
+            return {
+                "opening_builder": hybrid_opening_view(self.runtime.root, project_id),
+                "hybrid_body": hybrid_body_view(self.runtime.root, project_id),
+                "generation_requests": requests,
+            }
         if not all(paths.artifact_path(f"output/{name}").is_file()
                    for name in ("story_timeline.json", "continuity_bible.json")):
             run_planning_stages(self.runtime.root, project_id)
@@ -763,6 +785,37 @@ class OperatorService:
         return self.plan_visuals(project_id)
 
     def _run_visuals_for_production(self, project_id: str) -> Any:
+        paths, config = self._project(project_id)
+        if hybrid_cuj_enabled(config):
+            opening = hybrid_opening_view(self.runtime.root, project_id)
+            if not opening or not opening.get("ready"):
+                return {"outcome": "HYBRID_OPENING_CLIPS_REQUIRED", "opening_builder": opening}
+            sync_hybrid_body_generated_images(self.runtime.root, project_id)
+            body = hybrid_body_view(self.runtime.root, project_id) or {}
+            missing_request_ids = {
+                str(slot.get("generation_request_id"))
+                for slot in body.get("slots", [])
+                if isinstance(slot, dict) and slot.get("visual_type") == "IMAGE"
+                and not isinstance(slot.get("source_asset"), dict)
+                and isinstance(slot.get("generation_request_id"), str)
+            }
+            if missing_request_ids:
+                self.generate(project_id, request_ids=missing_request_ids)
+                sync_hybrid_body_generated_images(self.runtime.root, project_id)
+            body = hybrid_body_view(self.runtime.root, project_id) or {}
+            # Pexels is an enhancement, not a CUJ blocker. Try it when configured;
+            # otherwise reuse generated body imagery as the deterministic fallback.
+            for slot in body.get("slots", []):
+                if not isinstance(slot, dict) or slot.get("visual_type") != "STOCK_VIDEO":
+                    continue
+                if slot.get("status") in {"READY", "FALLBACK_IMAGE_READY"}:
+                    continue
+                try:
+                    resolve_pexels_stock_slot(self.runtime.root, project_id, str(slot.get("slot_id")))
+                except Exception:
+                    pass
+            fill_hybrid_stock_image_fallbacks(self.runtime.root, project_id)
+            return hybrid_body_view(self.runtime.root, project_id)
         state=self.production_query(project_id)
         recovery=state.get("recovery", {})
         if (state.get("active_stage") == "VISUALS"
@@ -779,6 +832,33 @@ class OperatorService:
             if not paths.artifact_path("output/generation_requests.json").is_file():
                 return self.plan_visuals(project_id)
         return self.generate(project_id)
+
+    def _quality_for_production(self, project_id: str) -> Any:
+        paths, config = self._project(project_id)
+        if not hybrid_cuj_enabled(config):
+            return self.apply_qc_policy(project_id)
+        readiness = hybrid_preview_readiness(self.runtime.root, project_id)
+        if not readiness.get("ready"):
+            error = OperatorServiceError("HYBRID_TECHNICAL_QUALITY_NOT_READY")
+            error.failure_class = "HYBRID_TECHNICAL_QUALITY_NOT_READY"
+            raise error
+        inputs = {}
+        for name, relative in (("alignment", "output/alignment.json"),
+                               ("opening", "output/opening_manifest.json"),
+                               ("body", "output/hybrid_body_plan.json")):
+            target = paths.artifact_path(relative)
+            inputs[name] = sha256_file(target)
+        value = {
+            "schema_version": "story-auto-hybrid-quality/1.0.0",
+            "project_id": project_id,
+            "status": "TECHNICAL_ACCEPTED",
+            "policy": "TECHNICAL_ONLY_V1",
+            "quality_optimization_deferred": True,
+            "input_hashes": inputs,
+            "accepted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        atomic_write_json(paths.artifact_path(HYBRID_QUALITY_PATH), value)
+        return value
 
     def run_to_final(self, project_id: str) -> dict[str, Any]:
         unavailable = self._deferred_feature_result(project_id)
@@ -932,11 +1012,11 @@ class OperatorService:
         if provider=="kokoro_local":
             kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
             voice_row={"name":"Voice",
-                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
+                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} â€” local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
                        "status":"Ready" if kokoro_readiness.ready else "Needs attention",
                        "technical_code":kokoro_readiness.technical_code}
         else:
-            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
+            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} â€” local narrator" if provider else "Choose a narrator for new videos",
                        "status":"Ready" if provider else "Not configured"}
         return {
             "defaults":{"render_mode":defaults_payload["render_mode"],"ambient_style":defaults_payload["ambient_style"],"voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":defaults_payload["visual_style"],
@@ -947,8 +1027,8 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Full Image visuals","detail":"Google Flow · Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
-                {"name":"Full Video visuals","detail":f"BytePlus ModelArk · {seedance_status['model']} · API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
+                {"name":"Full Image visuals","detail":"Google Flow Â· Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Full Video visuals","detail":f"BytePlus ModelArk Â· {seedance_status['model']} Â· API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
                 {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
@@ -1344,6 +1424,8 @@ class OperatorService:
 
     def render(self, project_id: str, *, force_final: bool = False) -> dict[str, Any]:
         _paths, config = self._project(project_id); self._require_available_render_mode(config)
+        if hybrid_cuj_enabled(config):
+            return render_hybrid_final(self.runtime.root, project_id)
         return run_render_stages(self.runtime.root, project_id, force_final=force_final)
 
     def publishing(self, project_id: str, action: str, *, provider=None) -> Any:

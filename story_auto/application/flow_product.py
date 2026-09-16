@@ -43,9 +43,14 @@ DEFERRED_MODE_UNAVAILABLE = {
 }
 
 
-def render_mode_availability(render_mode: str) -> dict:
+def render_mode_availability(render_mode: str, settings: dict | None = None) -> dict:
     if render_mode in {"full_image", "full_video_ai"}:
         return {"available": True, "reason_code": None, "human_message": None, "retryable": False}
+    if render_mode == "hybrid_hook":
+        hybrid = settings.get("hybrid_visual", {}) if isinstance(settings, dict) else {}
+        if isinstance(hybrid, dict) and hybrid.get("cuj_enabled") is True:
+            return {"available": True, "reason_code": None, "human_message": None, "retryable": False,
+                    "activation_scope": "PROJECT_CUJ_FLAG"}
     return dict(DEFERRED_MODE_UNAVAILABLE)
 
 

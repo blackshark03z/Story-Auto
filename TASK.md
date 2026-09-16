@@ -523,3 +523,18 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - The same UAT workspace projection truthfully remains `FEATURE_NOT_AVAILABLE` while reporting opening/body/preview READY; release activation is therefore still fenced correctly.
 - Owner visual acceptance is the next gate: watch the real-asset preview and judge motion, cuts/source changes, subtitle/waveform placement and overall quality. Do not promote to canonical final render or enable Hybrid Visual before that human decision.
 - Post-SSD Kokoro probe currently reports `KOKORO_MODEL_NOT_FOUND`; UAT used Windows Zira locally so this independent environment drift did not contaminate H5 qualification.
+
+### Hybrid Visual canonical CUJ / Product Flow Acceptance (2026-09-16)
+
+- Decision SoT: `docs/decisions/0005-product-journey-and-hybrid-flow-acceptance.md`; evidence: `docs/HYBRID_VISUAL_CUJ_FLOW_ACCEPTANCE.md`.
+- Acceptance is deliberately split: **`PRODUCT_FLOW_ACCEPTED / QUALITY_DEFERRED`**. Product Journey/CUJ is not the same thing as the internal Execution Pipeline, and technical pipeline PASS alone is not product acceptance.
+- Hybrid now uses the canonical six outer stages `SOURCE -> TIMING -> PLAN -> VISUALS -> QUALITY -> RENDER`; there is no second Hybrid production pipeline.
+- New-video UI exposes `HYBRID VISUAL`; UI-created Hybrid projects snapshot `hybrid_visual.cuj_enabled=true`. Historical Hybrid projects without this explicit flag remain `FEATURE_NOT_AVAILABLE`. Full Image remains the default.
+- PLAN prepares canonical story approval plus a 15–20s Opening Builder and Hybrid body plan. Manual opening generation/import remains first-class.
+- VISUALS reuses the existing Flow image engine for body IMAGE slots. Semantic Pexels stock remains optional for flow completion; stock slots can automatically use generated-image fallback.
+- QUALITY is `TECHNICAL_ONLY_V1` for this acceptance. It proves integrity/binding, not motion/aesthetic quality.
+- RENDER promotes the mixed compositor to canonical `output/final.mp4` + `output/final_manifest.json`; narration/subtitles/waveform remain master tracks and visual audio stays muted.
+- Stale-state test proves replacing an Opening asset after final moves the project back to QUALITY and removes RENDER COMPLETE authority.
+- Browser gates PASS: New video exposes/selects Hybrid Visual; prepared project performs opening import -> Continue -> COMPLETE -> Open final video.
+- Post-promotion qualification: **76 tests PASS**, Python/JS syntax PASS, `SECURITY_GATE=PASS`, `YOUTUBE_AUTO_RUNTIME_IMPORTS=0`.
+- Next work is a separate **Hybrid Quality V2** track (motion/effects, stock relevance, transitions, pacing, subtitle/waveform styling). Do not reopen the accepted CUJ merely because output quality is not yet optimized.
