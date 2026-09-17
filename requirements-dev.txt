@@ -1,0 +1,3 @@
+# Developer/test dependencies. Production/runtime installs continue to use requirements.txt only.
+-r requirements.txt
+pytest>=8,<10

@@ -111,6 +111,14 @@ The Flow Generate transport uses Playwright only to attach over CDP to Story
 Auto's existing dedicated Chrome session. It does not launch a Playwright
 browser or require `playwright install` browser binaries.
 
+For development and repository qualification, install the separate test contract
+instead of adding test-only packages to the production dependency set:
+
+```text
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
 ```text
 python -m story_auto --runtime-root runtime new --project-id prj_example
 python -m story_auto --runtime-root runtime new --project-id prj_ambient_example --render-mode ambient_story --ambient-style quiet_verdict

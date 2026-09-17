@@ -630,6 +630,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Focused Phase A + UI + Elyum preflight + Hybrid CUJ qualification: 25 tests PASS, 2 system-Chrome-only UI tests skipped; JavaScript syntax and `git diff --check` PASS.
 - A repository-wide `unittest discover` qualification attempt ran 762 tests and exposed four errors. Three are test-tooling environment errors because `pytest` is not installed while three test modules import it. The fourth was the stale single-key Elyum test contract described above and is now repaired. This run is recorded as **NOT FULLY QUALIFIED**, not as a product regression pass; canonical historical full-suite evidence uses `python -m pytest -q`.
 
+### Repository qualification dependency checkpoint (2026-09-18)
+
+- Repository qualification now has an explicit `requirements-dev.txt` contract that includes the production dependencies plus `pytest>=8,<10`; test-only tooling remains outside the production `requirements.txt` contract.
+- The README documents the supported development install and canonical `python -m pytest -q` qualification command. An offline dependency-contract regression prevents this test requirement from silently disappearing.
+- Targeted dependency-contract qualification: 2/2 PASS. Full hermetic qualification with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: **829 passed, 4 skipped, 286 subtests passed**.
+- The four skips are environment-specific browser checks; this qualification made no live provider request and performed no Keep/Kill or provider-credit consequence.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

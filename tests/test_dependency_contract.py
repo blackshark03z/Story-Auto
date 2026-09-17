@@ -14,3 +14,9 @@ class DependencyContractTests(unittest.TestCase):
         self.assertIsNotNone(importlib.util.find_spec("playwright"))
         from playwright.sync_api import sync_playwright
         self.assertTrue(callable(sync_playwright))
+
+    def test_repository_qualification_has_a_separate_dev_dependency_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        requirements = (root / "requirements-dev.txt").read_text(encoding="utf-8")
+        self.assertIn("-r requirements.txt", requirements)
+        self.assertIn("pytest>=8,<10", requirements)
