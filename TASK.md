@@ -587,6 +587,7 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Existing artifact schema versions were intentionally not changed: the common manifest already cryptographically binds format through `render_plan_sha256`; a schema migration/rerender would add cost without closing a product defect.
 - Settings copy now states the real policy: Full Image is the only **global default**; Hybrid Visual and Full Video remain available **per video**. Old `Coming soon` wording was removed.
 - Qualification: Full Image + common render + Hybrid browser CUJ + release-mode suite = 40/40 PASS.
+- Project-summary projection now reports the **effective** renderer target rather than `Default × Default`; implicit default projects display `1920 × 1080`. Waveform summary is mode-correct: Full Image follows `full_image.audio_visualizer`, Hybrid follows `hybrid_visual.audio_visualizer`, and Full Video reports `Not used` rather than incorrectly inheriting Full Image's default. Application/workspace/release regression: 32/32 PASS.
 
 ### Provider / recovery matrix checkpoint (2026-09-18)
 

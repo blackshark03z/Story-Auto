@@ -357,8 +357,15 @@ class OperatorService:
         content=paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
         tts=config.settings.get("tts",{}) if isinstance(config.settings,dict) else {}
         narrator=(tts.get("kokoro_local",{}).get("voice_id") if isinstance(tts,dict) and tts.get("provider")=="kokoro_local" else None)
-        render=config.settings.get("render",{}) if isinstance(config.settings,dict) else {}
+        effective_render,_=resolve_render_settings(config)
         full_image=config.settings.get("full_image",{}) if config.render_mode=="full_image" else {}
+        hybrid_visual=config.settings.get("hybrid_visual",{}) if config.render_mode=="hybrid_hook" and isinstance(config.settings,dict) else {}
+        if config.render_mode == "full_image":
+            waveform_summary = "On" if full_image.get("audio_visualizer", True) else "Off"
+        elif config.render_mode == "hybrid_hook":
+            waveform_summary = "On" if hybrid_visual.get("audio_visualizer", True) else "Off"
+        else:
+            waveform_summary = "Not used"
         source={"STORY_CONTENT":"Story / Content","EXISTING_AUDIO":"Existing audio","AUDIO_SRT":"Audio + SRT"}.get(production["source_mode"],"Story / Content")
         return {
             "project_id":project_id,
@@ -370,8 +377,8 @@ class OperatorService:
                 "narrator":_VOICE_NAMES.get(narrator,narrator) if narrator else None,
                 "style":config.settings.get("ui",{}).get("production_style", "Natural cinematic"),
                 "quality":"Automatic" if production["quality"]["policy"]==AUTO_ACCEPT else "Manual" if production["quality"]["policy"]==MANUAL_REVIEW else "AI review",
-                "waveform":"On" if full_image.get("audio_visualizer",True) else "Off",
-                "resolution":f"{render.get('width','Default')} × {render.get('height','Default')}",
+                "waveform":waveform_summary,
+                "resolution":f"{effective_render['width']} × {effective_render['height']}",
             },
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),

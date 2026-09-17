@@ -283,6 +283,27 @@ class OperatorApplicationTests(unittest.TestCase):
                 self.assertEqual(voice["status"],"Ready")
                 self.assertEqual(overview["creation_defaults"]["tts"]["provider"],"kokoro_local")
 
+    def test_project_summary_reports_effective_format_per_mode(self):
+        with tempfile.TemporaryDirectory() as root:
+            app=OperatorService(root)
+            full=app.create_project(project_id="prj_summary_full",render_mode="full_image",
+                                    settings={"full_image":{"audio_visualizer":False}},
+                                    content="# Full\n\n## Narration\n\nFull image summary.")
+            hybrid=app.create_project(project_id="prj_summary_hybrid",render_mode="hybrid_hook",
+                                      settings={"hybrid_visual":{"cuj_enabled":True,"audio_visualizer":True}},
+                                      content="# Hybrid\n\n## Narration\n\nHybrid summary.")
+            video=app.create_project(project_id="prj_summary_video",render_mode="full_video_ai",
+                                     content="# Video\n\n## Narration\n\nFull video summary.")
+            full_workspace=app.project_workspace(full["project_id"])
+            hybrid_workspace=app.project_workspace(hybrid["project_id"])
+            video_workspace=app.project_workspace(video["project_id"])
+            self.assertEqual(full_workspace["summary"]["resolution"],"1920 × 1080")
+            self.assertEqual(hybrid_workspace["summary"]["resolution"],"1920 × 1080")
+            self.assertEqual(video_workspace["summary"]["resolution"],"1920 × 1080")
+            self.assertEqual(full_workspace["summary"]["waveform"],"Off")
+            self.assertEqual(hybrid_workspace["summary"]["waveform"],"On")
+            self.assertEqual(video_workspace["summary"]["waveform"],"Not used")
+
     def test_scene_progress_and_review_keep_request_purposes_distinct(self):
         with tempfile.TemporaryDirectory() as root:
             app=OperatorService(root)
