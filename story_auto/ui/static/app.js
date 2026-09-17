@@ -469,11 +469,15 @@ function renderProject() {
   const durableAction = canonicalBlockerAction(production);
   const immediateAction = durableAction || (state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action);
   const showActionOutcome = state.actionOutcome && !redundantSafetyOutcome(state.actionOutcome, production);
+  const qualityPolicyRecovery = production.quality?.policy === 'AI_REVIEW'
+    ? `<section class="surface" data-quality-policy-surface><div class="surface-head"><div><p class="eyebrow">QUALITY REVIEW</p><h2>Choose a supported review policy</h2><p>AI Review is reserved but is not runnable in this version. Choose the policy for this project so production can continue.</p></div></div><div class="button-row"><button class="button-primary" data-project-qc-policy="AUTO_ACCEPT" type="button" ${state.busy ? 'disabled' : ''}>Use Automatic</button><button data-project-qc-policy="MANUAL_REVIEW" type="button" ${state.busy ? 'disabled' : ''}>Use Manual review</button></div></section>`
+    : '';
   const primary=`<button class="button-primary" data-project-action="${esc(immediateAction.action)}" type="button" ${state.busy ? 'disabled' : ''}>${esc(backendProductionWorking(production) ? 'Working…' : immediateAction.label)}</button>`;
   $('#view').innerHTML = `<section class="project-hero"><div><span class="status-chip ${blocker ? 'attention' : ''}">${esc(workspace.status)}</span><h2>${esc(workspace.title)}</h2><p>${esc(activeText)}</p>${stageMarkup(workspace)}</div><div class="progress-panel"><div class="progress-value"><span>${blocker ? 'Production status' : 'Current action'}</span><strong>${esc(immediateAction.label)}</strong></div><p>${esc(activeText)}</p>${blocker ? '<p class="hint">See the action needed below.</p>' : primary}</div></section>
   ${showActionOutcome ? actionOutcomeCard(state.actionOutcome) : ''}
   ${state.error ? errorCard(state.error) : ''}
   ${blocker ? `<section class="attention-card" aria-labelledby="blockerTitle"><div><h2 id="blockerTitle">${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? 'Visual planning needs another attempt' : blocker.reason_code === 'STUCK_PENDING' ? 'Flow generation appears stuck' : 'Action needed'}</h2><p>${esc(blocker.human_message)}</p><p class="reassurance">Your completed work is saved.</p></div>${blocker.reason_code === 'STUCK_PENDING' ? '<div class="button-row"><button class="button-primary" data-project-action="recheck_flow_generation" type="button">Recheck status</button><button data-project-action="open_flow_project" type="button">Open Flow project</button></div>' : primary}${blocker.stage === 'PLAN' && production.pipeline_status === 'SAFETY_BLOCKED' ? `<details class="disclosure"><summary>Technical details</summary><div class="technical">${esc(blocker.reason_code)}</div></details>` : ''}${flow?.status === 'PROJECT_MISMATCH' ? '<button data-rebind-flow type="button">Rebind this Story Auto project</button>' : ''}</section>` : ''}
+  ${qualityPolicyRecovery}
   ${flow?.required && flow.status === 'CONNECTED' ? '<section class="surface"><p><strong>Flow:</strong> Connected</p></section>' : ''}
   ${fullVideoProviderSurface(workspace)}
   ${openingBuilderSurface(workspace)}
@@ -486,6 +490,9 @@ function renderProject() {
   bindFullVideoProviderControls();
   bindOpeningBuilderControls();
   bindHybridBodyControls();
+  document.querySelectorAll('[data-project-qc-policy]').forEach(button => button.addEventListener('click', () => {
+    runAction('set_qc_policy','Updating this project’s quality review policy…',{policy:button.dataset.projectQcPolicy});
+  }));
   document.querySelectorAll('[data-rebind-flow]').forEach(button => button.addEventListener('click', async () => {
     if (!window.confirm('Use the currently validated Flow project for future requests? Existing request history will remain unchanged.')) return;
     await runAction('rebind_flow_project','Rebinding future Flow requests…', {explicit_owner_decision:true});
@@ -535,6 +542,7 @@ async function handleProjectAction(action) {
   if (action === 'edit_content') return showContentEditor();
   if (action === 'review_plan') return showPlanReview();
   if (action === 'settings') return showSettings();
+  if (action === 'choose_quality_policy') { document.querySelector('[data-quality-policy-surface]')?.scrollIntoView({behavior:'smooth',block:'start'}); return; }
   if (action === 'focus_opening_builder') { document.querySelector('.opening-slot-grid')?.scrollIntoView({behavior:'smooth',block:'start'}); return; }
   if (action === 'review_visuals' || action === 'review_project' || action === 'review_recovery' || action === 'open_final') return showReview();
   if (action === 'process' || action === 'run_to_final') return runAction('run_to_final','Continuing production until it needs your decision…');

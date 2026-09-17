@@ -362,6 +362,9 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
             self.assertEqual(app.query_qc_status("prj_ai")["policy"], "AI_REVIEW")
             with self.assertRaisesRegex(Exception, "AI_REVIEW_UNSUPPORTED"):
                 app.apply_qc_policy("prj_ai")
+            changed = app.set_qc_policy("prj_ai", "MANUAL_REVIEW")
+            self.assertEqual(changed["policy"], "MANUAL_REVIEW")
+            self.assertEqual(app.query_qc_status("prj_ai")["policy"], "MANUAL_REVIEW")
 
 
 if __name__ == "__main__":

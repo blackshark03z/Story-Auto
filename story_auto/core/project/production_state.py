@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.8"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.9"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 DEFAULT_STUCK_PENDING_SECONDS = 900
 
@@ -78,7 +78,7 @@ def _read(path: Path, default: Any) -> Any:
 
 
 def _signature(paths, relative: str) -> dict[str, Any]:
-    path = paths.artifact_path(relative)
+    path = paths.project_file if relative == "project.json" else paths.artifact_path(relative)
     if not path.is_file():
         return {"path": relative, "present": False}
     stat = path.stat()
@@ -107,6 +107,7 @@ class ProductionStateReconciler:
     """Rebuild compact state lazily from durable project artifacts."""
 
     _evidence_files = (
+        "project.json",
         "output/content_manifest.json", "output/audio_manifest.json", "output/srt_manifest.json",
         "output/alignment.json", "output/story_timeline.json", "output/continuity_bible.json",
         "output/shot_plan.json", "output/media_plan.json", "output/generation_requests.json",
@@ -300,9 +301,8 @@ class ProductionStateReconciler:
                         "provider_dispatches_per_continue": 0, "requires_owner_decision": False,
                         "next_action": "Open final video"}
         elif blocker:
-            canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Review provider access": "settings", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
             pipeline_status = recovery["status"] if blocker.get("stage") == "VISUALS" and recovery["status"] in {"BLOCKED", "NEEDS_ATTENTION", "STUCK_PENDING"} else blocker["reason_code"]
-            active_stage, next_action = blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
+            active_stage, next_action = blocker.get("stage") or self._first_incomplete(stages), {"action": self._canonical_action_id(blocker["next_action"]), "label": blocker["next_action"]}
         else:
             active_stage = self._first_incomplete(stages)
             pipeline_status = recovery["status"] if active_stage == "VISUALS" and recovery["status"] in {"RUNNING", "RECOVERY_READY"} else "READY"
@@ -633,6 +633,27 @@ class ProductionStateReconciler:
     @staticmethod
     def _blocker(code: str, message: str, action: str, recoverable: bool, owner: bool, stage: str | None = None) -> dict[str, Any]:
         return {"reason_code": code, "human_message": message, "next_action": action, "recoverable": recoverable, "requires_owner_decision": owner, "stage": stage}
+
+    @staticmethod
+    def _canonical_action_id(label: str) -> str:
+        """Map durable product labels only to UI-supported action IDs.
+
+        Unknown labels fail closed to project review instead of inventing a
+        slug that may render as a clickable no-op.
+        """
+        return {
+            "Review plan": "review_plan",
+            "Review visuals": "review_visuals",
+            "Review recovery": "review_recovery",
+            "Review provider access": "settings",
+            "Open Flow sign-in": "open_flow_sign_in",
+            "Continue production": "continue_production",
+            "Review project": "review_project",
+            "Recheck status": "recheck_status",
+            "Retry planning": "run_to_final",
+            "Open final video": "open_final",
+            "Choose a supported quality review policy": "choose_quality_policy",
+        }.get(label, "review_project")
 
     @staticmethod
     def _first_incomplete(stages: dict[str, dict[str, Any]]) -> str:

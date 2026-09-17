@@ -613,6 +613,14 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Provider mutation and recovery semantics are unchanged; this is an action-routing correction only and does not authorize retry, replacement, Keep/Kill, or provider spend.
 - Focused Phase D + UI + Hybrid CUJ qualification: 22 tests PASS, with 2 system-Chrome-only UI tests skipped because Google Chrome is not installed; Playwright Hybrid browser CUJs PASS.
 
+### Project-setting cache + quality-policy recovery checkpoint (2026-09-18)
+
+- Action-contract audit found a second CUJ dead-end: reserved `AI_REVIEW` could reach a quality blocker whose label was converted into an invented action slug with no UI handler. The production-state action mapper is now explicit and fail-closed; unknown labels route to project review instead of becoming clickable no-ops.
+- Existing `set_qc_policy` application/server support is now exposed on the current project when `AI_REVIEW` is encountered. The project page offers `Use Automatic` and `Use Manual review`; changing the policy is project-local and does not alter defaults for future videos.
+- Verification exposed the underlying cache defect: project setting changes updated `project.json`, but the compact `production_state.json` fingerprint ignored project configuration, so `production_query()` could return stale policy/execution state immediately after a valid mutation.
+- `project.json` is now canonical evidence in the production-state fingerprint on both reconcile and fast-query paths. Production-state schema is bumped to `story-auto-production-state/1.0.9`, forcing older compact caches to reconcile once.
+- Focused Production Flow A-D + UI + Hybrid CUJ regression after the root fix: 51 tests PASS, 2 system-Chrome-only UI tests skipped because Google Chrome is not installed; Playwright Hybrid browser CUJs PASS.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

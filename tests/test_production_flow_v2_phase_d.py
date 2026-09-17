@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 from story_auto.application import OperatorService
 from story_auto.application.production_coordinator import ProductionCoordinator
 from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.project.production_state import ProductionStateReconciler
 from story_auto.providers.flow.connection import FlowConnectionError
 from story_auto.providers.flow.service import FlowExecutor
 from story_auto.providers.flow.session import FlowCapabilities
@@ -201,6 +202,12 @@ class PhaseDFlowProductTests(unittest.TestCase):
             workspace = app.project_workspace(paths.project_id)
             self.assertEqual((workspace["status"], workspace["production"]["pipeline_status"], workspace["final_path"]),
                              ("Complete", "COMPLETE", "output/final.mp4"))
+
+    def test_next_action_mapping_never_invents_unhandled_slugs(self):
+        self.assertEqual(ProductionStateReconciler._canonical_action_id("Review provider access"), "settings")
+        self.assertEqual(ProductionStateReconciler._canonical_action_id("Recheck status"), "recheck_status")
+        self.assertEqual(ProductionStateReconciler._canonical_action_id("Choose a supported quality review policy"), "choose_quality_policy")
+        self.assertEqual(ProductionStateReconciler._canonical_action_id("Future unknown action"), "review_project")
 
     def test_ui_and_cli_use_the_canonical_recovery_surface(self):
         root = Path(__file__).parents[1]

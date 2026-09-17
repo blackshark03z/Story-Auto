@@ -78,7 +78,7 @@ class ProductionQueries:
 
     @staticmethod
     def _signature(paths, relative: str) -> dict:
-        path=paths.artifact_path(relative)
+        path=paths.project_file if relative == "project.json" else paths.artifact_path(relative)
         if not path.is_file(): return {"path":relative,"present":False}
         stat=path.stat()
         return {"path":relative,"present":True,"bytes":stat.st_size,"mtime_ns":stat.st_mtime_ns}

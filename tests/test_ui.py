@@ -90,6 +90,11 @@ class OperatorUiTests(unittest.TestCase):
         self.assertIn("void runAction('run_to_final'",success)
         self.assertIn("wizard.creating = false; showWizardError",script)
 
+    def test_reserved_quality_policy_has_project_level_recovery_controls(self):
+        script=(Path(__file__).parents[1]/"story_auto/ui/static/app.js").read_text(encoding="utf-8")
+        for token in ("choose_quality_policy", "data-quality-policy-surface", "data-project-qc-policy", "Use Automatic", "Use Manual review", "set_qc_policy"):
+            self.assertIn(token,script)
+
     def test_complete_cuj_has_single_rerender_action_and_repeat_use_cta(self):
         script=(Path(__file__).parents[1]/"story_auto/ui/static/app.js").read_text(encoding="utf-8")
         complete=script.split("function renderComplete(snapshot) {",1)[1].split("function bindDiagnosticsDisclosure()",1)[0]
