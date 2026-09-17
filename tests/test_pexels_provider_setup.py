@@ -8,7 +8,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from story_auto.application.operator import OperatorService
+from story_auto.application.operator import OperatorService, OperatorServiceError
 from story_auto.providers.credentials import (clear_provider_keys, provider_key_status,
                                                provider_keys, set_provider_keys)
 from story_auto.ui.server import create_server
@@ -22,7 +22,8 @@ class PexelsProviderSetupTests(unittest.TestCase):
                 key = "fixture-pexels-key-not-a-real-secret"
                 set_provider_keys("pexels", [key])
                 status = provider_key_status("pexels")
-                self.assertEqual(status, {"configured": True, "count": 1, "source": "DPAPI_STORE", "removable": True})
+                self.assertEqual(status, {"configured": True, "count": 1, "saved_count": 1, "environment_count": 0,
+                                          "source": "DPAPI_STORE", "removable": True})
                 self.assertEqual(provider_keys("pexels"), [key])
                 store = Path(local) / "StoryAuto" / "credentials.v1.json"
                 raw = store.read_text(encoding="utf-8")
@@ -30,6 +31,50 @@ class PexelsProviderSetupTests(unittest.TestCase):
                 self.assertIn("WINDOWS_DPAPI_CURRENT_USER", raw)
                 clear_provider_keys("pexels")
                 self.assertFalse(provider_key_status("pexels")["configured"])
+
+    @unittest.skipUnless(os.name == "nt", "Story Auto credential persistence uses Windows DPAPI")
+    def test_key_batch_appends_dedupes_and_invalid_batch_does_not_mutate(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as local:
+            with patch.dict(os.environ, {"LOCALAPPDATA": local, "PEXELS_API_KEY": ""}, clear=False):
+                service = OperatorService(root)
+                key1 = "fixture-pexels-key-one-not-real"
+                key2 = "fixture-pexels-key-two-not-real"
+                key3 = "fixture-pexels-key-three-not-real"
+                first = service.save_pexels_key([key1, key2, key1])
+                self.assertEqual((first["added_count"], first["saved_credential_count"]), (2, 2))
+                second = service.save_pexels_key([key2, key3])
+                self.assertEqual((second["added_count"], second["saved_credential_count"]), (1, 3))
+                self.assertEqual(provider_keys("pexels"), [key1, key2, key3])
+                with self.assertRaises(OperatorServiceError):
+                    service.save_pexels_key(["fixture-pexels-key-four-not-real", "bad"])
+                self.assertEqual(provider_keys("pexels"), [key1, key2, key3])
+                raw = (Path(local) / "StoryAuto" / "credentials.v1.json").read_text(encoding="utf-8")
+                for key in (key1, key2, key3):
+                    self.assertNotIn(key, raw)
+
+    @unittest.skipUnless(os.name == "nt", "Story Auto credential persistence uses Windows DPAPI")
+    def test_settings_append_semantics_are_consistent_for_all_keyed_video_providers(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as local:
+            with patch.dict(os.environ, {
+                "LOCALAPPDATA": local,
+                "PEXELS_API_KEY": "",
+                "BYTEPLUS_MODELARK_API_KEY": "",
+                "ELYUM_API_KEY": "",
+            }, clear=False):
+                service = OperatorService(root)
+                cases = [
+                    ("byteplus_modelark", service.save_byteplus_key, "fixture-byteplus-key-one", "fixture-byteplus-key-two"),
+                    ("elyum", service.save_elyum_key, "fixture-elyum-key-one", "fixture-elyum-key-two"),
+                    ("pexels", service.save_pexels_key, "fixture-pexels-key-one", "fixture-pexels-key-two"),
+                ]
+                for provider, save, key1, key2 in cases:
+                    with self.subTest(provider=provider):
+                        first = save([key1, key1])
+                        second = save([key1, key2])
+                        self.assertEqual(first["added_count"], 1)
+                        self.assertEqual(second["added_count"], 1)
+                        self.assertEqual(second["saved_credential_count"], 2)
+                        self.assertEqual(provider_keys(provider), [key1, key2])
 
     def test_live_test_returns_only_non_secret_readiness(self):
         class FakePexelsClient:
@@ -86,10 +131,22 @@ class PexelsProviderSetupTests(unittest.TestCase):
                         self.assertEqual(page.locator("#pexelsLiveStatus").inner_text(), "Not configured")
 
                         fixture_key = "fixture-pexels-key-not-a-real-secret"
-                        page.locator("#pexelsApiKey").fill(fixture_key)
+                        fixture_key_2 = "fixture-pexels-key-two-not-a-real-secret"
+                        fixture_key_3 = "fixture-pexels-key-three-not-a-real-secret"
+                        pexels_section = page.locator("section.settings-section").filter(has_text="Hybrid stock video · Pexels")
+                        page.locator("#pexelsApiKey").fill(f"{fixture_key}\n{fixture_key_2}\n{fixture_key}")
                         page.locator("#savePexelsKey").click()
                         page.locator("#pexelsLiveStatus").get_by_text("Configured", exact=True).wait_for(timeout=5000)
+                        pexels_section.locator(".summary-row").filter(has_text="Saved keys").locator("dd").get_by_text("2", exact=True).wait_for(timeout=5000)
                         self.assertNotIn(fixture_key, page.locator("body").inner_text())
+                        self.assertNotIn(fixture_key_2, page.locator("body").inner_text())
+                        page.wait_for_timeout(150)
+
+                        page.locator("#pexelsApiKey").fill(f"{fixture_key_2}\n{fixture_key_3}")
+                        page.locator("#savePexelsKey").click()
+                        page.locator("#pexelsLiveStatus").get_by_text("Configured", exact=True).wait_for(timeout=5000)
+                        pexels_section.locator(".summary-row").filter(has_text="Saved keys").locator("dd").get_by_text("3", exact=True).wait_for(timeout=5000)
+                        self.assertNotIn(fixture_key_3, page.locator("body").inner_text())
 
                         page.locator("#testPexelsKey").click()
                         page.locator("#pexelsLiveStatus").get_by_text("Connected", exact=False).wait_for(timeout=5000)

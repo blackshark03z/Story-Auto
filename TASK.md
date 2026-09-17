@@ -592,3 +592,12 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Manual import remains available whenever no unresolved provider consequence exists.
 - Server creation boundary normalizes the policy to uppercase and rejects unknown values with `HYBRID_OPENING_PROVIDER_POLICY_INVALID`; private/session-only provider identities cannot be smuggled through project settings.
 - Qualification: 48 Hybrid/provider/application/release tests PASS, Python/JS syntax PASS, `SECURITY_GATE=PASS`, `git diff --check` PASS.
+
+### Provider credential key-pool UX (2026-09-17)
+
+- Decision SoT: `docs/decisions/0007-provider-key-pool-append-semantics.md`.
+- Root cause closed: Settings previously called the pool setter with one key, replacing all previously saved keys even though the credential boundary was already pool-based.
+- Implemented behavior: multiline batch input, atomic validation, append + stable-order dedupe, saved-key count only, no secret projection, and remove-all for the saved DPAPI pool.
+- Scope: BytePlus, Elyum, and Pexels Settings credential UX. Existing environment override semantics and provider execution routing remain unchanged.
+- Acceptance evidence: batch append preserves old keys, duplicates are idempotent, invalid batches do not mutate, browser Settings proves saved-key count grows 2 -> 3 without rendering secrets, legacy single-key route remains compatible.
+- Qualification: 48 provider/application/release tests PASS; focused credential/browser suite 9/9 PASS; Python/JS syntax PASS; `SECURITY_GATE=PASS`; `git diff --check` PASS.

@@ -74,16 +74,35 @@ def _write_own_pool(pool: str, values: list[str]) -> None:
     atomic_write_json(path, payload)
 
 
-def set_provider_keys(provider: str, values: list[str]) -> None:
-    """Persist a provider key pool in Story Auto's DPAPI-protected store."""
-    if provider not in _POOL:
-        raise ValueError("unsupported provider")
-    cleaned = []
+def _clean_keys(values: list[str]) -> list[str]:
+    cleaned: list[str] = []
     for raw in values:
         value = str(raw).strip()
         if value and value not in cleaned:
             cleaned.append(value)
-    _write_own_pool(_POOL[provider], cleaned)
+    return cleaned
+
+
+def set_provider_keys(provider: str, values: list[str]) -> None:
+    """Replace one provider's Story Auto DPAPI pool. Internal/admin primitive."""
+    if provider not in _POOL:
+        raise ValueError("unsupported provider")
+    _write_own_pool(_POOL[provider], _clean_keys(values))
+
+
+def append_provider_keys(provider: str, values: list[str]) -> dict[str, int]:
+    """Append validated keys to the saved DPAPI pool without exposing secret text."""
+    if provider not in _POOL:
+        raise ValueError("unsupported provider")
+    incoming = _clean_keys(values)
+    pool = _POOL[provider]
+    existing = _read_pool(_store_path("StoryAuto"), pool, _OWN_ENTROPY)
+    merged = list(existing)
+    for value in incoming:
+        if value not in merged:
+            merged.append(value)
+    _write_own_pool(pool, merged)
+    return {"added_count": len(merged) - len(existing), "saved_count": len(merged)}
 
 
 def clear_provider_keys(provider: str) -> None:
@@ -95,10 +114,12 @@ def provider_key_status(provider: str) -> dict[str, object]:
     if provider not in _POOL:
         raise ValueError("unsupported provider")
     environment = [value.strip() for value in os.getenv(_ENV[provider], "").split(",") if value.strip()]
-    if environment:
-        return {"configured": True, "count": len(environment), "source": "ENVIRONMENT", "removable": False}
     own = _read_pool(_store_path("StoryAuto"), _POOL[provider], _OWN_ENTROPY)
-    return {"configured": bool(own), "count": len(own), "source": "DPAPI_STORE" if own else None, "removable": bool(own)}
+    if environment:
+        return {"configured": True, "count": len(environment), "saved_count": len(own),
+                "environment_count": len(environment), "source": "ENVIRONMENT", "removable": bool(own)}
+    return {"configured": bool(own), "count": len(own), "saved_count": len(own), "environment_count": 0,
+            "source": "DPAPI_STORE" if own else None, "removable": bool(own)}
 
 
 def provider_keys(provider: str) -> list[str]:

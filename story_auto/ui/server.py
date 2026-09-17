@@ -77,19 +77,19 @@ class OperatorHandler(BaseHTTPRequestHandler):
             if parts==["api","settings","defaults"]:
                 return self._json(self.service.update_runtime_defaults(body.get("defaults",{})))
             if parts==["api","settings","pexels","save"]:
-                return self._json(self.service.save_pexels_key(body.get("key","")))
+                return self._json(self.service.save_pexels_key(body.get("keys",body.get("key",""))))
             if parts==["api","settings","pexels","test"]:
                 return self._json(self.service.test_pexels_connection())
             if parts==["api","settings","pexels","clear"]:
                 return self._json(self.service.clear_pexels_key())
             if parts==["api","settings","byteplus","save"]:
-                return self._json(self.service.save_byteplus_key(body.get("key","")))
+                return self._json(self.service.save_byteplus_key(body.get("keys",body.get("key",""))))
             if parts==["api","settings","byteplus","test"]:
                 return self._json(self.service.test_byteplus_connection())
             if parts==["api","settings","byteplus","clear"]:
                 return self._json(self.service.clear_byteplus_key())
             if parts==["api","settings","elyum","save"]:
-                return self._json(self.service.save_elyum_key(body.get("key","")))
+                return self._json(self.service.save_elyum_key(body.get("keys",body.get("key",""))))
             if parts==["api","settings","elyum","test"]:
                 return self._json(self.service.test_elyum_connection())
             if parts==["api","settings","elyum","clear"]:

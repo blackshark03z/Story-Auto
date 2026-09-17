@@ -67,7 +67,7 @@ from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeeda
                                                 review_elyum_preview as review_elyum_locked_preview)
 from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
-from story_auto.providers.credentials import clear_provider_keys, provider_key_status, set_provider_keys
+from story_auto.providers.credentials import append_provider_keys, clear_provider_keys, provider_key_status
 from story_auto.providers.video_generation import video_provider_catalog
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
@@ -76,6 +76,22 @@ from story_auto.providers.tts.kokoro_local import KokoroLocalProvider, available
 
 class OperatorServiceError(RuntimeError):
     pass
+
+
+def _provider_key_batch(raw: Any, *, minimum_length: int, label: str) -> list[str]:
+    values = raw if isinstance(raw, list) else str(raw or "").splitlines()
+    cleaned: list[str] = []
+    for item in values:
+        value = str(item).strip()
+        if not value:
+            continue
+        if len(value) < minimum_length:
+            raise OperatorServiceError(f"Enter valid {label} keys, one per line.")
+        if value not in cleaned:
+            cleaned.append(value)
+    if not cleaned:
+        raise OperatorServiceError(f"Enter at least one {label} key.")
+    return cleaned
 
 
 class FeatureNotAvailableError(OperatorServiceError):
@@ -1049,6 +1065,7 @@ class OperatorService:
             "reason_code": None if credential["configured"] else "BYTEPLUS_CREDENTIAL_MISSING",
             "configured": bool(credential["configured"]),
             "credential_count": int(credential["count"]),
+            "saved_credential_count": int(credential.get("saved_count", credential["count"])),
             "credential_source": credential["source"],
             "removable": bool(credential["removable"]),
             "provider": readiness.get("provider", "BytePlus ModelArk"),
@@ -1056,17 +1073,12 @@ class OperatorService:
             "live_verified": False,
         }
 
-    def save_byteplus_key(self, key: str) -> dict[str, Any]:
-        value = str(key or "").strip()
-        if len(value) < 12:
-            raise OperatorServiceError("Enter a valid BytePlus ModelArk API key.")
-        set_provider_keys("byteplus_modelark", [value])
-        return self.byteplus_connection_status()
+    def save_byteplus_key(self, keys: Any) -> dict[str, Any]:
+        values = _provider_key_batch(keys, minimum_length=12, label="BytePlus ModelArk API")
+        result = append_provider_keys("byteplus_modelark", values)
+        return {**self.byteplus_connection_status(), **result}
 
     def clear_byteplus_key(self) -> dict[str, Any]:
-        status = provider_key_status("byteplus_modelark")
-        if status.get("source") == "ENVIRONMENT":
-            raise OperatorServiceError("BytePlus is configured by environment and cannot be removed from Story Auto Settings.")
         clear_provider_keys("byteplus_modelark")
         return self.byteplus_connection_status()
 
@@ -1090,6 +1102,7 @@ class OperatorService:
             "reason_code": None if credential["configured"] else "ELYUM_CREDENTIAL_MISSING",
             "configured": bool(credential["configured"]),
             "credential_count": int(credential["count"]),
+            "saved_credential_count": int(credential.get("saved_count", credential["count"])),
             "credential_source": credential["source"],
             "removable": bool(credential["removable"]),
             "provider": "Elyum",
@@ -1098,17 +1111,12 @@ class OperatorService:
             "live_verified": False,
         }
 
-    def save_elyum_key(self, key: str) -> dict[str, Any]:
-        value = str(key or "").strip()
-        if len(value) < 12:
-            raise OperatorServiceError("Enter a valid Elyum API key.")
-        set_provider_keys("elyum", [value])
-        return self.elyum_connection_status()
+    def save_elyum_key(self, keys: Any) -> dict[str, Any]:
+        values = _provider_key_batch(keys, minimum_length=12, label="Elyum API")
+        result = append_provider_keys("elyum", values)
+        return {**self.elyum_connection_status(), **result}
 
     def clear_elyum_key(self) -> dict[str, Any]:
-        status = provider_key_status("elyum")
-        if status.get("source") == "ENVIRONMENT":
-            raise OperatorServiceError("Elyum is configured by environment and cannot be removed from Story Auto Settings.")
         clear_provider_keys("elyum")
         return self.elyum_connection_status()
 
@@ -1145,23 +1153,19 @@ class OperatorService:
             "reason_code": None if credential["configured"] else "PEXELS_CREDENTIAL_MISSING",
             "configured": bool(credential["configured"]),
             "credential_count": int(credential["count"]),
+            "saved_credential_count": int(credential.get("saved_count", credential["count"])),
             "credential_source": credential["source"],
             "removable": bool(credential["removable"]),
             "fallback": "IMAGE",
             "live_verified": False,
         }
 
-    def save_pexels_key(self, key: str) -> dict[str, Any]:
-        value = str(key or "").strip()
-        if len(value) < 8:
-            raise OperatorServiceError("Enter a valid Pexels API key.")
-        set_provider_keys("pexels", [value])
-        return self.pexels_connection_status()
+    def save_pexels_key(self, keys: Any) -> dict[str, Any]:
+        values = _provider_key_batch(keys, minimum_length=8, label="Pexels API")
+        result = append_provider_keys("pexels", values)
+        return {**self.pexels_connection_status(), **result}
 
     def clear_pexels_key(self) -> dict[str, Any]:
-        status = provider_key_status("pexels")
-        if status.get("source") == "ENVIRONMENT":
-            raise OperatorServiceError("Pexels is configured by environment and cannot be removed from Story Auto Settings.")
         clear_provider_keys("pexels")
         return self.pexels_connection_status()
 
