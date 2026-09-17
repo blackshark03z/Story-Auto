@@ -13,7 +13,7 @@ Current CADS guidance requires durable decisions to be phrased around capabiliti
 
 1. **Model and provider are separate identities.** `Seedance` is a model family/capability requirement; BytePlus, Elyum and later Dola are replaceable provider realizations.
 2. **One canonical video-provider contract/registry** describes provider capability, transport class, lifecycle, consequence model, production status and experimental status. Planning/rendering remain provider-independent.
-3. **Provider routing is explicit and deterministic.** Initial automatic policy means ordered readiness/fallback, not cheapest/best-quality inference.
+3. **Provider routing is explicit and deterministic.** Hybrid projects persist an Opening provider policy (`AUTO`, `BYTEPLUS`, `ELYUM`, or `MANUAL`). `AUTO` means ordered eligibility/readiness choices only; it never dispatches generation or triggers a spend/consequence action by itself, and it is not cheapest/best-quality inference.
 4. **Cross-provider fallback is allowed only before confirmed or ambiguous dispatch.** `NOT_CONFIGURED`, capability mismatch, preflight failure and confirmed-not-dispatched may choose another provider. Ambiguous/confirmed dispatch must reconcile the same provider/effect identity first.
 5. **Elyum keeps its own consequence lifecycle.** Preview creation/hold, Owner review, `Keep` spend and `Kill` release are not flattened into the BytePlus async-task lifecycle.
 6. **Manual external generation remains universal fallback** for Hybrid Opening and converges into the same normalized slot contract.

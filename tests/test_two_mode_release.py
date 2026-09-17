@@ -37,11 +37,22 @@ class ReleaseModeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
             created = app.create_project(project_id="prj_hybrid_cuj_new", render_mode="hybrid_hook",
-                                         settings={"hybrid_visual": {"cuj_enabled": True, "audio_visualizer": True}})
+                                         settings={"hybrid_visual": {"cuj_enabled": True, "audio_visualizer": True,
+                                                                      "opening_provider_policy": "ELYUM"}})
             self.assertEqual(created["render_mode"], "hybrid_hook")
             paths, config = app._project("prj_hybrid_cuj_new")
             self.assertTrue(config.settings["hybrid_visual"]["cuj_enabled"])
+            self.assertEqual(config.settings["hybrid_visual"]["opening_provider_policy"], "ELYUM")
+            self.assertEqual(app.project_workspace("prj_hybrid_cuj_new")["opening_provider_policy"], "ELYUM")
             self.assertTrue(paths.root.exists())
+
+    def test_hybrid_opening_provider_policy_rejects_unknown_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            with self.assertRaisesRegex(Exception, "HYBRID_OPENING_PROVIDER_POLICY_INVALID"):
+                app.create_project(project_id="prj_hybrid_bad_provider_policy", render_mode="hybrid_hook",
+                                   settings={"hybrid_visual": {"cuj_enabled": True,
+                                                                "opening_provider_policy": "DOLA_COOKIE"}})
 
     def test_full_video_creation_is_available_and_forces_manual_video_review(self):
         with tempfile.TemporaryDirectory() as root:

@@ -358,6 +358,7 @@ class OperatorService:
             "hybrid_preview":hybrid_preview_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "opening_api_provider":seedance_readiness() if config.render_mode=="hybrid_hook" else None,
             "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status()} if config.render_mode=="hybrid_hook" else None),
+            "opening_provider_policy":(str(config.settings.get("hybrid_visual",{}).get("opening_provider_policy","AUTO")).upper() if config.render_mode=="hybrid_hook" and isinstance(config.settings,dict) else None),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -493,6 +494,14 @@ class OperatorService:
         resolved_settings=self.runtime_defaults.project_snapshot(settings)
         if ambient_style is not None: resolved_settings["ambient_style"]=ambient_style
         effective_render_mode=render_mode or str(defaults["render_mode"])
+        if effective_render_mode == "hybrid_hook":
+            hybrid_settings = resolved_settings.setdefault("hybrid_visual", {})
+            if not isinstance(hybrid_settings, dict):
+                raise OperatorServiceError("HYBRID_VISUAL_SETTINGS_INVALID")
+            opening_provider_policy = str(hybrid_settings.get("opening_provider_policy", "AUTO")).strip().upper()
+            if opening_provider_policy not in {"AUTO", "BYTEPLUS", "ELYUM", "MANUAL"}:
+                raise OperatorServiceError("HYBRID_OPENING_PROVIDER_POLICY_INVALID")
+            hybrid_settings["opening_provider_policy"] = opening_provider_policy
         availability = render_mode_availability(effective_render_mode, resolved_settings)
         if not availability["available"]:
             raise FeatureNotAvailableError(availability["human_message"])
@@ -1261,6 +1270,7 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "flow_connection":self._flow_connection_overview(),
             "seedance":seedance_readiness(),
+            "elyum":self.elyum_connection_status(),
             "pexels":self.pexels_connection_status(),
         }
 

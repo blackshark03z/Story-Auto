@@ -254,6 +254,9 @@ function openingBuilderSurface(snapshot) {
   const providers = snapshot.opening_api_providers || {byteplus:snapshot.opening_api_provider || {},elyum:{}};
   const byteplus = providers.byteplus || {};
   const elyum = providers.elyum || {};
+  const providerPolicy = String(snapshot.opening_provider_policy || 'AUTO').toUpperCase();
+  const allowBytePlus = providerPolicy === 'AUTO' || providerPolicy === 'BYTEPLUS';
+  const allowElyum = providerPolicy === 'AUTO' || providerPolicy === 'ELYUM';
   const slots = (opening.slots || []).map(slot => {
     const ready = slot.status === 'READY' && slot.asset_ready;
     const api = slot.api_generation || {};
@@ -267,8 +270,8 @@ function openingBuilderSurface(snapshot) {
     const affordableModels = elyumModels.filter(item => item.affordable === true);
     let providerControls = '';
     if (!ready && noProvider) {
-      if (byteplus.status === 'READY') providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Generate with BytePlus</button>`;
-      if (elyum.configured) {
+      if (allowBytePlus && byteplus.status === 'READY') providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Generate with BytePlus</button>`;
+      if (allowElyum && elyum.configured) {
         if (preflight.status === 'READY' && elyumModels.length) {
           const options = elyumModels.map(item => `<option value="${esc(item.model_id)}" ${item.affordable ? '' : 'disabled'}>${esc(item.model_id)} · ${esc(item.estimate_credits)} credits${item.affordable ? '' : ' · insufficient balance'}</option>`).join('');
           providerControls += `<select data-opening-elyum-model="${esc(slot.slot_id)}">${options}</select>`;
@@ -294,7 +297,10 @@ function openingBuilderSurface(snapshot) {
     const unresolvedElyum = elyumActive && ['SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','PREVIEW_READY','KEEP_REQUIRED','PREVIEW_REJECTED','KEEP_DISPATCHING','KILL_DISPATCHING','KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState);
     const importButton = unresolvedElyum ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
-    if (!ready && noProvider && byteplus.status !== 'READY' && !elyum.configured) apiNote = '<small>No video API is configured. Manual import remains available.</small>';
+    if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
+    else if (!ready && noProvider && providerPolicy === 'BYTEPLUS' && byteplus.status !== 'READY') apiNote = '<small>BytePlus is selected but not configured. Manual import remains available.</small>';
+    else if (!ready && noProvider && providerPolicy === 'ELYUM' && !elyum.configured) apiNote = '<small>Elyum is selected but not configured. Manual import remains available.</small>';
+    else if (!ready && noProvider && byteplus.status !== 'READY' && !elyum.configured) apiNote = '<small>No video API is configured. Manual import remains available.</small>';
     if (!ready && preflight.status === 'READY' && !affordableModels.length) apiNote = `<small>Elyum models are available, but the current balance (${esc(preflight.balance)}) is below every quoted option for this slot.</small>`;
     if (elyumActive && apiState === 'PREVIEW_READY') apiNote = '<small>Locked Elyum preview. It is not an Opening asset yet: review it, then Keep to spend and download the original.</small>';
     if (elyumActive && apiState === 'KEEP_REQUIRED') apiNote = '<small>Preview accepted. Keep is the Elyum spend boundary; Story Auto will not call it automatically.</small>';
@@ -307,7 +313,7 @@ function openingBuilderSurface(snapshot) {
     const source = slot.source_asset ? `<small>${sourceKind} · ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip bound yet.</small>';
     return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${apiNote}${source}${lockedPreview}${preview}</article>`;
   }).join('');
-  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Choose BytePlus, Elyum preview/Keep, or manual import per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Choose BytePlus, Elyum preview/Keep, or manual import per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Opening provider policy</strong><small>${esc(providerPolicy)}</small></div><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
 }
 
 function hybridBodySurface(snapshot) {
@@ -939,7 +945,7 @@ function freshDraft() {
     importedAudio: null, importedSrt: null, sourceValidation: null, ambientStyle: 'quiet_verdict',
     fullImage: {image_duration_seconds:30, cadence:'SEMANTIC_ADAPTIVE', motion:'AUTO_CONTINUOUS_ZOOM', audio_visualizer:true},
     qcPolicy: 'AUTO_ACCEPT',
-    flowConnection: null, seedance: null, pexels: null, touched: {}, creating: false,
+    flowConnection: null, seedance: null, elyum: null, pexels: null, openingProviderPolicy: 'AUTO', touched: {}, creating: false,
   };
 }
 function activeDraft(draft) { return state.wizard === draft; }
@@ -954,7 +960,9 @@ function hydrateDraftDefaults(draft, payload) {
   state.creationDefaults = payload;
   draft.flowConnection = payload.flow_connection || null;
   draft.seedance = payload.seedance || null;
+  draft.elyum = payload.elyum || null;
   draft.pexels = payload.pexels || null;
+  if (!draft.touched.openingProviderPolicy) draft.openingProviderPolicy = String(payload.creation_defaults?.hybrid_visual?.opening_provider_policy || 'AUTO').toUpperCase();
   const defaults = payload.defaults || {};
   if (!draft.touched.voice && !draft.voice) draft.voice = defaults.voice_id || '';
   if (!draft.touched.mode) draft.mode = 'full_image';
@@ -1061,7 +1069,7 @@ function renderWizard() {
         : `<fieldset class="field contextual-field"><legend>Visual tone</legend><div class="choice-grid"><label class="choice"><input type="radio" name="style" value="natural" ${wizard.style === 'natural' ? 'checked' : ''}><strong>Natural cinematic</strong><small>Restrained, story-first visuals with dependable defaults.</small></label><label class="choice"><input type="radio" name="style" value="documentary" ${wizard.style === 'documentary' ? 'checked' : ''}><strong>Quiet documentary</strong><small>Grounded pacing and observational visual language.</small></label></div></fieldset>`;
     const narratorHelp = installedVoices().length ? (wizard.voice ? 'Kokoro Local uses the installed narrator you select here.' : 'The saved default narrator is unavailable. Choose an installed narrator before continuing.') : 'No installed Kokoro narrators are available. Configure Kokoro in Settings before creating a video.';
     const hybridProviderContext = wizard.mode === 'hybrid_hook'
-      ? `<section class="surface" style="margin-top:20px"><strong>HYBRID VISUAL PROVIDERS</strong><p class="hint">Opening - manual external generation is ready. Body images - Google Flow. Stock video - ${wizard.pexels?.configured ? 'Pexels configured' : 'Pexels not configured; generated-image fallback will be used'}.</p></section>`
+      ? `<section class="surface" style="margin-top:20px"><strong>HYBRID VISUAL PROVIDERS</strong><div class="field" style="margin-top:12px"><label for="hybridOpeningProviderPolicy">Opening provider policy</label><select id="hybridOpeningProviderPolicy"><option value="AUTO" ${wizard.openingProviderPolicy === 'AUTO' ? 'selected' : ''}>Auto - offer ready providers, never auto-spend</option><option value="BYTEPLUS" ${wizard.openingProviderPolicy === 'BYTEPLUS' ? 'selected' : ''}>BytePlus only</option><option value="ELYUM" ${wizard.openingProviderPolicy === 'ELYUM' ? 'selected' : ''}>Elyum only</option><option value="MANUAL" ${wizard.openingProviderPolicy === 'MANUAL' ? 'selected' : ''}>Manual only</option></select><small>BytePlus: ${wizard.seedance?.status === 'READY' ? 'ready' : 'not configured'} · Elyum: ${wizard.elyum?.configured ? 'configured' : 'not configured'}. Auto only controls which choices are offered; it never dispatches or spends by itself.</small></div><p class="hint">Body images - Google Flow. Stock video - ${wizard.pexels?.configured ? 'Pexels configured' : 'Pexels not configured; generated-image fallback will be used'}.</p></section>`
       : '';
     const sourceContext = wizard.source === 'STORY_CONTENT' ? `<div class="field" style="margin-top:20px"><label for="voiceChoice">Narrator voice</label><select id="voiceChoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(wizard.voice)}</select><small>${esc(narratorHelp)}</small></div>` : `<section class="surface" style="margin-top:20px"><strong>${esc(sourceLabel(wizard.source))}</strong><p class="hint">Narration audio: IMPORT Ã‚Â· TTS: SKIP Ã‚Â· Timing: ${wizard.source === 'AUDIO_SRT' ? 'SRT' : 'ALIGNMENT'}.</p></section>`;
     const qualityPolicy = wizard.mode === 'full_video_ai'
@@ -1077,12 +1085,13 @@ function renderWizard() {
     $('#fullImageCadence')?.addEventListener('change', event => { wizard.fullImage.cadence = event.target.value; touchDraft(wizard,'fullImage'); });
     $('#fullImageWaveform')?.addEventListener('change', event => { wizard.fullImage.audio_visualizer = event.target.checked; touchDraft(wizard,'fullImage'); renderWizard(); });
     $('#voiceChoice')?.addEventListener('change', event => { wizard.voice = event.target.value; touchDraft(wizard,'voice'); });
+    $('#hybridOpeningProviderPolicy')?.addEventListener('change', event => { wizard.openingProviderPolicy = event.target.value; touchDraft(wizard,'openingProviderPolicy'); });
   } else {
     const source = wizard.source;
     const visualRun = wizard.mode === 'full_image' ? 'Create images' : 'Create visuals';
     const providerReady = wizard.execution === 'RENDER_ONLY' || (wizard.mode === 'full_video_ai' ? wizard.seedance?.status === 'READY' : wizard.flowConnection?.status === 'CONNECTED');
     const providerLine = wizard.mode === 'hybrid_hook'
-      ? `Flow body images: ${wizard.flowConnection?.status === 'CONNECTED' ? 'ready' : 'reconnect if generation pauses'} · Pexels stock: ${wizard.pexels?.configured ? 'configured' : 'not configured — image fallback enabled'}`
+      ? `Opening policy: ${wizard.openingProviderPolicy} · Flow body images: ${wizard.flowConnection?.status === 'CONNECTED' ? 'ready' : 'reconnect if generation pauses'} · Pexels stock: ${wizard.pexels?.configured ? 'configured' : 'not configured — image fallback enabled'}`
       : providerReady ? (wizard.mode === 'full_video_ai' ? 'BytePlus Seedance API ready' : 'Ready')
         : (wizard.mode === 'full_video_ai' ? 'Needs BytePlus ModelArk API key in the Story Auto environment.' : 'Needs attention — you can reconnect Flow from the project.');
     $('#wizardContent').innerHTML = `<p class="hint">Check these choices before Story Auto creates the project.</p><dl class="review-summary"><div class="summary-row"><dt>Source</dt><dd>${esc(sourceLabel(source))}</dd><button class="change-step" data-change-step="1" type="button">Change</button></div><div class="summary-row"><dt>Expected duration</dt><dd>${source === 'STORY_CONTENT' ? esc(formatDuration(wizard.info?.estimated_duration_seconds)) : 'Known from your audio'}</dd><button class="change-step" data-change-step="2" type="button">Change</button></div><div class="summary-row"><dt>Output style</dt><dd>${esc(humanMode(wizard.mode))}</dd><button class="change-step" data-change-step="3" type="button">Change</button></div><div class="summary-row"><dt>Quality review</dt><dd>${wizard.qcPolicy === 'AUTO_ACCEPT' ? 'Automatic' : 'Manual'}</dd></div><div class="summary-row"><dt>Provider readiness</dt><dd>${providerLine}</dd></div>${wizard.mode === 'full_image' ? `<div class="summary-row"><dt>Scene pacing</dt><dd>${esc(wizard.fullImage.image_duration_seconds)} seconds Ã‚Â· ${esc(wizard.fullImage.cadence === 'FIXED' ? 'Fixed' : 'Adaptive')} Ã‚Â· Waveform ${wizard.fullImage.audio_visualizer ? 'On' : 'Off'}</dd><button class="change-step" data-change-step="3" type="button">Change</button></div>` : ''}</dl><section class="surface" style="margin-top:22px"><h3>Execution summary</h3><p class="hint">Audio Ã¢â‚¬â€ ${source === 'STORY_CONTENT' ? 'Create narration' : 'Use uploaded file'}<br>Timing Ã¢â‚¬â€ ${source === 'AUDIO_SRT' ? 'Use subtitle timing' : 'Prepare timing'}<br>Visuals Ã¢â‚¬â€ ${visualRun}<br>Quality Ã¢â‚¬â€ ${wizard.qcPolicy === 'AUTO_ACCEPT' ? 'Automatic' : 'Manual review'}<br>Final video Ã¢â‚¬â€ Create</p></section>`;
@@ -1155,7 +1164,7 @@ async function advanceWizard() {
     settings.qc_policy = wizard.qcPolicy;
     if (wizard.mode === 'ambient_story') settings.ambient_style = wizard.ambientStyle; else delete settings.ambient_style;
     if (wizard.mode === 'full_image') settings.full_image = {...wizard.fullImage, image_duration_seconds:Number(wizard.fullImage.image_duration_seconds), motion:'AUTO_CONTINUOUS_ZOOM'}; else delete settings.full_image;
-    if (wizard.mode === 'hybrid_hook') settings.hybrid_visual = {...(settings.hybrid_visual || {}),cuj_enabled:true,audio_visualizer:true}; else delete settings.hybrid_visual;
+    if (wizard.mode === 'hybrid_hook') settings.hybrid_visual = {...(settings.hybrid_visual || {}),cuj_enabled:true,audio_visualizer:true,opening_provider_policy:wizard.openingProviderPolicy}; else delete settings.hybrid_visual;
     const created = await api('/api/projects',{method:'POST',body:JSON.stringify({render_mode:wizard.mode,ambient_style:wizard.mode === 'ambient_story' ? wizard.ambientStyle : null,content:wizard.source === 'AUDIO_SRT' ? null : wizard.content,settings,imported_audio:wizard.execution === 'FULL' ? null : wizard.importedAudio,imported_srt:wizard.source === 'AUDIO_SRT' ? wizard.importedSrt : null})});
     state.projects = [created,...state.projects.filter(project => project.project_id !== created.project_id)];
     state.project = created.project_id; state.view = 'project'; setNav('home');

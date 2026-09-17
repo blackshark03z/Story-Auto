@@ -583,3 +583,12 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Public Dola Terms prohibit reverse engineering. The known cookie client explicitly reverse-engineers Android/web-session behavior, so Story Auto will **not** implement that private/internal route as a product adapter.
 - Registry identity changed from `dola_session` to `dola_official`: experimental, `OFFICIAL_API_CONTRACT_NOT_QUALIFIED`, not production-routed.
 - Until an official supported API is qualified, Dola remains available through the existing Manual external generation → Import clip journey.
+
+### Hybrid Opening provider policy (2026-09-17)
+
+- New Hybrid projects persist `settings.hybrid_visual.opening_provider_policy` with one of `AUTO`, `BYTEPLUS`, `ELYUM`, or `MANUAL`; default is `AUTO`.
+- `AUTO` means deterministic offer/readiness ordering only. It never dispatches generation, calls Elyum Keep/Kill, or spends credits automatically.
+- Opening Builder reads the persisted project policy when no provider effect exists. Once a BytePlus/Elyum effect is submitted or ambiguous, recovery remains bound to that provider identity regardless of policy.
+- Manual import remains available whenever no unresolved provider consequence exists.
+- Server creation boundary normalizes the policy to uppercase and rejects unknown values with `HYBRID_OPENING_PROVIDER_POLICY_INVALID`; private/session-only provider identities cannot be smuggled through project settings.
+- Qualification: 48 Hybrid/provider/application/release tests PASS, Python/JS syntax PASS, `SECURITY_GATE=PASS`, `git diff --check` PASS.

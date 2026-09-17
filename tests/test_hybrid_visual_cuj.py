@@ -231,6 +231,12 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
                 surface = page.locator("#wizardContent").inner_text()
                 self.assertIn("HYBRID VISUAL", surface)
                 self.assertIn("15-20s opening video", surface)
+                policy = page.locator("#hybridOpeningProviderPolicy")
+                policy.wait_for(timeout=5000)
+                self.assertEqual(policy.input_value(), "AUTO")
+                policy.select_option("ELYUM")
+                self.assertEqual(policy.input_value(), "ELYUM")
+                self.assertIn("never auto-spend", page.locator("#wizardContent").inner_text())
                 self.assertNotIn("Coming soon", surface)
                 browser.close()
         finally:
