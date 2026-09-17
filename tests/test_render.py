@@ -89,7 +89,7 @@ class RenderMediaTests(unittest.TestCase):
     def test_hold_and_hybrid_compositor_with_subtitles_and_bgm(self) -> None:
         target = MediaTarget(320, 180, 10)
         segments = [
-            {"target_duration": .4, "transition": {"type": "CROSSFADE", "duration": .1}},
+            {"target_duration": .4, "transition": {"type": "CUT", "duration": 0}},
             {"target_duration": .4, "transition": {"type": "CROSSFADE", "duration": .1}},
             {"target_duration": .4, "transition": {"type": "CUT", "duration": 0}},
         ]

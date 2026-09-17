@@ -121,6 +121,10 @@ class HybridVisualMixedRenderTests(unittest.TestCase):
         self.assertEqual(kinds[:2], ["OPENING_VIDEO", "OPENING_VIDEO"])
         self.assertEqual(kinds[2:6], ["IMAGE", "IMAGE", "IMAGE", "STOCK_VIDEO"])
         self.assertEqual(kinds[-1], "IMAGE")
+        transitions = [item["transition"]["type"] for item in manifest["timeline"]]
+        self.assertIn("CROSSFADE", transitions)
+        self.assertIn("CUT", transitions)
+        self.assertEqual(manifest["timeline"][-1]["transition"]["type"], "CUT")
         for prior, current in zip(manifest["timeline"], manifest["timeline"][1:]):
             self.assertAlmostEqual(prior["end"], current["start"], places=5)
         self.assertAlmostEqual(manifest["timeline"][-1]["end"], 36.0, places=5)

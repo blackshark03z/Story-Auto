@@ -29,6 +29,7 @@ from story_auto.core.visual.opening_builder import opening_builder_view
 HYBRID_PREVIEW_VERSION = "story-auto-hybrid-preview/1.0.0"
 HYBRID_PREVIEW_PATH = "output/hybrid_preview.mp4"
 HYBRID_PREVIEW_MANIFEST_PATH = "output/hybrid_preview_manifest.json"
+HYBRID_BODY_CROSSFADE_SECONDS = 0.30
 
 
 class HybridRenderError(RuntimeError):
@@ -119,14 +120,21 @@ def _build_visual_clips(paths, config, opening: dict[str, Any], body: dict[str, 
                          "transition": {"type": "CUT", "duration": 0.0}})
         timeline.append({"slot_id": slot["slot_id"], "start": start, "end": end,
                          "source_kind": "OPENING_VIDEO", "compiled_path": slot["normalized_asset"]["path"],
-                         "source_sha256": slot["normalized_asset"]["sha256"]})
+                         "source_sha256": slot["normalized_asset"]["sha256"],
+                         "transition": {"type": "CUT", "duration": 0.0}})
         previous_end = end
-    for slot in body.get("slots", []):
+    body_slots = list(body.get("slots", []))
+    for slot_index, slot in enumerate(body_slots):
         start, end = float(slot["start"]), float(slot["end"])
         if abs(start - previous_end) > .001 or end <= start:
             raise HybridRenderError("HYBRID_BODY_TIMELINE_INVALID", str(slot.get("slot_id")))
         duration = end - start
         slot_id = str(slot["slot_id"])
+        has_next = slot_index < len(body_slots) - 1
+        transition = ({"type": "CROSSFADE", "duration": HYBRID_BODY_CROSSFADE_SECONDS}
+                      if slot.get("visual_type") == "IMAGE" and has_next and duration > HYBRID_BODY_CROSSFADE_SECONDS * 2
+                      else {"type": "CUT", "duration": 0.0})
+        compile_duration = duration + float(transition["duration"])
         if slot.get("visual_type") == "IMAGE":
             asset = slot.get("source_asset")
             if not _valid_asset(paths, asset):
@@ -136,7 +144,7 @@ def _build_visual_clips(paths, config, opening: dict[str, Any], body: dict[str, 
             source_hash = asset["sha256"]
             compiled_rel = f"assets/hybrid/compiled/{slot_id}.mp4"
             compiled = paths.artifact_path(compiled_rel)
-            compile_image(source, compiled, duration=duration, motion=_motion(slot.get("effect")), target=target,
+            compile_image(source, compiled, duration=compile_duration, motion=_motion(slot.get("effect")), target=target,
                           finishing_profile=settings.get("finishing_profile", "NONE"))
             clip = compiled
         elif slot.get("visual_type") == "STOCK_VIDEO":
@@ -157,17 +165,17 @@ def _build_visual_clips(paths, config, opening: dict[str, Any], body: dict[str, 
                 source_kind = "STOCK_IMAGE_FALLBACK"
                 compiled_rel = f"assets/hybrid/compiled/{slot_id}_fallback.mp4"
                 clip = paths.artifact_path(compiled_rel)
-                compile_image(source, clip, duration=duration, motion="SLOW_PUSH", target=target,
+                compile_image(source, clip, duration=compile_duration, motion="SLOW_PUSH", target=target,
                               finishing_profile=settings.get("finishing_profile", "NONE"))
         else:
             raise HybridRenderError("HYBRID_VISUAL_TYPE_INVALID", slot_id)
-        meta = validate_video(clip, target=target, silent=True, expected_duration=duration, tolerance=.08)
+        expected_clip_duration = compile_duration if source_kind in {"IMAGE", "STOCK_IMAGE_FALLBACK"} else duration
+        meta = validate_video(clip, target=target, silent=True, expected_duration=expected_clip_duration, tolerance=.08)
         clips.append(clip)
-        segments.append({"segment_id": slot_id, "target_duration": duration,
-                         "transition": {"type": "CUT", "duration": 0.0}})
+        segments.append({"segment_id": slot_id, "target_duration": duration, "transition": deepcopy(transition)})
         timeline.append({"slot_id": slot_id, "start": start, "end": end, "source_kind": source_kind,
                          "compiled_path": compiled_rel, "compiled_sha256": meta["sha256"],
-                         "source_sha256": source_hash})
+                         "source_sha256": source_hash, "transition": deepcopy(transition)})
         previous_end = end
     return settings, target, clips, segments, timeline, previous_end
 

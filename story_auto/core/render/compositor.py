@@ -9,7 +9,7 @@ from .media import MediaError, MediaTarget, format_duration, run_command, valida
 from .waveform import visualizer_spec
 
 
-COMPOSER_VERSION = "story-auto-compositor/1.2.0"
+COMPOSER_VERSION = "story-auto-compositor/1.3.0"
 
 
 def _filter_path(path: Path) -> str:
@@ -18,25 +18,28 @@ def _filter_path(path: Path) -> str:
 
 def _visual_filter(segments: list[dict[str, Any]]) -> tuple[str, str]:
     if len(segments) == 1:
-        return "[0:v]setpts=PTS-STARTPTS[vout]", "[vout]"
-    chains: list[str] = []
-    current = "[0:v]"
+        return "[0:v]settb=AVTB,setpts=PTS-STARTPTS[vout]", "[vout]"
+    chains: list[str] = ["[0:v]settb=AVTB,setpts=PTS-STARTPTS[vx0]"]
+    current = "[vx0]"
     elapsed = float(segments[0]["target_duration"])
-    # CUT boundaries are valid in mixed compositions; only apply xfade where
-    # the frozen render plan explicitly requests a non-zero crossfade.
+    # Build one deterministic graph that honors each frozen boundary. Source
+    # clips already carry their outgoing overlap, so CUT concatenates the full
+    # current timeline while CROSSFADE consumes exactly that overlap.
     for index in range(1, len(segments)):
+        incoming = f"[vin{index}]"
+        chains.append(f"[{index}:v]settb=AVTB,setpts=PTS-STARTPTS{incoming}")
         outgoing = segments[index - 1].get("transition", {})
         kind = outgoing.get("type", "CUT")
-        if kind == "CUT":
-            chains.append(f"{current}[{index}:v]setpts=PTS-STARTPTS[vx{index}]")
-            current = f"[vx{index}]"
-            elapsed += float(segments[index]["target_duration"])
-            continue
-        if kind != "CROSSFADE":
-            raise MediaError("TRANSITION_POLICY_INVALID", "unsupported transition type")
-        duration = float(outgoing.get("duration", 0))
         label = f"[vx{index}]"
-        chains.append(f"{current}[{index}:v]xfade=transition=fade:duration={format_duration(duration)}:offset={format_duration(elapsed)}{label}")
+        if kind == "CUT":
+            chains.append(f"{current}{incoming}concat=n=2:v=1:a=0{label}")
+        elif kind == "CROSSFADE":
+            duration = float(outgoing.get("duration", 0))
+            if duration <= 0 or duration >= float(segments[index - 1]["target_duration"]):
+                raise MediaError("TRANSITION_TIMING_INVALID")
+            chains.append(f"{current}{incoming}xfade=transition=fade:duration={format_duration(duration)}:offset={format_duration(elapsed)}{label}")
+        else:
+            raise MediaError("TRANSITION_POLICY_INVALID", "unsupported transition type")
         current = label
         elapsed += float(segments[index]["target_duration"])
     chains.append(f"{current}setpts=PTS-STARTPTS[vout]")
@@ -59,16 +62,7 @@ def compose(
     bgm_index = narration_index + 1
     if bgm:
         inputs.extend(["-stream_loop", "-1", "-i", str(bgm)])
-    if len(clips) == 1:
-        visual_filter, visual_label = _visual_filter(segments)
-    elif any(item.get("transition", {}).get("type", "CUT") == "CUT" for item in segments[:-1]):
-        # Mixed CUT/CROSSFADE plans are normalized to a deterministic concat
-        # at the compositor boundary; this preserves exact segment timing and
-        # avoids applying xfade across a hard-cut boundary.
-        concat_inputs = "".join(f"[{index}:v]" for index in range(len(clips)))
-        visual_filter, visual_label = f"{concat_inputs}concat=n={len(clips)}:v=1:a=0[vout]", "[vout]"
-    else:
-        visual_filter, visual_label = _visual_filter(segments)
+    visual_filter, visual_label = _visual_filter(segments)
     filters = [visual_filter]
     if subtitles_ass:
         filters.append(f"{visual_label}subtitles=filename='{_filter_path(subtitles_ass)}'[vsub]")
