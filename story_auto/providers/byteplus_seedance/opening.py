@@ -101,8 +101,18 @@ def generate_opening_slot_api(
             existing_task = generation.get("provider_task_id")
             if isinstance(existing_task, str) and existing_task.strip():
                 task_id = existing_task.strip()
-            elif generation.get("status") not in {"FAILED_PRE_DISPATCH", "PRE_DISPATCH"}:
+            elif generation.get("status") == "PRE_DISPATCH":
+                # A previous process may have posted before saving the task ID.
+                # BytePlus offers no same-client-reference create reconciliation.
+                generation.update({"status": "AMBIGUOUS", "dispatch_state": "AMBIGUOUS",
+                                   "failure_class": "OPENING_API_DISPATCH_INTERRUPTED", "updated_at": _now()})
+                _persist(paths, manifest)
+                return _safe_view(runtime.root, project_id)
+            elif generation.get("status") != "FAILED_PRE_DISPATCH":
                 raise BytePlusSeedanceError("OPENING_API_STATE_INVALID")
+            else:
+                generation.update({"status": "PRE_DISPATCH", "updated_at": _now()})
+                _persist(paths, manifest)
         else:
             generation = {
                 "schema_version": OPENING_API_VERSION,
@@ -200,6 +210,7 @@ def generate_opening_slot_api(
                     slot_id,
                     source,
                     original_filename=f"byteplus_{slot_id}.mp4",
+                    _provider_identity={"provider": PROVIDER_ID, "provider_task_id": task_id},
                 )
             finally:
                 shutil.rmtree(temporary_dir, ignore_errors=True)

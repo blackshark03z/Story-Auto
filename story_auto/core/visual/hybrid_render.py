@@ -270,6 +270,25 @@ def hybrid_preview_view(runtime_root: Path | str, project_id: str) -> dict[str, 
 HYBRID_FINAL_VERSION = "story-auto-hybrid-final/1.0.0"
 
 
+def hybrid_final_input_binding(paths, config) -> dict[str, Any]:
+    """Bind final completion to current master tracks and effective settings."""
+    settings, _target = resolve_render_settings(config)
+    alignment = read_json(paths.artifact_path("output/alignment.json"))
+    audio = config.settings.get("audio", {})
+    hybrid = config.settings.get("hybrid_visual", {})
+    bgm = audio.get("bgm_path")
+    return {
+        "render_settings": settings,
+        "audio_visualizer": bool(hybrid.get("audio_visualizer", True)),
+        "bgm_path": bgm, "bgm_volume": float(audio.get("bgm_volume", .12)),
+        "bgm_sha256": sha256_file(paths.artifact_path(bgm)) if bgm else None,
+        "narration_sha256": sha256_file(paths.artifact_path(alignment["audio_path"])),
+        "content_sha256": sha256_file(paths.content_file),
+        "srt_sha256": sha256_file(paths.artifact_path("output/hybrid_subtitles.srt")),
+        "ass_sha256": sha256_file(paths.artifact_path("output/hybrid_subtitles.ass")),
+    }
+
+
 def render_hybrid_final(runtime_root: Path | str, project_id: str) -> dict[str, Any]:
     """Promote the mixed master-track render to canonical final output."""
     paths, config = _require_project(runtime_root, project_id)
@@ -310,6 +329,7 @@ def render_hybrid_final(runtime_root: Path | str, project_id: str) -> dict[str, 
         "audio_visualizer": deepcopy(preview["audio_visualizer"]),
         "timeline": deepcopy(preview["timeline"]),
         "input_hashes": input_hashes,
+        "current_input_binding": hybrid_final_input_binding(paths, config),
         "producer": {"hybrid_preview_version": HYBRID_PREVIEW_VERSION, "final_version": HYBRID_FINAL_VERSION},
         "completed_at": _now(),
     }

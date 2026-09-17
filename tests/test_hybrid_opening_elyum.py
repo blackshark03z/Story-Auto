@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 import threading
+import os
+import json
 from unittest.mock import patch
 
 from story_auto.application.operator import OperatorService
@@ -210,6 +212,30 @@ class ElyumHybridOpeningTests(unittest.TestCase):
                         set_slot(generation={**base_generation,"status":"KEEP_REQUIRED"})
                         page.reload(); page.locator('[data-open-project="prj_elyum_browser"]').click()
                         page.get_by_role("button", name="Keep & use · 20 credits", exact=True).wait_for(timeout=5000)
+
+                        set_slot(generation={**base_generation,"status":"KEEP_ACQUISITION_REQUIRED","keep_confirmed":True})
+                        page.reload(); page.locator('[data-open-project="prj_elyum_browser"]').click()
+                        recover = page.get_by_role("button", name="Recover kept video", exact=True)
+                        recover.wait_for(timeout=5000)
+                        self.assertEqual(page.locator('[data-opening-import="OPENING_O1"]').count(), 0)
+                        self.assertEqual(page.locator('[data-opening-elyum-keep="OPENING_O1"]').count(), 0)
+                        with patch.object(OperatorService, "keep_elyum_opening", return_value={"status":"fixture recovered"}) as acquire:
+                            recover.click()
+                            page.wait_for_function("state.busy === false")
+                            acquire.assert_called_once_with("prj_elyum_browser", slot_id="OPENING_O1", confirm_spend=False)
+                        destination = os.environ.get("STORY_AUTO_CUJ_EVIDENCE_DIR")
+                        if destination:
+                            evidence = Path(destination); evidence.mkdir(parents=True, exist_ok=True)
+                            for name, width, height in (("desktop",1366,768),("narrow",760,820)):
+                                page.set_viewport_size({"width":width,"height":height})
+                                page.evaluate("window.scrollTo(0,0)")
+                                page.screenshot(path=str(evidence / f"opening-acquire-{name}.png"), full_page=True)
+                                self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width)
+                            (evidence / "opening-acquire.json").write_text(json.dumps({
+                                "fixture":"isolated local server; acquisition service mocked; no providers",
+                                "action":"keep_elyum_opening", "confirm_spend":False,
+                                "viewports":[[1366,768],[760,820]],
+                            }, indent=2), encoding="utf-8")
 
                         set_slot(generation={**base_generation,"status":"PREVIEW_REJECTED"})
                         page.reload(); page.locator('[data-open-project="prj_elyum_browser"]').click()

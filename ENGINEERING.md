@@ -3,8 +3,8 @@
 ## Delivery style
 
 - Modular monolith; avoid plugin frameworks and speculative shared libraries.
-- One bounded Build OS task at a time.
-- One writer per task/worktree.
+- Use bounded CADS changes with explicit acceptance. Owner-authorized parallel
+  workers use disjoint file ownership and one integrator for the combined candidate.
 - CLI/application services first; UI later consumes the same services.
 - Port YouTube Auto primitives selectively; never import YouTube Auto at runtime.
 - Do not carry historical YouTube Auto schemas/composer/UI merely for compatibility.
@@ -95,8 +95,10 @@ Every production bug becomes the smallest reproducible fixture/test before the r
 ## Baseline executable quality gate
 
 ```text
-python -m unittest discover -s tests -v
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
 python tools/quality_gate.py
+python tools/security_gate.py
 ```
 
 The offline suite includes tiny FFmpeg/FFprobe integration fixtures. A production

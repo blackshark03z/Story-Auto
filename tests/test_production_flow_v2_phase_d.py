@@ -198,7 +198,8 @@ class PhaseDFlowProductTests(unittest.TestCase):
             app = OperatorService(root)
             app.create_project(project_id="prj_completed_offline", render_mode="full_image", content="# Done\n\n## Narration\n\nFixture.")
             paths, _config = app._project("prj_completed_offline")
-            paths.artifact_path("output/final.mp4").write_bytes(b"provider-free final")
+            from tests.final_output_fixture import complete_final
+            complete_final(paths)
             workspace = app.project_workspace(paths.project_id)
             self.assertEqual((workspace["status"], workspace["production"]["pipeline_status"], workspace["final_path"]),
                              ("Complete", "COMPLETE", "output/final.mp4"))

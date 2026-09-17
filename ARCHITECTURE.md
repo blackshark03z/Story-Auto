@@ -228,12 +228,37 @@ model/voice identity, CPU worker invocation, resumable chunk artifacts, audio
 validation, and sanitized failure classification. Core audio stages see only
 the existing `TTSRequest`/`TTSResult` and canonical alignment boundaries.
 
+## Final-output and recovery authority
+
+The canonical production projection owns completion on Home, Workspace and
+Review. A file named `final.mp4` alone is not completion: the renderer manifest
+must bind the final bytes, current selected inputs, master tracks, render settings
+and approved plan. The compact query cache tracks local input signatures; stale
+Home actions refresh the project and cannot silently change the clicked intent.
+Hybrid final manifests additionally bind effective master-track/presentation
+settings. An older unbound output remains on disk but requires local rerendering
+before it can represent current completion.
+
+Opening API attempts retain their durable identity across interruption. A
+BytePlus interrupted dispatch without a saved task ID is ambiguous, not permission
+to create again. Elyum confirmed Keep is persisted before output acquisition;
+acquisition recovery can fetch the same kept output without another Keep. Manual
+replacement cannot hide an unresolved provider effect. Acquired source identity
+and slot readiness are saved together. These are application recovery rules, not
+a new CADS lifecycle.
+
 ## LLM abstraction
 
-Gemini is the only planning LLM provider in V1. Model ID is project/provider configuration.
+Planning resolves the provider from the saved project configuration. Gemini's
+current configured HARD-first baseline is `gemini-3.8-flash`, with deterministic
+fallback in `providers/llm/router.py`; Flash-Lite remains the BULK tier.
 
-Baseline: `gemini-3.5-flash`.
-Benchmark candidate: `gemini-3.6-flash`.
+The optional `external_anthropic` adapter implements the Anthropic Messages
+wire contract with a configured HTTPS gateway, model alias and authentication
+mode. Project configuration retains the provider/model choice; changing defaults
+affects new projects only. Credential pools remain inside the shared secret
+boundary. The configured and gateway-reported model names are provenance, not
+proof of upstream vendor identity. See Decision `0008-gemini-3-8-and-external-llm-gateway`.
 
 Each planning stage validates structured output and writes a versioned artifact. Invalid JSON/schema is a stage failure, not silently accepted prose.
 

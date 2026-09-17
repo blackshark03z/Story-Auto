@@ -1,6 +1,15 @@
 # Roadmap
 
-## 2026-09-03 product freeze
+## Current delivery — 2026-09-18
+
+The September 3 freeze and phase list below are historical. `TASK.md` and
+Decision `0005` now govern delivery: correct format, recoverable production,
+clear user journey and repeat use. Full Image is the default; Hybrid Visual
+has Product Flow Acceptance with quality deferred; Full Video uses an API-first
+provider contract with provider-specific live qualification gates. The current
+bounded implementation/acceptance plan is recorded at the top of `TASK.md`.
+
+## Historical 2026-09-03 product freeze
 
 Story Auto development is temporarily closed with **Full Image** as the only
 release-supported production mode. **Intro Video + Images**, **Full Video**,

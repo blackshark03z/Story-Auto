@@ -78,7 +78,8 @@ class Slice4Fixture:
                 "requests": [entry],
             })
         if final:
-            paths.artifact_path("output/final.mp4").write_bytes(b"valid final")
+            from tests.final_output_fixture import complete_final
+            complete_final(paths)
         return runtime, paths
 
     @staticmethod

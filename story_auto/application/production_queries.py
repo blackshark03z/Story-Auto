@@ -29,7 +29,7 @@ class ProductionQueries:
             existing=read_json(self.reconciler.state_path(paths))
             evidence=[self._signature(paths, relative) for relative in self.reconciler._evidence_files]
             fingerprint=hashlib.sha256(json.dumps(evidence,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
-            required = {"pipeline_status", "active_stage", "stages", "quality", "planning", "recovery", "visual_asset_evidence", "next_action", "final_output"}
+            required = {"pipeline_status", "active_stage", "stages", "quality", "planning", "recovery", "visual_asset_evidence", "final_input_evidence", "next_action", "final_output"}
             deadline = existing.get("recovery", {}).get("stuck_pending_at") if isinstance(existing, dict) and isinstance(existing.get("recovery"), dict) else None
             deadline_crossed = False
             if isinstance(deadline, str) and existing.get("pipeline_status") != "STUCK_PENDING":
@@ -39,7 +39,8 @@ class ProductionQueries:
                     deadline_crossed = True
             if (isinstance(existing,dict) and existing.get("schema_version") == PRODUCTION_STATE_SCHEMA_VERSION
                     and required.issubset(existing) and existing.get("evidence_fingerprint") == fingerprint
-                    and not deadline_crossed and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])):
+                    and not deadline_crossed and self._selected_assets_unchanged(paths, existing["visual_asset_evidence"])
+                    and self._evidence_unchanged(paths, existing["final_input_evidence"])):
                 return self._with_flow_summary(project_id, config, existing)
         except Exception:
             pass
@@ -82,6 +83,12 @@ class ProductionQueries:
         if not path.is_file(): return {"path":relative,"present":False}
         stat=path.stat()
         return {"path":relative,"present":True,"bytes":stat.st_size,"mtime_ns":stat.st_mtime_ns}
+
+    @classmethod
+    def _evidence_unchanged(cls, paths, evidence) -> bool:
+        return isinstance(evidence, list) and all(
+            isinstance(item, dict) and isinstance(item.get("path"), str)
+            and cls._signature(paths, item["path"]) == item for item in evidence)
 
     @classmethod
     def _selected_assets_unchanged(cls, paths, evidence) -> bool:
@@ -134,7 +141,8 @@ class ProductionQueries:
                 project_evidence = next((item for item in state.get("evidence", [])
                                          if isinstance(item, dict) and item.get("path") == "project.json"), None)
                 if (state.get("schema_version") != PRODUCTION_STATE_SCHEMA_VERSION
-                        or project_evidence != self._signature(paths, "project.json")):
+                        or project_evidence != self._signature(paths, "project.json")
+                        or not self._evidence_unchanged(paths, state.get("evidence"))):
                     raise ValueError("stale compact production state")
             except Exception:
                 # Legacy/stale projects are reconciled only when opened/commanded; cards remain cheap.
@@ -145,8 +153,8 @@ class ProductionQueries:
         next_action = state.get("next_action", {"action": "run_to_final", "label": "Continue production"})
         stage_positions = {"SOURCE": 8, "TIMING": 24, "PLAN": 42, "VISUALS": 62, "QUALITY": 82, "RENDER": 94}
         return {"project_id": project_id, "title": title, "render_mode": config.render_mode, "production": state,
-                "user_status": "Unavailable" if not availability["available"] else ("Complete" if state.get("final_output", {}).get("present") else state.get("pipeline_status", "RECONCILE_REQUIRED").replace("_", " ").title()),
+                "user_status": "Unavailable" if not availability["available"] else ("Complete" if state.get("pipeline_status") == "COMPLETE" else state.get("pipeline_status", "RECONCILE_REQUIRED").replace("_", " ").title()),
                 "primary_action": {"action": next_action.get("label", "Continue production"), "action_id": next_action.get("action", "run_to_final")},
                 "final_path": state.get("final_output", {}).get("path"), "current_activity": next_action.get("label", "Continue production"),
-                "progress": 100 if state.get("final_output", {}).get("present") else stage_positions.get(state.get("active_stage"), 0),
+                "progress": 100 if state.get("pipeline_status") == "COMPLETE" else stage_positions.get(state.get("active_stage"), 0),
                 "updated_at": datetime.fromtimestamp(updated, tz=timezone.utc).isoformat().replace("+00:00", "Z")}

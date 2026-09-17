@@ -157,7 +157,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="generate_elyum_opening": result=self.service.generate_elyum_opening(project_id,slot_id=body.get("slot_id",""),model_id=body.get("model_id",""))
             elif action=="accept_elyum_opening": result=self.service.review_elyum_opening(project_id,slot_id=body.get("slot_id",""),decision="ACCEPT")
             elif action=="reject_elyum_opening": result=self.service.review_elyum_opening(project_id,slot_id=body.get("slot_id",""),decision="REJECT")
-            elif action=="keep_elyum_opening": result=self.service.keep_elyum_opening(project_id,slot_id=body.get("slot_id",""))
+            elif action=="keep_elyum_opening": result=self.service.keep_elyum_opening(project_id,slot_id=body.get("slot_id",""),confirm_spend=body.get("confirm_spend") is True)
             elif action=="kill_elyum_opening": result=self.service.kill_elyum_opening(project_id,slot_id=body.get("slot_id",""))
             elif action=="import_opening_clip": result=self.service.import_opening_clip(project_id,slot_id=body.get("slot_id",""),imported_video=body.get("imported_video"))
             elif action=="reject_asset": result=self.service.reject_asset(project_id,body["request_id"],body.get("reason","operator visual rejection"))

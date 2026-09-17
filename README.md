@@ -4,13 +4,11 @@ Current stable release: **Story Auto v1.0.0 Stable**. See
 [`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) and the machine-readable
 [`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
 
-The current post-release implementation includes Goal 10’s creator-first UI,
-Goal 11’s Flow IMAGE mark postprocessing, Goals 16–17’s Flow dispatch and
-asset-attribution recovery, Goal 19’s legacy-only recovery transaction, and a
-Goal 20 local R3 candidate for immutable poll evidence and explicit unresolved
-replay. This is not a new release version: `v1.0.0` remains the stable release
-baseline. Trial A is blocked at a fresh unresolved request; Goal 20 must receive
-independent R3 approval before any runtime recovery, and Trial B has not started.
+Current delivery scope and acceptance boundaries are recorded at the top of
+[`TASK.md`](TASK.md). Historical Goal checkpoints and trials remain evidence,
+not instructions to resume provider requests. The current post-release work
+prioritizes format correctness, the complete production journey, and safe
+recovery; it does not declare a new stable release tag.
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
@@ -25,16 +23,24 @@ The `v1.0.0` tag remains the stable release baseline; the statuses below describ
 Ambient Story remains preserved as historical development work and is not a
 release-supported creation mode during this freeze.
 
-## V1 provider choices
+## Current provider choices
 
 - TTS: **ElevenLabs**, **Typecast**, or explicit local **Kokoro Local**.
 - Planning LLM: **Gemini API**, HARD-first `gemini-3.8-flash` with deterministic 3.7/3.6/3.5 fallback; Flash-Lite remains the BULK tier.
-- Image/video generation: **Google Flow** through an isolated browser-automation provider adapter.
+- Images: **Google Flow** through an isolated browser-automation adapter; optional Pexels stock for Hybrid body slots.
+- Video: direct **BytePlus Seedance**; Hybrid Opening also supports explicit manual import and Elyum preview/review/Keep. Elyum Full Video production remains gated by its documented qualification boundary.
 - Final composition: local FFmpeg/FFprobe pipeline.
 
 ## User behavior authority
 
-The V1 workflow is:
+The original manual-review V1 workflow below remains available. Current product
+flow uses Source -> Timing -> Plan -> Visuals -> Quality -> Render and a persisted
+project quality policy (automatic or manual review); see
+[`Decision 0005`](docs/decisions/0005-product-journey-and-hybrid-flow-acceptance.md).
+Completion requires a final artifact bound to current inputs, not just an existing
+`final.mp4`. Stale outputs are preserved but not offered as current completion.
+
+The manual-review V1 workflow is:
 
 1. Import/create a project from `content.md`.
 2. Select Format, Ambient Style when applicable, TTS provider/voice, and optional licensed/local BGM.

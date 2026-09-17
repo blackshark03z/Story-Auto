@@ -25,7 +25,7 @@ from story_auto.core.visual.recovery import (
 )
 
 
-PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.9"
+PRODUCTION_STATE_SCHEMA_VERSION = "story-auto-production-state/1.0.10"
 PRODUCTION_STAGES = ("SOURCE", "TIMING", "PLAN", "VISUALS", "QUALITY", "RENDER")
 DEFAULT_STUCK_PENDING_SECONDS = 900
 
@@ -107,12 +107,13 @@ class ProductionStateReconciler:
     """Rebuild compact state lazily from durable project artifacts."""
 
     _evidence_files = (
-        "project.json",
+        "project.json", "content.md",
         "output/content_manifest.json", "output/audio_manifest.json", "output/srt_manifest.json",
         "output/alignment.json", "output/story_timeline.json", "output/continuity_bible.json",
         "output/shot_plan.json", "output/media_plan.json", "output/generation_requests.json",
         "output/generation_manifest.json", "output/review_state.json", "output/render_plan.json",
         "output/final_manifest.json", "output/final.mp4", "output/execution_control.json",
+        "output/audio_plan.json", "output/subtitles.srt", "output/subtitles.ass",
     )
 
     def __init__(self, *, clock=None):
@@ -128,8 +129,11 @@ class ProductionStateReconciler:
         manifest_for_assets = _read(paths.artifact_path("output/generation_manifest.json"), {"requests": []})
         visual_asset_evidence = self._selected_asset_evidence(paths, manifest_for_assets)
         evidence.extend(visual_asset_evidence)
+        final_input_evidence = self._final_input_evidence(paths, config)
+        evidence.extend(final_input_evidence)
         existing = _read(self.state_path(paths), {})
         rebuilt = self._derive(paths, config, evidence, evidence_fingerprint, existing)
+        rebuilt["final_input_evidence"] = final_input_evidence
         # Do not churn the file when canonical evidence and compact projection agree.
         comparable = dict(existing) if isinstance(existing, dict) else {}
         if comparable.get("schema_version") == PRODUCTION_STATE_SCHEMA_VERSION:
@@ -260,7 +264,8 @@ class ProductionStateReconciler:
         # A planning failure invalidates all downstream artifacts.  A stale
         # final.mp4 must never eclipse the durable fail-closed review state.
         planning_invalidated = review.get("visual_planning", {}).get("status") == "NEEDS_REGENERATION" if isinstance(review, dict) else False
-        final_present = present["output/final.mp4"] and not planning_invalidated
+        final_present = (present["output/final.mp4"] and not planning_invalidated
+                         and plan_complete and selected and self._valid_final(paths, config))
         stages["RENDER"] = self._stage("COMPLETE" if final_present else ("BLOCKED" if policy["render"].action == "BLOCK" else "READY"), policy["render"].action, policy["render"].reason)
 
         blocker = None
@@ -319,10 +324,59 @@ class ProductionStateReconciler:
             "pipeline_status": pipeline_status, "active_stage": active_stage,
             "run": {**old_run, "run_id": old_run.get("run_id"), "status": old_run.get("status", "IDLE")}, "stages": stages, "quality": quality, "planning": planning,
             "recovery": recovery, "blocker": blocker, "next_action": next_action,
-            "visual_asset_evidence": [item for item in evidence if item["path"].startswith("assets/")],
+            "visual_asset_evidence": self._selected_asset_evidence(paths, manifest),
             "final_output": {"present": final_present, "path": "output/final.mp4" if final_present else None},
             "evidence_fingerprint": fingerprint, "evidence": evidence, "updated_at": _now(),
         }
+
+    @staticmethod
+    def _final_input_evidence(paths, config) -> list[dict[str, Any]]:
+        alignment = _read(paths.artifact_path("output/alignment.json"), {})
+        audio = config.settings.get("audio", {})
+        relatives = (alignment.get("audio_path"), audio.get("bgm_path"))
+        return [_signature(paths, relative) for relative in relatives if isinstance(relative, str) and relative]
+
+    @staticmethod
+    def _valid_final(paths, config) -> bool:
+        """Verify the existing renderer's output and current inputs, without rendering."""
+        from story_auto.core.render.plan import resolve_render_plan
+        from story_auto.core.render.service import FINAL_MANIFEST_VERSION, resolve_render_settings
+        try:
+            manifest = read_json(paths.artifact_path("output/final_manifest.json"))
+            settings, _target = resolve_render_settings(config)
+            alignment = read_json(paths.artifact_path("output/alignment.json"))
+            from story_auto.core.content import parse_content_markdown, narration_hash
+            if alignment.get("narration_sha256") and alignment["narration_sha256"] != narration_hash(parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration):
+                return False
+            render_plan = read_json(paths.artifact_path("output/render_plan.json"))
+            if (manifest.get("schema_version") != FINAL_MANIFEST_VERSION
+                    or manifest.get("project_id") != paths.project_id
+                    or manifest.get("final_path") != "output/final.mp4"
+                    or manifest.get("composer", {}).get("settings") != settings):
+                return False
+            bindings = {
+                "final_sha256": "output/final.mp4", "render_plan_sha256": "output/render_plan.json",
+                "alignment_sha256": "output/alignment.json", "audio_plan_sha256": "output/audio_plan.json",
+                "subtitle_sha256": "output/subtitles.ass", "narration_sha256": alignment["audio_path"],
+            }
+            if any(manifest.get(name) != sha256_file(paths.artifact_path(relative)) for name, relative in bindings.items()):
+                return False
+            if manifest.get("subtitle_hashes", {}).get("srt") != sha256_file(paths.artifact_path("output/subtitles.srt")):
+                return False
+            audio = config.settings.get("audio", {})
+            bgm = audio.get("bgm_path")
+            audio_plan = read_json(paths.artifact_path("output/audio_plan.json"))
+            if (manifest.get("bgm_sha256") != (sha256_file(paths.artifact_path(bgm)) if bgm else None)
+                    or audio_plan.get("bgm", {}).get("volume") != float(audio.get("bgm_volume", .12))):
+                return False
+            current_plan = resolve_render_plan(
+                project_id=paths.project_id, project_root=paths.root, render_mode=config.render_mode,
+                alignment=alignment, settings=settings,
+                **{name: read_json(paths.artifact_path(f"output/{name}.json")) for name in
+                   ("shot_plan", "media_plan", "generation_requests", "generation_manifest")})
+            return render_plan == current_plan
+        except Exception:
+            return False
 
     @staticmethod
     def _selected_asset_evidence(paths, manifest: dict[str, Any]) -> list[dict[str, Any]]:

@@ -6,6 +6,8 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import os
+import json
 
 from PIL import Image, ImageDraw
 
@@ -158,6 +160,27 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
         self.assertIn("STOCK_IMAGE_FALLBACK", kinds)
         self.assertFalse(self.paths.artifact_path("output/hybrid_quality.json").stat().st_size == 0)
 
+        # Completed output stays on disk, but cannot represent changed inputs.
+        final_hash = sha256_file(self.paths.artifact_path("output/final.mp4"))
+        for relative in ("assets/audio/narration.wav", "output/hybrid_subtitles.srt",
+                         "output/hybrid_subtitles.ass", "content.md", "project.json"):
+            with self.subTest(changed_final_input=relative):
+                target = self.paths.artifact_path(relative)
+                before = target.read_bytes()
+                try:
+                    if relative == "project.json":
+                        config = read_json(target)
+                        config["settings"]["hybrid_visual"]["audio_visualizer"] = False
+                        atomic_write_json(target, config)
+                    else:
+                        target.write_bytes(before + b" changed")
+                    self.assertNotEqual(self.service.production_query(self.project_id)["pipeline_status"], "COMPLETE")
+                    self.assertIsNone(self.service.project_workspace(self.project_id)["final_path"])
+                finally:
+                    target.write_bytes(before)
+                self.assertEqual(self.service.production_query(self.project_id)["pipeline_status"], "COMPLETE")
+                self.assertEqual(sha256_file(self.paths.artifact_path("output/final.mp4")), final_hash)
+
         replacement = Path(self.temp.name) / "opening_replacement.mp4"
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
                         "color=c=purple:s=640x360:r=12:d=6.2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
@@ -206,6 +229,22 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
                 page.get_by_role("button", name="Continue production", exact=True).click()
                 page.get_by_role("link", name="Open final video", exact=True).wait_for(timeout=30000)
                 self.assertIn("COMPLETE", page.locator("body").inner_text().upper())
+                page.wait_for_function("document.querySelector('video.video-frame')?.readyState >= 2")
+                media = page.locator("video.video-frame").evaluate("v => ({duration:v.duration,width:v.videoWidth,height:v.videoHeight})")
+                self.assertAlmostEqual(media["duration"], 36, delta=.12)
+                self.assertEqual((media["width"], media["height"]), (320,180))
+                destination = os.environ.get("STORY_AUTO_CUJ_EVIDENCE_DIR")
+                if destination:
+                    evidence = Path(destination); evidence.mkdir(parents=True, exist_ok=True)
+                    for name, width, height in (("desktop",1366,768),("narrow",760,820)):
+                        page.set_viewport_size({"width":width,"height":height})
+                        page.screenshot(path=str(evidence / f"hybrid-real-final-{name}.png"), full_page=True)
+                    (evidence / "hybrid-real-final.json").write_text(json.dumps({
+                        "fixture":"real local render; fake planning/Flow; manual opening fixtures; no providers",
+                        "project_id":self.project_id, "media":media,
+                        "final_sha256":sha256_file(self.paths.artifact_path("output/final.mp4")),
+                        "manifest_sha256":sha256_file(self.paths.artifact_path("output/final_manifest.json")),
+                    }, indent=2), encoding="utf-8")
                 browser.close()
         finally:
             server.shutdown(); server.server_close(); thread.join(5)

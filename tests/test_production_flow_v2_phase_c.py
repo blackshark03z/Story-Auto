@@ -60,7 +60,8 @@ class PhaseCDefaultsAndWorkspaceTests(unittest.TestCase):
             self.assertEqual((auth_view["production"]["next_action"]["action"], auth_view["production"]["next_action"]["label"]), ("open_flow_sign_in", "Open Flow sign-in"))
 
             complete = _project(app, "prj_complete_state")
-            (complete.artifact_path("output/final.mp4")).write_bytes(b"provider-free final")
+            from tests.final_output_fixture import complete_final
+            complete_final(complete)
             complete_view = app.project_workspace("prj_complete_state")
             self.assertEqual((complete_view["status"], complete_view["production"]["next_action"]["action"], complete_view["final_path"]),
                              ("Complete", "open_final", "output/final.mp4"))

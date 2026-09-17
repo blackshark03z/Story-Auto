@@ -1,5 +1,11 @@
 # Project Brief — Story Auto V1
 
+This is the historical V1 requirements baseline. Current delivery intent is in
+`TASK.md` and accepted decisions: Full Image is the default, Hybrid Visual uses
+a 15–20 second Opening Builder and is Product Flow Accepted / Quality Deferred,
+and Full Video uses the capability-aware API boundary. Decisions `0004`, `0005`,
+`0006` and `0008` supersede the older mode/provider assumptions below.
+
 ## Purpose
 
 Turn one `content.md` narration into a high-quality long-form YouTube storytelling video with strong continuity, recoverable generation, explicit human approval points, and two visual production modes.

@@ -146,10 +146,8 @@ class OperatorApplicationTests(unittest.TestCase):
             app=OperatorService(root)
             app.create_project(project_id="prj_finished_story",content="# A Promise Kept\n\n## Narration\n\nThe promise was kept.\n")
             paths,_=app._project("prj_finished_story")
-            paths.artifact_path("output/final.mp4").write_bytes(b"fixture")
-            atomic_write_json(paths.artifact_path("output/alignment.json"),{"duration_seconds":72.4})
-            atomic_write_json(paths.artifact_path("output/generation_requests.json"),{"requests":[]})
-            atomic_write_json(paths.artifact_path("output/generation_manifest.json"),{"requests":[]})
+            from tests.final_output_fixture import complete_final
+            complete_final(paths)
             snapshot=app.snapshot("prj_finished_story")
             review=app.review_overview("prj_finished_story")
             self.assertEqual((snapshot["user_status"],snapshot["progress"]),("Complete",100))

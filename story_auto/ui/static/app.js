@@ -1,7 +1,7 @@
 const state = {
   view: 'home', projects: [], project: null, snapshot: null, settings: null,
   busy: false, busyLabel: '', error: null, actionOutcome: null, lastAction: null, runToken: null,
-  wizard: null, creationDefaults: null, nextDraftId: 0
+  wizard: null, creationDefaults: null, nextDraftId: 0, projectOpenToken: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -110,10 +110,7 @@ async function loadProjects() {
 
 function projectCard(project) {
   const action = project.primary_action || {action:'Open project', action_id:'open'};
-  const directFinal = action.action_id === 'open_final' && project.final_path;
-  const primary = directFinal
-    ? `<a class="button button-primary" href="${assetUrl(project.project_id,project.final_path)}" target="_blank" rel="noopener">Open final video</a>`
-    : `<button class="button-primary" type="button" data-project-action="${esc(action.action_id)}" data-project="${esc(project.project_id)}">${esc(action.action)}</button>`;
+  const primary = `<button class="button-primary" type="button" data-project-action="${esc(action.action_id)}" data-project="${esc(project.project_id)}">${esc(action.action)}</button>`;
   return `<article class="project-card ${project.attention?.length ? 'is-attention' : ''}">
     <div class="card-top"><div><h3>${esc(project.title)}</h3><p class="meta">${esc(formatUpdated(project.updated_at))} · ${esc(humanMode(project.render_mode))}${project.ambient_style_label ? ` · ${esc(project.ambient_style_label)}` : ''}</p></div><span class="status-chip ${chipClass(project)}">${esc(project.user_status)}</span></div>
     <div class="card-progress"><small>${esc(project.current_activity)}</small><strong>${Number(project.progress || 0)}%</strong><div class="progress-track" role="progressbar" aria-label="${esc(project.title)} progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Number(project.progress || 0)}"><span style="width:${Number(project.progress || 0)}%"></span></div></div>
@@ -125,9 +122,19 @@ function bindProjectCards() {
   document.querySelectorAll('[data-open-project]').forEach(button => button.addEventListener('click', () => openProject(button.dataset.openProject)));
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', async () => {
     const projectId = button.dataset.project;
-    await openProject(projectId, false);
+    const intendedAction = button.dataset.projectAction;
+    const opened = await openProject(projectId, false);
+    if (!opened) return;
     if (state.project !== projectId || !state.snapshot?.production) return;
     const freshAction = state.snapshot.production.next_action?.action || 'review_project';
+    if (freshAction !== intendedAction) {
+      toast('This project has changed. Review its current state before continuing.');
+      focusMain();
+      return;
+    }
+    // The refreshed completed workspace contains the validated final preview
+    // and its link. Never open an asset from the compact Home card snapshot.
+    if (freshAction === 'open_final') { focusMain(); return; }
     await handleProjectAction(freshAction);
   }));
 }
@@ -159,12 +166,22 @@ async function showHome(announce = false) {
 }
 
 async function openProject(projectId, moveFocus = true) {
-  state.view = 'project'; state.project = projectId; state.error = null; state.actionOutcome = null;
+  const token = Symbol(projectId); state.projectOpenToken = token;
+  const ownsView = () => state.projectOpenToken === token && state.view === 'project' && state.project === projectId && !$('#newVideoDialog').open;
+  state.view = 'project'; state.project = projectId; state.snapshot = null; state.error = null; state.actionOutcome = null;
   setNav('home'); setBusy(true,'Opening project');
-  try { state.snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/workspace`); setBusy(false); renderProject(); }
-  catch (error) { setHeader('PROJECT','Could not open project'); $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
-  finally { if (state.busy) setBusy(false); }
+  try {
+    const snapshot = await api(`/api/projects/${encodeURIComponent(projectId)}/workspace`);
+    if (!ownsView()) return false;
+    state.snapshot = snapshot; setBusy(false); renderProject();
+  }
+  catch (error) {
+    if (ownsView()) { setHeader('PROJECT','Could not open project'); $('#view').innerHTML = errorCard(friendlyError(error)); bindErrorActions(); }
+    return false;
+  }
+  finally { if (state.projectOpenToken === token && state.busy && !state.runToken) setBusy(false); }
   if (moveFocus) focusMain();
+  return true;
 }
 
 function stageMarkup(workspace) {
@@ -287,18 +304,20 @@ function openingBuilderSurface(snapshot) {
       providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Resume BytePlus generation</button>`;
     } else if (!ready && elyumActive) {
       const model = api.provider_model || '';
-      if (['SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED'].includes(apiState)) {
+      if (['PRE_DISPATCH','SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED'].includes(apiState)) {
         providerControls += `<button data-opening-elyum-resume="${esc(slot.slot_id)}" data-model="${esc(model)}" type="button">${apiState === 'AMBIGUOUS' ? 'Reconcile same Elyum request' : 'Resume Elyum preview'}</button>`;
       } else if (apiState === 'PREVIEW_READY') {
         providerControls += `<button data-opening-elyum-accept="${esc(slot.slot_id)}" type="button">Accept preview</button><button class="button-quiet" data-opening-elyum-reject="${esc(slot.slot_id)}" type="button">Reject preview</button>`;
       } else if (apiState === 'KEEP_REQUIRED') {
         providerControls += `<button class="button-primary" data-opening-elyum-keep="${esc(slot.slot_id)}" data-credits="${esc(api.unlock_credits ?? '')}" type="button">Keep & use${api.unlock_credits != null ? ` · ${esc(api.unlock_credits)} credits` : ''}</button>`;
+      } else if (apiState === 'KEEP_ACQUISITION_REQUIRED' && api.keep_confirmed) {
+        providerControls += `<button class="button-primary" data-opening-elyum-acquire="${esc(slot.slot_id)}" type="button">Recover kept video</button>`;
       } else if (apiState === 'PREVIEW_REJECTED') {
         providerControls += `<button data-opening-elyum-kill="${esc(slot.slot_id)}" type="button">Kill & release hold</button>`;
       }
     }
-    const unresolvedElyum = elyumActive && ['SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','PREVIEW_READY','KEEP_REQUIRED','PREVIEW_REJECTED','KEEP_DISPATCHING','KILL_DISPATCHING','KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState);
-    const importButton = unresolvedElyum ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
+    const unresolvedProvider = !!providerId && !['FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED','FAILED_TERMINAL','KILLED','SUCCEEDED'].includes(apiState);
+    const importButton = unresolvedProvider ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
     if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
     else if (!ready && noProvider && providerPolicy === 'BYTEPLUS' && byteplus.status !== 'READY') apiNote = '<small>BytePlus is selected but not configured. Manual import remains available.</small>';
@@ -307,8 +326,9 @@ function openingBuilderSurface(snapshot) {
     if (!ready && preflight.status === 'READY' && !affordableModels.length) apiNote = `<small>Elyum models are available, but the current balance (${esc(preflight.balance)}) is below every quoted option for this slot.</small>`;
     if (elyumActive && apiState === 'PREVIEW_READY') apiNote = '<small>Locked Elyum preview. It is not an Opening asset yet: review it, then Keep to spend and download the original.</small>';
     if (elyumActive && apiState === 'KEEP_REQUIRED') apiNote = '<small>Preview accepted. Keep is the Elyum spend boundary; Story Auto will not call it automatically.</small>';
+    if (elyumActive && apiState === 'KEEP_ACQUISITION_REQUIRED') apiNote = '<small>Keep is confirmed. Recover the original video without another Keep charge.</small>';
     if (elyumActive && apiState === 'PREVIEW_REJECTED') apiNote = '<small>Preview rejected. Kill releases the held credits; manual import reopens after the consequence is resolved.</small>';
-    if (elyumActive && ['KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState)) apiNote = '<small>Provider consequence outcome is ambiguous. Story Auto will not retry automatically or switch providers.</small>';
+    if (elyumActive && ['KEEP_DISPATCHING','KILL_DISPATCHING','KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState)) apiNote = '<small>Provider consequence outcome is unresolved. Story Auto will not retry automatically or switch providers.</small>';
     if (byteplusActive && apiState === 'AMBIGUOUS') apiNote = '<small>BytePlus submission is ambiguous. Story Auto will not submit or switch provider automatically.</small>';
     const lockedPreview = !ready && elyumActive && api.preview_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,api.preview_asset.path)}" aria-label="${esc(slot.slot_id)} Elyum locked preview"></video>` : '';
     const preview = ready && slot.normalized_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,slot.normalized_asset.path)}" aria-label="${esc(slot.slot_id)} normalized opening clip"></video>` : '';
@@ -411,11 +431,14 @@ function bindOpeningBuilderControls() {
   document.querySelectorAll('[data-opening-elyum-keep]').forEach(button => button.addEventListener('click', async () => {
     const credits=button.dataset.credits ? ` (${button.dataset.credits} credits)` : '';
     if (!window.confirm(`Keep this Elyum preview${credits} and use it in the Opening? This is the spend action.`)) return;
-    await runAction('keep_elyum_opening',`Keeping and acquiring ${button.dataset.openingElyumKeep}...`,{slot_id:button.dataset.openingElyumKeep});
+    await runAction('keep_elyum_opening',`Keeping and acquiring ${button.dataset.openingElyumKeep}...`,{slot_id:button.dataset.openingElyumKeep,confirm_spend:true});
   }));
   document.querySelectorAll('[data-opening-elyum-kill]').forEach(button => button.addEventListener('click', async () => {
     if (!window.confirm('Kill this Elyum preview and release its held credits? This may use the account kill allowance.')) return;
     await runAction('kill_elyum_opening',`Killing rejected preview for ${button.dataset.openingElyumKill}...`,{slot_id:button.dataset.openingElyumKill});
+  }));
+  document.querySelectorAll('[data-opening-elyum-acquire]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('keep_elyum_opening',`Recovering kept video for ${button.dataset.openingElyumAcquire}...`,{slot_id:button.dataset.openingElyumAcquire,confirm_spend:false});
   }));
   document.querySelectorAll('[data-opening-import]').forEach(input => input.addEventListener('change', async event => {
     const file = event.target.files?.[0]; if (!file) return;

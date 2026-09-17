@@ -1,4 +1,104 @@
-# Goal 54 — Full Video Seedance Provider Qualification
+# Story Auto — current delivery and historical checkpoints
+
+## Current delivery plan — 2026-09-18
+
+Active intent is Decision `0005`: **FORMAT + PIPELINE + CUJ SMOOTHNESS**, with
+visual/aesthetic quality deferred. Goal 54 and older "Next Safe Action" sections
+below retain historical evidence; they are not instructions to redispatch experiments.
+
+The Owner requested delegated implementation and completion of this documented
+scope. The bounded delivery batch starts at `db324a7`:
+
+1. Pipeline worker: verify final-output authority, invalidate stale completion,
+   and prove recovery using isolated fixtures.
+2. CUJ worker: verify Home -> current project -> final -> next video; preserve
+   the intent of an action across refresh and navigation.
+3. Recovery worker: verify Hybrid Opening provider effect identity, interruption,
+   manual fallback and acquisition recovery using fake provider transports.
+4. Integrator: reconcile current documentation, review the combined changes,
+   run relevant journey and repository gates, and record final evidence.
+
+Completion requires demonstrated defects to be repaired, focused regression and
+composed browser journeys to pass, and the final candidate to have identified
+source/test evidence. Full-suite PASS is engineering evidence; live-provider
+qualification and subjective Owner acceptance retain their separate boundaries.
+No new live generation or Keep/Kill budget is authorized by this plan.
+
+### Delivery implementation and acceptance record
+
+- Pipeline: COMPLETE now requires current renderer/manifest/input bindings, plan
+  approval and accepted selections. Master audio, subtitles, settings and selected
+  files invalidate the compact cache; Hybrid additionally binds its effective
+  output settings. Unbound or stale final files are preserved, not advertised.
+- CUJ: Home refreshes before acting; a changed action requires another deliberate
+  user choice. A late response cannot overwrite a newer project/Home/wizard.
+  Review and Workspace share canonical final-output authority.
+- Recovery: interrupted BytePlus POST without a saved ID is ambiguous, never
+  automatically redispatched. Elyum confirmed Keep survives failed acquisition;
+  its recovery request carries `confirm_spend=false`. Manual import/replanning
+  cannot erase unresolved effects. Source provenance and READY commit together.
+- Documentation: README/brief/roadmap distinguish current scope from historical
+  freezes. Architecture records actual configured adapters and recovery authority.
+- Delegation: three bounded workers were dispatched as requested; they returned
+  partial edits/tests before encountering their usage limit. The integrator
+  completed and reviewed the combined changes. No independent-review PASS is
+  claimed for this batch.
+
+Verification uses isolated temporary runtimes, fake provider transports, real local
+FFmpeg output, and actual browser interaction. Historical tests using arbitrary
+bytes as a "valid final" now use a real tiny render with current input/approval
+bindings. This strengthens the oracle rather than bypassing final validation.
+Final repository gate results are recorded below after the frozen-candidate run.
+
+Rendered evidence is local at `D:\Story Auto\evidence\cads_delivery_20260918`:
+`stale-final-{desktop,narrow}`, `fresh-final-{desktop,narrow}`,
+`opening-acquire-{desktop,narrow}`, and `hybrid-real-final-{desktop,narrow}`.
+Each has accompanying JSON describing its fixture authority. Home final screenshots
+use a mocked media endpoint and prove navigation/layout only. The Hybrid final
+screenshots load actual 320x180, 36-second local rendered media; their JSON records
+the exact final and manifest hashes. Neither proves aesthetic quality or live
+provider qualification. Screenshots are regenerable via
+`STORY_AUTO_CUJ_EVIDENCE_DIR` with the related browser tests.
+
+UX contract for the bounded change: creator opens a saved project, sees its current
+state, takes the same intended action or reviews a changed state, reaches final
+output, then creates another video. Home is the discovery surface; project status
+and one next action lead, output supports, diagnostics remain disclosed. Scope is
+one project/Opening slot. Existing labels and layout stay intact; the new visible
+control is `Recover kept video`. Loading/error states preserve work, unresolved
+effects explain why import/retry is withheld, and paid Keep retains confirmation.
+Native controls/focus and 1366x768 / 760x820 reflow are checked. No bulk/destructive
+operation or new material product preference is introduced (`owner_ux_gate=NOT_REQUIRED`).
+
+UX implementation review (scoped to this change, not a whole-product redesign):
+
+- PASS — PRIMARY_SURFACE_DISCOVERABILITY, SCOPE_CLARITY, ADVANCED_WITHOUT_DOMINATING,
+  VISIBLE_HIERARCHY, CONTROL_DENSITY, COHERENT_APPLICATION_COMPOSITION,
+  EXISTING_WORKFLOW_PRESERVATION, INFORMATION_ARCHITECTURE, NAVIGATION,
+  WORKSPACE_LAYOUT, VIEWPORT_BUDGET, PERSISTENT_CONTEXTUAL_CONTROLS,
+  LAYOUT_ARCHETYPE_FIT, RESPONSIVE_WORKSPACE_BEHAVIOR: desktop/narrow previews
+  retain the project workspace and clearly separate recover/Keep controls.
+- PASS — DISABLED_STATE_EXPLANATION, REVIEW_BEFORE_COMMIT,
+  TASK_FLOW_ARCHITECTURE, EXECUTION_STATE_SEPARATION,
+  RESOURCE_MANAGEMENT_SEPARATION, POST_COMPLETION_DESTINATION: changed-intent
+  stop, unresolved-effect explanation, explicit Keep confirmation, final workspace
+  and repeat-creation browser checks.
+- NOT_APPLICABLE — APPLY_REAPPLY_RESET_EXPLICITNESS, BULK_DESTRUCTIVE_SAFETY,
+  DESTRUCTIVE_DIFFERENTIATION, LINEAR_MULTISTEP_REASONING,
+  VERTICAL_SPRAWL_REDUCED, WORKSPACE_LAYOUT_SOLUTION: none is redesigned here.
+- Five levels: function exists / discoverable / understandable / hierarchy support
+  verified for these changed surfaces; Owner UX acceptance is NOT_CLAIMED.
+  Candidate preview is AVAILABLE. No unresolved scoped blocker remains after
+  regression correction; visual/aesthetic polish remains QUALITY_DEFERRED.
+
+Consequence boundary: no owner production files, existing rejected previews,
+provider attempts, credentials, live credits or stable release tags were changed.
+Provider qualification and Owner real-use acceptance remain separate. Historical
+Hybrid `PRODUCT_FLOW_ACCEPTED / QUALITY_DEFERRED` is retained, not re-awarded from
+these tests. Older Hybrid finals without the new input binding require a local
+rerender; this does not authorize fresh provider generation.
+
+## Historical Goal 54 — Full Video Seedance Provider Qualification
 
 ## Gemini 3.8 reasoning baseline — 2026-09-17
 

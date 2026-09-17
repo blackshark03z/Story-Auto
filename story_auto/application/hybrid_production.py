@@ -6,7 +6,7 @@ from typing import Any
 from story_auto.core.artifacts import read_json, sha256_file
 from story_auto.core.visual.opening_builder import opening_builder_view
 from story_auto.core.visual.hybrid_body import hybrid_body_view
-from story_auto.core.visual.hybrid_render import hybrid_preview_readiness
+from story_auto.core.visual.hybrid_render import hybrid_preview_readiness, hybrid_final_input_binding
 
 
 HYBRID_QUALITY_PATH = "output/hybrid_quality.json"
@@ -23,7 +23,7 @@ def _stage(status: str, execution: str = "RUN", message: str | None = None) -> d
     return {"status": status, "execution": execution, "human_message": message}
 
 
-def _valid_final(paths) -> bool:
+def _valid_final(paths, config) -> bool:
     final = paths.artifact_path("output/final.mp4")
     manifest_path = paths.artifact_path("output/final_manifest.json")
     if not final.is_file() or not manifest_path.is_file():
@@ -40,6 +40,7 @@ def _valid_final(paths) -> bool:
         return (
             manifest.get("schema_version") == "story-auto-hybrid-final/1.0.0"
             and manifest.get("project_id") == paths.project_id
+            and manifest.get("current_input_binding") == hybrid_final_input_binding(paths, config)
             and manifest.get("final_sha256") == sha256_file(final)
             and all(path.is_file() and inputs.get(name) == sha256_file(path) for name, path in current.items())
         )
@@ -100,7 +101,7 @@ def hybrid_production_query(paths, config, *, flow: dict[str, Any] | None = None
     opening_missing, image_missing, stock_missing = _missing_groups(readiness)
     visuals_ready = plan_ready and readiness.get("ready") is True
     quality_ready = visuals_ready and _valid_quality(paths)
-    final_ready = quality_ready and _valid_final(paths)
+    final_ready = quality_ready and _valid_final(paths, config)
 
     stages = {
         "SOURCE": _stage("COMPLETE" if content_ready else "READY"),

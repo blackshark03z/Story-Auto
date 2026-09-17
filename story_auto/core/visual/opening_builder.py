@@ -157,7 +157,8 @@ def configure_opening_builder(runtime_root: Path | str, project_id: str, *, shar
             unchanged = True
         if isinstance(existing, dict) and not unchanged:
             for slot in existing.get("slots", []):
-                if isinstance(slot, dict) and isinstance(slot.get("normalized_asset"), dict):
+                if isinstance(slot, dict) and (isinstance(slot.get("normalized_asset"), dict)
+                                              or isinstance(slot.get("api_generation"), dict)):
                     raise OpeningBuilderError("OPENING_PLAN_LOCKED")
         if unchanged:
             manifest = existing
@@ -341,6 +342,8 @@ def opening_builder_view(runtime_root: Path | str, project_id: str) -> dict[str,
         if not isinstance(raw, dict):
             raise OpeningBuilderError("OPENING_MANIFEST_INVALID")
         item = deepcopy(raw)
+        if isinstance(item.get("api_generation"), dict):
+            item["api_generation"].pop("kept_output_urls", None)
         item["asset_ready"] = _asset_valid(paths, raw.get("normalized_asset"))
         slots.append(item)
     status = "READY" if slots and all(slot["status"] == "READY" and slot["asset_ready"] for slot in slots) else "NOT_READY"
@@ -366,7 +369,8 @@ def opening_builder_view(runtime_root: Path | str, project_id: str) -> dict[str,
 
 
 def import_opening_clip(runtime_root: Path | str, project_id: str, slot_id: str,
-                        source_path: Path | str, *, original_filename: str | None = None) -> dict[str, Any]:
+                        source_path: Path | str, *, original_filename: str | None = None,
+                        _provider_identity: dict[str, str] | None = None) -> dict[str, Any]:
     """Adopt one user-generated clip into one exact opening slot.
 
     Long sources are trimmed to the slot duration. A small shortage may be
@@ -396,6 +400,20 @@ def import_opening_clip(runtime_root: Path | str, project_id: str, slot_id: str,
                      if isinstance(item, dict) and item.get("slot_id") == slot_id), None)
         if slot is None:
             raise OpeningBuilderError("OPENING_SLOT_NOT_FOUND")
+        generation = slot.get("api_generation")
+        if isinstance(generation, dict):
+            status = generation.get("status")
+            safe_manual = status in {"FAILED_PRE_DISPATCH", "COST_BLOCKED", "CREDIT_BLOCKED", "FAILED_TERMINAL", "KILLED", "SUCCEEDED"}
+            matched_provider = bool(_provider_identity) and all(
+                generation.get(key) == value for key, value in _provider_identity.items())
+            provider_acquisition = matched_provider and (
+                (generation.get("provider") == "byteplus_seedance"
+                 and bool(_provider_identity.get("provider_task_id"))
+                 and generation.get("provider_task_status") == "succeeded")
+                or (generation.get("provider") == "elyum_seedance"
+                    and bool(_provider_identity.get("gen_id")) and generation.get("keep_confirmed") is True))
+            if (_provider_identity is not None and not provider_acquisition) or (not safe_manual and not provider_acquisition):
+                raise OpeningBuilderError("OPENING_PROVIDER_EFFECT_UNRESOLVED")
         duration = float(slot["duration_seconds"])
         shortage = duration - source_duration
         allowed_shortage = min(1.0, duration * 0.15)
@@ -442,6 +460,16 @@ def import_opening_clip(runtime_root: Path | str, project_id: str, slot_id: str,
             "had_audio": bool(source_meta.get("audio")),
             "imported_at": _now(),
         }
+        if _provider_identity and isinstance(generation, dict):
+            # The acquired bytes and their exact provider identity commit
+            # together, even if the adapter process exits immediately after.
+            slot["source_asset"].update({
+                "provider": generation["provider"], "provider_model": generation.get("provider_model"),
+                "provider_task_id": generation.get("provider_task_id"),
+                "provider_job_id": generation.get("provider_job_id"), "provider_gen_id": generation.get("gen_id"),
+                "source_preview_sha256": generation.get("preview_asset", {}).get("sha256"),
+            })
+            generation.update({"status": "SUCCEEDED", "failure_class": None, "completed_at": _now(), "updated_at": _now()})
         slot["normalized_asset"] = {
             "path": normalized_rel,
             "sha256": normalized_meta["sha256"],

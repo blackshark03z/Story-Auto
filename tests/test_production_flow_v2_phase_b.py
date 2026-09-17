@@ -342,8 +342,11 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
             renders = []
             def render(_project_id):
                 renders.append(_project_id)
-                paths.artifact_path("output/final.mp4").write_bytes(b"provider-free-final")
-                return {"final": "fixture"}
+                accepted = read_json(paths.artifact_path("output/generation_manifest.json"))["requests"]
+                self.assertEqual(len(accepted), 2)
+                self.assertTrue(all(item["selected_asset"]["production_qc"] == "AUTO_ACCEPTED" for item in accepted))
+                from tests.final_output_fixture import complete_final
+                return complete_final(paths)
             router = _PassingAutomaticQCRouter()
             with (patch.object(app, "render", side_effect=render),
                   patch("story_auto.application.operator.apply_auto_accept_policy",

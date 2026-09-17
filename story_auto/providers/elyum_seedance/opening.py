@@ -225,7 +225,7 @@ def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, sl
                 _persist(paths, manifest)
             selected_slot = int(stored_slot)
             status = str(generation.get("status") or "")
-            if status in {"PREVIEW_READY","KEEP_REQUIRED","PREVIEW_REJECTED","KEEP_AMBIGUOUS","KILL_AMBIGUOUS","KILLED","SUCCEEDED","FAILED_TERMINAL"}:
+            if status in {"PREVIEW_READY","KEEP_REQUIRED","PREVIEW_REJECTED","KEEP_DISPATCHING","KEEP_ACQUISITION_REQUIRED","KEEP_AMBIGUOUS","KILL_DISPATCHING","KILL_AMBIGUOUS","KILLED","SUCCEEDED","FAILED_TERMINAL"}:
                 return _view(runtime.root, project_id)
             existing = generation.get("provider_job_id")
             if isinstance(existing, str) and existing.strip(): job_id = existing.strip()
@@ -314,19 +314,39 @@ def keep_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_i
         manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot.get("api_generation")
         if not isinstance(generation, dict) or int(generation.get("credential_slot") or selected_slot) != selected_slot: raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISMATCH")
         if generation.get("status") in {"KEEP_AMBIGUOUS","KEEP_DISPATCHING"}: raise ElyumSeedanceError("ELYUM_KEEP_OUTCOME_AMBIGUOUS")
-        if confirm_spend is not True: raise ElyumSeedanceError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
-        if generation.get("status") != "KEEP_REQUIRED" or not _preview_valid(paths, generation): raise ElyumSeedanceError("ELYUM_KEEP_NOT_ALLOWED")
-        gen_id = generation.get("gen_id"); generation["consequence_intent"]={"action":"KEEP","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation["preview_asset"]["sha256"],"unlock_credits":generation.get("unlock_credits"),"credential_slot":selected_slot}
-        generation.update({"status":"KEEP_DISPATCHING","keep_calls_started":int(generation.get("keep_calls_started") or 0)+1,"updated_at":_now()}); _persist(paths, manifest)
-    try: result = active.keep(str(gen_id))
-    except ElyumSeedanceError as error:
+        if generation.get("status") == "SUCCEEDED" and slot.get("status") == "READY":
+            return _view(runtime.root, project_id)
+        recovering = generation.get("status") == "KEEP_ACQUISITION_REQUIRED" and generation.get("keep_confirmed") is True
+        gen_id = generation.get("gen_id")
+        urls = list(generation.get("kept_output_urls") or []) if recovering else []
+        if not recovering:
+            if confirm_spend is not True: raise ElyumSeedanceError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
+            if generation.get("status") != "KEEP_REQUIRED" or not _preview_valid(paths, generation): raise ElyumSeedanceError("ELYUM_KEEP_NOT_ALLOWED")
+            generation["consequence_intent"]={"action":"KEEP","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation["preview_asset"]["sha256"],"unlock_credits":generation.get("unlock_credits"),"credential_slot":selected_slot}
+            generation.update({"status":"KEEP_DISPATCHING","keep_calls_started":int(generation.get("keep_calls_started") or 0)+1,"updated_at":_now()}); _persist(paths, manifest)
+    if not recovering:
+        try: result = active.keep(str(gen_id))
+        except ElyumSeedanceError as error:
+            with ProjectLock(paths.runtime, project_id):
+                manifest, slot = _load_slot(paths, project_id, slot_id); slot["api_generation"].update({"status":"KEEP_AMBIGUOUS","failure_class":error.failure_class,"updated_at":_now()}); _persist(paths, manifest)
+            return _view(runtime.root, project_id)
+        # Persist confirmed spend before any fallible local acquisition work.
+        # Reuse the existing production adapter's private recovery-URL contract.
+        urls = list(active.downloadable_urls(result))
         with ProjectLock(paths.runtime, project_id):
-            manifest, slot = _load_slot(paths, project_id, slot_id); slot["api_generation"].update({"status":"KEEP_AMBIGUOUS","failure_class":error.failure_class,"updated_at":_now()}); _persist(paths, manifest)
-        return _view(runtime.root, project_id)
-    urls = list(active.downloadable_urls(result))
+            manifest, slot = _load_slot(paths, project_id, slot_id)
+            slot["api_generation"].update({"status":"KEEP_ACQUISITION_REQUIRED", "keep_confirmed":True,
+                                            "kept_output_urls":urls, "kept_at":_now(), "updated_at":_now()})
+            _persist(paths, manifest)
+    if not urls:
+        observed = active.wait(str(generation.get("provider_job_id")), timeout_seconds=0, thumbnails=False)
+        urls = list(active.downloadable_urls(observed))
     if not urls: raise ElyumSeedanceError("ELYUM_OUTPUT_URL_MISSING")
     temp = runtime.temp / "opening_elyum" / project_id / slot_id; temp.mkdir(parents=True, exist_ok=True); source = temp / "kept.mp4"
-    try: (output_fetcher or _fetch)(urls[0], source); import_opening_clip(runtime.root, project_id, slot_id, source, original_filename=f"elyum_{slot_id}.mp4")
+    try:
+        (output_fetcher or _fetch)(urls[0], source)
+        import_opening_clip(runtime.root, project_id, slot_id, source, original_filename=f"elyum_{slot_id}.mp4",
+                            _provider_identity={"provider":PROVIDER_ID, "gen_id":str(gen_id)})
     finally: shutil.rmtree(temp, ignore_errors=True)
     with ProjectLock(paths.runtime, project_id):
         manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot["api_generation"]

@@ -17,14 +17,8 @@ def _project(root: str, project_id: str = "prj_phasea"):
 
 
 def _complete(paths):
-    output = paths.root / "output"
-    output.mkdir(exist_ok=True)
-    for name in ("content_manifest.json", "alignment.json", "story_timeline.json", "continuity_bible.json", "shot_plan.json", "media_plan.json", "render_plan.json"):
-        atomic_write_json(output / name, {"fixture": name})
-    atomic_write_json(output / "review_state.json", {"plan_approval": {"status": "APPROVED"}})
-    atomic_write_json(output / "generation_requests.json", {"requests": [{"request_id": "shot_1", "purpose": "SHOT"}]})
-    atomic_write_json(output / "generation_manifest.json", {"requests": [{"request_id": "shot_1", "status": "SUCCEEDED", "selected_asset": {"path": "assets/shot.png"}}]})
-    (output / "final.mp4").write_bytes(b"fixture-final")
+    from tests.final_output_fixture import complete_final
+    complete_final(paths)
 
 
 def _state(stage: str = "SOURCE", status: str = "READY") -> dict:
@@ -37,7 +31,7 @@ class ProductionStateTests(unittest.TestCase):
             paths, _ = _project(root)
             state = ProductionStateReconciler().reconcile(paths, load_project(RuntimeLayout.from_root(root), paths.project_id)[1]).to_dict()
             self.assertEqual(state["project_id"], paths.project_id)
-            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.9")
+            self.assertEqual(state["schema_version"], "story-auto-production-state/1.0.10")
             self.assertTrue((paths.root / "output" / "production_state.json").is_file())
             self.assertNotIn("generation_manifest", str(state["stages"]))
 

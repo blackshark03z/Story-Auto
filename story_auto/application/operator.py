@@ -487,8 +487,8 @@ class OperatorService:
         reason = "Owner accepted locked Opening preview" if label == "ACCEPT" else "Owner rejected locked Opening preview"
         return review_elyum_opening_preview(self.runtime.root, project_id, slot_id, decision=label, reason=reason)
 
-    def keep_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
-        return keep_elyum_opening_preview(self.runtime.root, project_id, slot_id, confirm_spend=True)
+    def keep_elyum_opening(self, project_id: str, *, slot_id: str, confirm_spend: bool = False) -> dict[str, Any]:
+        return keep_elyum_opening_preview(self.runtime.root, project_id, slot_id, confirm_spend=confirm_spend)
 
     def kill_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return kill_elyum_opening_preview(self.runtime.root, project_id, slot_id,
@@ -790,6 +790,16 @@ class OperatorService:
                 "flow_binding":config.settings.get("flow_binding"),"production":production}
         # The compact reconciled state owns the primary production command.  The
         # existing detailed snapshot remains available for advanced compatibility.
+        final_current = production["pipeline_status"] == "COMPLETE" and bool(production.get("final_output", {}).get("present"))
+        result["final_path"] = production.get("final_output", {}).get("path") if final_current else None
+        result["render_status"] = "COMPLETE" if final_current else ("NEEDS_RENDER" if artifacts["final.mp4"] else production.get("stages", {}).get("RENDER", {}).get("status", "NOT_STARTED"))
+        result["render_stale"] = bool(artifacts["final.mp4"] and not final_current)
+        if not final_current and result["user_status"] == "Complete":
+            next_action = production.get("next_action") or {"action":"review_project", "label":"Review project"}
+            result.update({"user_status":"Needs your attention" if production.get("blocker") else "In production",
+                           "current_stage":production.get("active_stage", "Render"), "progress":min(result["progress"],94),
+                           "current_activity":next_action["label"],
+                           "primary_action":{"action":next_action["label"],"action_id":next_action["action"]}})
         if production["pipeline_status"] == "FEATURE_NOT_AVAILABLE":
             result.update({"user_status":"Unavailable","current_stage":"Unavailable",
                            "current_activity":production["recovery"]["human_message"],
