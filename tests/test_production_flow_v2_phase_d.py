@@ -103,6 +103,22 @@ class PhaseDFlowProductTests(unittest.TestCase):
             state = app.production_query("prj_render_only")
             self.assertFalse(state["flow"]["required"])
 
+    def test_provider_access_block_projects_settings_action_instead_of_unhandled_slug(self):
+        with tempfile.TemporaryDirectory() as root:
+            app = OperatorService(root)
+            paths = planned_project(app, "prj_provider_access")
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {
+                "schema_version": "story-auto-generation-manifest/1.0.0",
+                "project_id": paths.project_id,
+                "requests": [{
+                    "request_id": "req_01", "request_identity_sha256": "fixture-01",
+                    "status": "CREDIT_BLOCKED", "failure_class": "CREDIT_BLOCKED", "attempts": [],
+                }],
+            })
+            state = app.production_query(paths.project_id)
+            self.assertEqual(state["recovery"]["next_action"], "Review provider access")
+            self.assertEqual(state["next_action"], {"action": "settings", "label": "Review provider access"})
+
     def test_qc_pending_reference_unblocks_its_dependent_shot_once(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)

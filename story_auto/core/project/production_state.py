@@ -300,7 +300,7 @@ class ProductionStateReconciler:
                         "provider_dispatches_per_continue": 0, "requires_owner_decision": False,
                         "next_action": "Open final video"}
         elif blocker:
-            canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
+            canonical_actions = {"Review plan": "review_plan", "Review visuals": "review_visuals", "Review recovery": "review_recovery", "Review provider access": "settings", "Open Flow sign-in": "open_flow_sign_in", "Continue production": "continue_production", "Review project": "review_project"}
             pipeline_status = recovery["status"] if blocker.get("stage") == "VISUALS" and recovery["status"] in {"BLOCKED", "NEEDS_ATTENTION", "STUCK_PENDING"} else blocker["reason_code"]
             active_stage, next_action = blocker.get("stage") or self._first_incomplete(stages), {"action": canonical_actions.get(blocker["next_action"], blocker["next_action"].lower().replace(" ", "_")), "label": blocker["next_action"]}
         else:

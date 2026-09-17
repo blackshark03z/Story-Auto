@@ -606,6 +606,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Result: **46/46 PASS**. No live provider request, Keep/Kill consequence, or provider credit spend occurred in this matrix.
 - This checkpoint is evidence for `FORMAT + PIPELINE + CUJ SMOOTHNESS`; it does not promote deferred visual/aesthetic quality.
 
+### Provider-access next-action checkpoint (2026-09-18)
+
+- CUJ action audit found a real dead-end: recovery states such as provider credit/capability blocking and Elyum cost-bound blocking exposed the human label `Review provider access`, but the generic label-to-slug fallback produced `review_provider_access`, which had no UI handler.
+- These recovery states now project the canonical `settings` action while preserving the user-facing label `Review provider access`. Clicking the primary action therefore opens the existing provider/settings surface instead of becoming a no-op.
+- Provider mutation and recovery semantics are unchanged; this is an action-routing correction only and does not authorize retry, replacement, Keep/Kill, or provider spend.
+- Focused Phase D + UI + Hybrid CUJ qualification: 22 tests PASS, with 2 system-Chrome-only UI tests skipped because Google Chrome is not installed; Playwright Hybrid browser CUJs PASS.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.
