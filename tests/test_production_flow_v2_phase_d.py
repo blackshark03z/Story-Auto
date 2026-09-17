@@ -215,6 +215,8 @@ class PhaseDFlowProductTests(unittest.TestCase):
         cli = (root / "story_auto" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn("rebind_flow_project", script)
         self.assertIn("validate_flow_connection", script)
+        for action in ("review_plan", "review_visuals", "review_recovery", "settings", "open_flow_sign_in", "continue_production", "review_project", "recheck_status", "run_to_final", "open_final", "choose_quality_policy"):
+            self.assertIn(f"action === '{action}'", script)
         for command in ("flow-status", "prepare-flow-recovery", "validate-flow-connection", "rebind-flow-project", "continue-production"):
             self.assertIn(command, cli)
 

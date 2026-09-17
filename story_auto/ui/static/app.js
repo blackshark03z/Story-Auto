@@ -555,6 +555,8 @@ async function handleProjectAction(action) {
   if (action === 'open_flow_project') return runAction('open_flow_project','Opening this video’s Flow project…');
   if (action === 'ensure_flow_project') return runAction('ensure_flow_project','Finishing this video’s Flow project setup…');
   if (action === 'recheck_flow_generation' || action === 'recheck_status') return runAction('recheck_flow_generation','Rechecking the exact Flow generation…');
+  toast('This project action is not available in the current build. Review the project state before continuing.',true);
+  return showReview();
 }
 
 async function runAction(action, label, extra = {}) {

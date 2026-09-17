@@ -620,6 +620,7 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Verification exposed the underlying cache defect: project setting changes updated `project.json`, but the compact `production_state.json` fingerprint ignored project configuration, so `production_query()` could return stale policy/execution state immediately after a valid mutation.
 - `project.json` is now canonical evidence in the production-state fingerprint on both reconcile and fast-query paths. Production-state schema is bumped to `story-auto-production-state/1.0.9`, forcing older compact caches to reconcile once.
 - Focused Production Flow A-D + UI + Hybrid CUJ regression after the root fix: 51 tests PASS, 2 system-Chrome-only UI tests skipped because Google Chrome is not installed; Playwright Hybrid browser CUJs PASS.
+- UI action dispatch is now fail-visible as a final CUJ safety net: if a future/legacy action ID bypasses the canonical mapper, the project page reports that the action is unavailable and opens project review instead of silently doing nothing. Canonical backend action IDs are regression-checked against UI handlers. Final Phase D + UI + Hybrid CUJ hardening gate: 24 tests PASS, 2 system-Chrome-only UI tests skipped; JavaScript syntax and `git diff --check` PASS.
 
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
