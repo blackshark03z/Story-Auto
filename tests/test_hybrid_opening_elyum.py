@@ -85,8 +85,8 @@ class ElyumHybridOpeningTests(unittest.TestCase):
             self.assertEqual(preflight["status"],"READY"); self.assertEqual(preflight["balance"],100)
             self.assertEqual(preflight["provider_duration_seconds"],6); self.assertEqual(preflight["resolution"],"480p")
             self.assertEqual(preflight["models"],[
-                {"model_id":MODEL,"estimate_credits":20,"affordable":True},
-                {"model_id":"seedance-too-expensive","estimate_credits":120,"affordable":False},
+                {"model_id":MODEL,"estimate_credits":20,"affordable":True,"credential_slot":1,"balance":100},
+                {"model_id":"seedance-too-expensive","estimate_credits":120,"affordable":False,"credential_slot":1,"balance":100},
             ])
             self.assertEqual(client.make_calls,0)
 

@@ -67,7 +67,7 @@ from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeeda
                                                 review_elyum_preview as review_elyum_locked_preview)
 from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
-from story_auto.providers.credentials import append_provider_keys, clear_provider_keys, provider_key_status
+from story_auto.providers.credentials import append_provider_keys, clear_provider_keys, provider_key_status, provider_keys
 from story_auto.providers.video_generation import video_provider_catalog
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
@@ -458,8 +458,12 @@ class OperatorService:
             raise OperatorServiceError("ELYUM_OPENING_MODEL_NOT_VERIFIED")
         if choice.get("affordable") is not True:
             raise OperatorServiceError("ELYUM_OPENING_INSUFFICIENT_CREDITS")
+        credential_slot = int(choice.get("credential_slot") or 0)
+        if credential_slot < 1:
+            raise OperatorServiceError("ELYUM_OPENING_CREDENTIAL_SLOT_UNVERIFIED")
         return generate_elyum_opening_preview(
             self.runtime.root, project_id, slot_id, model=model_id,
+            credential_slot=credential_slot,
             resolution=str(preflight.get("resolution") or "480p"),
             max_credits=int(choice.get("estimate_credits") or 0),
         )
@@ -1121,30 +1125,42 @@ class OperatorService:
         return self.elyum_connection_status()
 
     def test_elyum_connection(self) -> dict[str, Any]:
-        client = ElyumSeedanceClient()
-        if client.readiness().get("status") != "READY":
+        try:
+            keys = provider_keys("elyum")
+        except Exception:
+            keys = []
+        if not keys:
             return {**self.elyum_connection_status(), "status": "NOT_CONFIGURED",
                     "reason_code": "ELYUM_CREDENTIAL_MISSING", "live_verified": False}
-        try:
-            balance = client.account_balance()
-            candidates = client.seedance_model_ids()
-            verified_models = []
+        credential_slots = []
+        verified_models = []
+        last_failure = None
+        for credential_slot, key in enumerate(keys, 1):
+            client = ElyumSeedanceClient(key=key)
+            if client.readiness().get("status") != "READY":
+                continue
+            try:
+                balance = int(client.account_balance())
+                candidates = client.seedance_model_ids()
+            except ElyumSeedanceError as error:
+                last_failure = error.failure_class
+                continue
+            credential_slots.append({"credential_slot": credential_slot, "balance": balance})
             for model_id in candidates[:12]:
                 try:
-                    estimate = client.estimate_video(model=model_id, duration=6, mode="t2v", resolution="480p")
+                    estimate = int(client.estimate_video(model=model_id, duration=6, mode="t2v", resolution="480p"))
                 except ElyumSeedanceError:
                     continue
-                verified_models.append({"model_id": model_id, "estimated_credits_6s": int(estimate)})
-        except ElyumSeedanceError as error:
-            return {**self.elyum_connection_status(), "status": "ERROR",
-                    "reason_code": error.failure_class, "live_verified": False}
+                verified_models.append({"model_id": model_id, "estimated_credits_6s": estimate,
+                                        "credential_slot": credential_slot, "balance": balance,
+                                        "affordable": balance >= estimate})
         if not verified_models:
             return {**self.elyum_connection_status(), "status": "ERROR",
-                    "reason_code": "ELYUM_SEEDANCE_T2V_MODEL_UNVERIFIED", "live_verified": False,
-                    "checked_at": datetime.now(timezone.utc).isoformat(), "balance": int(balance)}
+                    "reason_code": last_failure or "ELYUM_SEEDANCE_T2V_MODEL_UNVERIFIED", "live_verified": False,
+                    "checked_at": datetime.now(timezone.utc).isoformat(), "credential_slots": credential_slots}
         return {**self.elyum_connection_status(), "status": "CONNECTED", "reason_code": None,
                 "live_verified": True, "checked_at": datetime.now(timezone.utc).isoformat(),
-                "balance": int(balance), "seedance_t2v_models": verified_models}
+                "credential_slots": credential_slots, "seedance_t2v_models": verified_models}
 
     def pexels_connection_status(self) -> dict[str, Any]:
         credential = provider_key_status("pexels")

@@ -15,6 +15,7 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual.opening_builder import OPENING_BUILDER_VERSION, OPENING_MANIFEST_PATH, import_opening_clip, opening_builder_view
+from story_auto.providers.credentials import provider_keys
 from story_auto.providers.flow.validation import AssetValidationError, validate_video
 from .client import ElyumSeedanceClient, ElyumSeedanceError
 
@@ -92,15 +93,38 @@ def _preview_valid(paths, generation: dict[str, Any]) -> bool:
     return metadata.get("sha256") == asset.get("sha256")
 
 
+def _credential_clients(client: ElyumSeedanceClient | None = None) -> list[tuple[int, ElyumSeedanceClient]]:
+    if client is not None:
+        return [(1, client)]
+    try:
+        keys = provider_keys("elyum")
+    except Exception as error:
+        raise ElyumSeedanceError("CREDENTIAL_MISSING") from error
+    clients = [(index, ElyumSeedanceClient(key=key)) for index, key in enumerate(keys, 1)]
+    if not clients:
+        raise ElyumSeedanceError("CREDENTIAL_MISSING")
+    return clients
+
+
+def _client_for_credential_slot(credential_slot: int, client: ElyumSeedanceClient | None = None) -> ElyumSeedanceClient:
+    if client is not None:
+        if credential_slot != 1:
+            raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISMATCH")
+        return client
+    try:
+        keys = provider_keys("elyum")
+    except Exception as error:
+        raise ElyumSeedanceError("CREDENTIAL_MISSING") from error
+    if credential_slot < 1 or credential_slot > len(keys):
+        raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISSING")
+    return ElyumSeedanceClient(key=keys[credential_slot - 1])
+
+
 def preflight_elyum_opening_slot(runtime_root: Path | str, project_id: str, slot_id: str, *,
                                  client: ElyumSeedanceClient | None = None,
                                  resolution: str = "480p") -> dict[str, Any]:
-    """Read-only per-slot Seedance model/cost preflight; never dispatches a render."""
+    """Read-only per-slot pool-aware Seedance preflight; never dispatches a render."""
     runtime, paths = _project(runtime_root, project_id)
-    active = client or ElyumSeedanceClient()
-    readiness = active.readiness()
-    if readiness.get("status") != "READY":
-        raise ElyumSeedanceError(readiness.get("reason_code") or "CREDENTIAL_MISSING")
     if resolution not in {"480p", "720p", "1080p"}:
         raise ElyumSeedanceError("RESOLUTION_UNSUPPORTED", resolution)
     with ProjectLock(paths.runtime, project_id):
@@ -110,26 +134,49 @@ def preflight_elyum_opening_slot(runtime_root: Path | str, project_id: str, slot
         provider_duration = int(math.ceil(target))
         if not str(slot.get("prompt") or "").strip() or not 4 <= provider_duration <= 30:
             raise ElyumSeedanceError("OPENING_API_SLOT_INVALID")
-    balance = active.account_balance()
-    models: list[dict[str, Any]] = []
-    for model_id in active.seedance_model_ids()[:12]:
+
+    observations: list[dict[str, Any]] = []
+    credential_summaries: list[dict[str, Any]] = []
+    for credential_slot, active in _credential_clients(client):
+        readiness = active.readiness()
+        if readiness.get("status") != "READY":
+            continue
         try:
-            estimate = active.estimate_video(model=model_id, duration=provider_duration, mode="t2v", resolution=resolution)
+            balance = int(active.account_balance())
+            model_ids = active.seedance_model_ids()[:12]
         except ElyumSeedanceError:
             continue
-        models.append({
-            "model_id": model_id,
-            "estimate_credits": int(estimate),
-            "affordable": int(balance) >= int(estimate),
-        })
+        credential_summaries.append({"credential_slot": credential_slot, "balance": balance})
+        for model_id in model_ids:
+            try:
+                estimate = int(active.estimate_video(model=model_id, duration=provider_duration, mode="t2v", resolution=resolution))
+            except ElyumSeedanceError:
+                continue
+            observations.append({
+                "model_id": model_id,
+                "estimate_credits": estimate,
+                "affordable": balance >= estimate,
+                "credential_slot": credential_slot,
+                "balance": balance,
+            })
+
+    selected_models: list[dict[str, Any]] = []
+    for model_id in dict.fromkeys(item["model_id"] for item in observations):
+        candidates = [item for item in observations if item["model_id"] == model_id]
+        affordable = [item for item in candidates if item["affordable"]]
+        selected = min(affordable or candidates, key=lambda item: item["credential_slot"])
+        selected_models.append(selected)
+    max_balance = max((item["balance"] for item in credential_summaries), default=0)
     preflight = {
-        "status": "READY" if models else "NO_COMPATIBLE_MODEL",
+        "status": "READY" if selected_models else "NO_COMPATIBLE_MODEL",
         "provider": PROVIDER_ID,
         "resolution": resolution,
         "provider_duration_seconds": provider_duration,
         "prompt_sha256": prompt_sha,
-        "balance": int(balance),
-        "models": models,
+        "balance": max_balance,
+        "max_balance": max_balance,
+        "credential_slots": credential_summaries,
+        "models": selected_models,
         "checked_at": _now(),
     }
     with ProjectLock(paths.runtime, project_id):
@@ -142,19 +189,18 @@ def preflight_elyum_opening_slot(runtime_root: Path | str, project_id: str, slot
 
 
 def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_id: str, *, model: str,
-                                   client: ElyumSeedanceClient | None = None, resolution: str = "480p",
-                                   max_credits: int = 44, wait_seconds: int = 50,
+                                   client: ElyumSeedanceClient | None = None, credential_slot: int | None = None,
+                                   resolution: str = "480p", max_credits: int = 44, wait_seconds: int = 50,
                                    preview_fetcher: Callable[[str, Path], None] | None = None) -> dict[str, Any]:
     runtime, paths = _project(runtime_root, project_id)
-    active = client or ElyumSeedanceClient()
-    if active.readiness().get("status") != "READY":
-        raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    if client is not None and credential_slot is None:
+        credential_slot = 1
     model = str(model or "").strip()
     if not model:
         raise ElyumSeedanceError("MODEL_REQUIRED")
     if resolution not in {"480p", "720p", "1080p"}:
         raise ElyumSeedanceError("RESOLUTION_UNSUPPORTED", resolution)
-    job_id = None; replay = False; prompt = ""; client_ref = ""; provider_duration = 0
+    job_id = None; replay = False; prompt = ""; client_ref = ""; provider_duration = 0; selected_slot = 0
     with ProjectLock(paths.runtime, project_id):
         manifest, slot = _load_slot(paths, project_id, slot_id)
         if slot.get("status") == "READY" and isinstance(slot.get("normalized_asset"), dict):
@@ -168,6 +214,16 @@ def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, sl
         if isinstance(generation, dict):
             if generation.get("provider") != PROVIDER_ID: raise ElyumSeedanceError("OPENING_API_PROVIDER_MISMATCH")
             if generation.get("provider_model") != model: raise ElyumSeedanceError("OPENING_API_MODEL_MISMATCH")
+            stored_slot = generation.get("credential_slot")
+            if credential_slot is not None and stored_slot not in {None, credential_slot}:
+                raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISMATCH")
+            if stored_slot is None:
+                if credential_slot is None:
+                    raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISSING")
+                generation["credential_slot"] = credential_slot
+                stored_slot = credential_slot
+                _persist(paths, manifest)
+            selected_slot = int(stored_slot)
             status = str(generation.get("status") or "")
             if status in {"PREVIEW_READY","KEEP_REQUIRED","PREVIEW_REJECTED","KEEP_AMBIGUOUS","KILL_AMBIGUOUS","KILLED","SUCCEEDED","FAILED_TERMINAL"}:
                 return _view(runtime.root, project_id)
@@ -178,9 +234,15 @@ def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, sl
             client_ref = str(generation.get("client_ref") or "")
             if not client_ref: raise ElyumSeedanceError("OPENING_API_CLIENT_REF_MISSING")
         else:
+            if credential_slot is None:
+                raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISSING")
+            selected_slot = int(credential_slot)
             client_ref = _client_ref(project_id, slot, model, provider_duration, resolution)
-            slot["api_generation"] = generation = {"schema_version": OPENING_API_VERSION, "provider": PROVIDER_ID, "provider_model": model, "status": "PRE_DISPATCH", "provider_submissions": 0, "provider_create_calls": 0, "client_ref": client_ref, "resolution": resolution, "prompt_sha256": slot.get("prompt_sha256"), "duration_seconds": target, "provider_duration_seconds": provider_duration, "created_at": _now(), "updated_at": _now()}
+            slot["api_generation"] = generation = {"schema_version": OPENING_API_VERSION, "provider": PROVIDER_ID, "provider_model": model, "credential_slot": selected_slot, "status": "PRE_DISPATCH", "provider_submissions": 0, "provider_create_calls": 0, "client_ref": client_ref, "resolution": resolution, "prompt_sha256": slot.get("prompt_sha256"), "duration_seconds": target, "provider_duration_seconds": provider_duration, "created_at": _now(), "updated_at": _now()}
             _persist(paths, manifest)
+    active = _client_for_credential_slot(selected_slot, client)
+    if active.readiness().get("status") != "READY":
+        raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
     if job_id is None:
         balance = active.account_balance(); estimate = active.estimate_video(model=model, duration=provider_duration, mode="t2v", resolution=resolution)
         with ProjectLock(paths.runtime, project_id):
@@ -240,15 +302,21 @@ def review_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot
 
 
 def keep_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_id: str, *, client: ElyumSeedanceClient | None = None, confirm_spend: bool = False, output_fetcher: Callable[[str, Path], None] | None = None) -> dict[str, Any]:
-    runtime, paths = _project(runtime_root, project_id); active = client or ElyumSeedanceClient()
-    if active.readiness().get("status") != "READY": raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    runtime, paths = _project(runtime_root, project_id)
     with ProjectLock(paths.runtime, project_id):
         manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot.get("api_generation")
         if not isinstance(generation, dict) or generation.get("provider") != PROVIDER_ID: raise ElyumSeedanceError("OPENING_API_PROVIDER_MISMATCH")
+        selected_slot = int(generation.get("credential_slot") or (1 if client is not None else 0))
+        if selected_slot < 1: raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISSING")
+    active = _client_for_credential_slot(selected_slot, client)
+    if active.readiness().get("status") != "READY": raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    with ProjectLock(paths.runtime, project_id):
+        manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot.get("api_generation")
+        if not isinstance(generation, dict) or int(generation.get("credential_slot") or selected_slot) != selected_slot: raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISMATCH")
         if generation.get("status") in {"KEEP_AMBIGUOUS","KEEP_DISPATCHING"}: raise ElyumSeedanceError("ELYUM_KEEP_OUTCOME_AMBIGUOUS")
         if confirm_spend is not True: raise ElyumSeedanceError("ELYUM_KEEP_CONFIRMATION_REQUIRED")
         if generation.get("status") != "KEEP_REQUIRED" or not _preview_valid(paths, generation): raise ElyumSeedanceError("ELYUM_KEEP_NOT_ALLOWED")
-        gen_id = generation.get("gen_id"); generation["consequence_intent"]={"action":"KEEP","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation["preview_asset"]["sha256"],"unlock_credits":generation.get("unlock_credits")}
+        gen_id = generation.get("gen_id"); generation["consequence_intent"]={"action":"KEEP","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation["preview_asset"]["sha256"],"unlock_credits":generation.get("unlock_credits"),"credential_slot":selected_slot}
         generation.update({"status":"KEEP_DISPATCHING","keep_calls_started":int(generation.get("keep_calls_started") or 0)+1,"updated_at":_now()}); _persist(paths, manifest)
     try: result = active.keep(str(gen_id))
     except ElyumSeedanceError as error:
@@ -270,14 +338,20 @@ def keep_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_i
 def kill_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_id: str, *, reason: str, client: ElyumSeedanceClient | None = None, confirm_kill: bool = False) -> dict[str, Any]:
     if confirm_kill is not True: raise ElyumSeedanceError("ELYUM_KILL_CONFIRMATION_REQUIRED")
     if not str(reason or "").strip(): raise ElyumSeedanceError("ELYUM_KILL_REASON_REQUIRED")
-    runtime, paths = _project(runtime_root, project_id); active = client or ElyumSeedanceClient()
-    if active.readiness().get("status") != "READY": raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    runtime, paths = _project(runtime_root, project_id)
     with ProjectLock(paths.runtime, project_id):
         manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot.get("api_generation")
         if not isinstance(generation, dict) or generation.get("provider") != PROVIDER_ID: raise ElyumSeedanceError("OPENING_API_PROVIDER_MISMATCH")
+        selected_slot = int(generation.get("credential_slot") or (1 if client is not None else 0))
+        if selected_slot < 1: raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISSING")
+    active = _client_for_credential_slot(selected_slot, client)
+    if active.readiness().get("status") != "READY": raise ElyumSeedanceError(active.readiness().get("reason_code") or "CREDENTIAL_MISSING")
+    with ProjectLock(paths.runtime, project_id):
+        manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot.get("api_generation")
+        if not isinstance(generation, dict) or int(generation.get("credential_slot") or selected_slot) != selected_slot: raise ElyumSeedanceError("ELYUM_CREDENTIAL_SLOT_MISMATCH")
         if generation.get("status") in {"KILL_AMBIGUOUS","KILL_DISPATCHING"}: raise ElyumSeedanceError("ELYUM_KILL_OUTCOME_AMBIGUOUS")
         if generation.get("status") != "PREVIEW_REJECTED": raise ElyumSeedanceError("ELYUM_KILL_NOT_ALLOWED")
-        gen_id = generation.get("gen_id"); generation["consequence_intent"]={"action":"KILL","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation.get("preview_asset",{}).get("sha256"),"reason":str(reason).strip()}
+        gen_id = generation.get("gen_id"); generation["consequence_intent"]={"action":"KILL","recorded_at":_now(),"gen_id":gen_id,"preview_sha256":generation.get("preview_asset",{}).get("sha256"),"reason":str(reason).strip(),"credential_slot":selected_slot}
         generation.update({"status":"KILL_DISPATCHING","kill_calls_started":int(generation.get("kill_calls_started") or 0)+1,"updated_at":_now()}); _persist(paths, manifest)
     try: active.kill(str(gen_id), reason=str(reason).strip())
     except ElyumSeedanceError as error:
