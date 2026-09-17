@@ -29,6 +29,9 @@ from story_auto.providers.pexels.client import PexelsError, select_candidate
 HYBRID_BODY_VERSION = "story-auto-hybrid-body-plan/1.0.0"
 HYBRID_BODY_PATH = "output/hybrid_body_plan.json"
 _IMAGE_EFFECTS = ("ZOOM_IN", "ZOOM_OUT", "PAN_LEFT", "PAN_RIGHT", "SLOW_PUSH")
+_REVERSE_EFFECT = {"ZOOM_IN": "ZOOM_OUT", "ZOOM_OUT": "ZOOM_IN",
+                   "PAN_LEFT": "PAN_RIGHT", "PAN_RIGHT": "PAN_LEFT"}
+_MOTION_POLICY = "SEMANTIC_HASH_NO_REPEAT_OR_REVERSE"
 _STOPWORDS = {
     "the", "and", "that", "this", "with", "from", "into", "then", "when", "where", "while",
     "một", "những", "các", "và", "của", "trong", "khi", "với", "đang", "được", "này", "đó", "cho",
@@ -90,6 +93,15 @@ def semantic_stock_query(text: str, *, max_terms: int = 8) -> str:
     return " ".join(unique) if unique else "cinematic story atmosphere"
 
 
+def _image_effect(slot_id: str, semantic_context: str, previous_effect: str | None) -> str:
+    """Choose deterministic motion without a visible fixed-cycle rhythm."""
+    digest = hashlib.sha256(f"{slot_id}\n{semantic_context}".encode("utf-8")).digest()
+    offset = int.from_bytes(digest[:2], "big") % len(_IMAGE_EFFECTS)
+    ordered = _IMAGE_EFFECTS[offset:] + _IMAGE_EFFECTS[:offset]
+    forbidden = {previous_effect, _REVERSE_EFFECT.get(previous_effect or "")}
+    return next(effect for effect in ordered if effect not in forbidden)
+
+
 def _slot(slot_id: str, start: float, end: float, visual_type: str, semantic_context: str,
           *, effect: str | None = None) -> dict[str, Any]:
     duration = round(end - start, 6)
@@ -144,7 +156,7 @@ def build_hybrid_body_plan(runtime_root: Path | str, project_id: str, *, image_s
     cursor = opening_end
     slots: list[dict[str, Any]] = []
     sequence = 1
-    image_effect_index = 0
+    previous_image_effect: str | None = None
     while cursor < total - .001:
         for image_index in range(image_count):
             remaining = total - cursor
@@ -157,10 +169,11 @@ def build_hybrid_body_plan(runtime_root: Path | str, project_id: str, *, image_s
                 break
             end = cursor + duration
             context = _semantic_text(segments, cursor, end)
-            slots.append(_slot(f"BODY_{sequence:04d}", cursor, end, "IMAGE", context,
-                               effect=_IMAGE_EFFECTS[image_effect_index % len(_IMAGE_EFFECTS)]))
+            slot_id = f"BODY_{sequence:04d}"
+            effect = _image_effect(slot_id, context, previous_image_effect)
+            slots.append(_slot(slot_id, cursor, end, "IMAGE", context, effect=effect))
+            previous_image_effect = effect
             sequence += 1
-            image_effect_index += 1
             cursor = end
         remaining = total - cursor
         if remaining < 5.0 - .001:
@@ -188,7 +201,8 @@ def build_hybrid_body_plan(runtime_root: Path | str, project_id: str, *, image_s
         "master_duration_seconds": total,
         "opening_end_seconds": opening_end,
         "recipe": {"image_slot_seconds": image_seconds, "images_per_block": image_count,
-                   "stock_slot_seconds": stock_seconds, "pattern": "IMAGES_THEN_STOCK"},
+                   "stock_slot_seconds": stock_seconds, "pattern": "IMAGES_THEN_STOCK",
+                   "motion_policy": _MOTION_POLICY},
         "render_target": {"width": target.width, "height": target.height, "fps": target.fps,
                           "pixel_format": target.pixel_format},
         "slots": slots,

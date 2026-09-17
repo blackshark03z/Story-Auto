@@ -123,6 +123,15 @@ class HybridBodyPlanTests(unittest.TestCase):
             self.assertAlmostEqual(prior["end"], current["start"], places=5)
         kinds = [slot["visual_type"] for slot in plan["slots"]]
         self.assertEqual(kinds[:4], ["IMAGE", "IMAGE", "IMAGE", "STOCK_VIDEO"])
+        image_effects = [slot["effect"] for slot in plan["slots"] if slot["visual_type"] == "IMAGE"]
+        self.assertEqual(plan["recipe"]["motion_policy"], "SEMANTIC_HASH_NO_REPEAT_OR_REVERSE")
+        reverse = {"ZOOM_IN": "ZOOM_OUT", "ZOOM_OUT": "ZOOM_IN",
+                   "PAN_LEFT": "PAN_RIGHT", "PAN_RIGHT": "PAN_LEFT"}
+        for prior, current in zip(image_effects, image_effects[1:]):
+            self.assertNotEqual(prior, current)
+            self.assertNotEqual(reverse.get(prior), current)
+        repeated = build_hybrid_body_plan(self.runtime.root, self.project_id)
+        self.assertEqual(image_effects, [slot["effect"] for slot in repeated["slots"] if slot["visual_type"] == "IMAGE"])
         stock = next(slot for slot in plan["slots"] if slot["visual_type"] == "STOCK_VIDEO")
         self.assertGreaterEqual(stock["target_duration"], 5.0)
         self.assertLessEqual(stock["target_duration"], 10.0)
