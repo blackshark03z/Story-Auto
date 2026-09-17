@@ -578,6 +578,16 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - The original fail-closed guard remains intact: a genuinely unchanged VISUALS state still stops after one operation with `STAGE_NO_PROGRESS`.
 - Regression proves partial slot progress can continue safely to final while unchanged-state protection still fires. Coordinator + canonical Hybrid CUJ qualification: 12/12 PASS including both Playwright browser CUJs.
 
+### Active format-contract matrix checkpoint (2026-09-18)
+
+- Full Image, Full Video and CUJ-enabled Hybrid are now covered by one focused format-contract regression matrix; this is technical format acceptance only, not aesthetic-quality acceptance.
+- Full Image final evidence is hash-bound to its exact `render_plan.json`; the plan records `render_mode=full_image`, source visuals are silent, narration owns the final audio, final duration follows the alignment master clock, target dimensions/stream count are validated, and the waveform contract is explicit.
+- Full Video final evidence is hash-bound to a `full_video_ai` render plan whose validator rejects any non-VIDEO segment. Source video audio is `MUTE`; the canonical narration owns the single final audio stream and final duration follows alignment.
+- Hybrid final evidence records `render_mode=hybrid_hook`, binds exact alignment/opening/body/preview hashes, preserves one master audio stream, records visual audio as `MUTED_BY_CONTRACT`, and validates final SHA/duration against the alignment master clock.
+- Existing artifact schema versions were intentionally not changed: the common manifest already cryptographically binds format through `render_plan_sha256`; a schema migration/rerender would add cost without closing a product defect.
+- Settings copy now states the real policy: Full Image is the only **global default**; Hybrid Visual and Full Video remain available **per video**. Old `Coming soon` wording was removed.
+- Qualification: Full Image + common render + Hybrid browser CUJ + release-mode suite = 40/40 PASS.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

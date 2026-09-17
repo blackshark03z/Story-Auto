@@ -19,6 +19,11 @@ class ReleaseModeTests(unittest.TestCase):
         self.assertIn('name="format" value="full_video_ai"', script)
         self.assertIn('BytePlus async API', script)
         self.assertNotIn('name="format" value="full_video_ai" disabled', script)
+        self.assertIn('Hybrid Visual — choose per video', script)
+        self.assertIn('Full Video — choose per video', script)
+        self.assertIn('Full Image is the only global default.', script)
+        self.assertNotIn('Hybrid Visual — Coming soon', script)
+        self.assertNotIn('Full Video — Coming soon', script)
 
     def test_new_project_default_is_full_image(self):
         with tempfile.TemporaryDirectory() as root:

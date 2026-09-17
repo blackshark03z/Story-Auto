@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from story_auto.core.artifacts import atomic_write_json, read_json
+from story_auto.core.artifacts import atomic_write_json, read_json, sha256_file
 from story_auto.core.audio import TimedSpan, build_alignment
 from story_auto.core.content import narration_hash
 from story_auto.core.planning.service import (PlanningError, compile_full_image_shot_plan,
@@ -16,6 +16,7 @@ from story_auto.core.planning import run_planning_stages, run_visual_planning_st
 from story_auto.core.project import ProjectConfig, ProjectValidationError, RuntimeLayout, create_project
 from story_auto.core.render.compiler import compile_image
 from story_auto.core.render.compositor import compose
+from story_auto.core.render.service import run_render_stages
 from story_auto.core.render.media import MediaTarget, probe_media
 from story_auto.core.render.waveform import derive_amplitude_envelope, visualizer_spec
 from story_auto.core.project.model import full_image_motion_spec
@@ -125,6 +126,52 @@ class FullImagePlanningTests(unittest.TestCase):
                 compile_image(source, output, duration=.4, motion=motion, target=MediaTarget(320, 180, 10))
                 meta = probe_media(output)
                 self.assertEqual((meta["video"]["width"], meta["video"]["height"]), (320, 180))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
+    def test_full_image_final_format_contract_is_hash_bound_and_master_audio_owned(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = RuntimeLayout.from_root(directory)
+            config = ProjectConfig("prj_full_format", render_mode="full_image", settings={
+                "render": {"width": 320, "height": 180, "fps": 10},
+                "full_image": {"image_duration_seconds": 5, "cadence": "FIXED",
+                               "motion": "AUTO_CONTINUOUS_ZOOM", "audio_visualizer": True},
+            })
+            paths = create_project(runtime, config)
+            narration_rel = "assets/audio/narration.wav"
+            narration = paths.artifact_path(narration_rel); narration.parent.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "sine=frequency=440:sample_rate=48000:duration=1", "-c:a", "pcm_s16le", str(narration)], check=True)
+            image_rel = "assets/image/req_full/attempt_001.png"
+            image = paths.artifact_path(image_rel); image.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("RGB", (640, 360), "navy").save(image)
+            atomic_write_json(paths.artifact_path("output/alignment.json"), {
+                "audio_path": narration_rel, "duration_seconds": 1.0,
+                "segments": [{"segment_id": "seg_1", "start": 0.0, "end": 1.0, "text": "One image beat."}],
+            })
+            atomic_write_json(paths.artifact_path("output/shot_plan.json"), {
+                "shots": [{"shot_id": "sh_0001", "start": 0.0, "end": 1.0}]})
+            atomic_write_json(paths.artifact_path("output/media_plan.json"), {"render_mode": "full_image", "shots": [{
+                "shot_id": "sh_0001", "media_type": "IMAGE", "requirement": "REQUIRED", "fallback_policy": "BLOCK",
+                "image_motion_policy": "AUTO_CONTINUOUS_ZOOM_IN", "motion_spec": full_image_motion_spec("ZOOM_IN"),
+            }]})
+            atomic_write_json(paths.artifact_path("output/generation_requests.json"), {"requests": [{
+                "request_id": "req_full", "purpose": "SHOT", "shot_id": "sh_0001", "media_type": "IMAGE", "provider": "google_flow",
+            }]})
+            atomic_write_json(paths.artifact_path("output/generation_manifest.json"), {"requests": [{
+                "request_id": "req_full", "status": "SUCCEEDED",
+                "selected_asset": {"path": image_rel, "sha256": sha256_file(image), "attempt": 1},
+            }]})
+            result = run_render_stages(runtime.root, config.project_id)
+            manifest = result["final_manifest"]
+            render_plan_path = paths.artifact_path("output/render_plan.json")
+            self.assertEqual(read_json(render_plan_path)["render_mode"], "full_image")
+            self.assertEqual(manifest["render_plan_sha256"], sha256_file(render_plan_path))
+            self.assertEqual(read_json(paths.artifact_path("output/audio_plan.json"))["source_video_audio"], "MUTE")
+            self.assertTrue(manifest["audio_visualizer"]["enabled"])
+            self.assertEqual((manifest["width"], manifest["height"], len(manifest["streams"]["audio"])), (320, 180, 1))
+            self.assertAlmostEqual(manifest["duration_seconds"], 1.0, delta=.12)
+            self.assertEqual(manifest["final_sha256"], sha256_file(paths.artifact_path("output/final.mp4")))
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
     def test_waveform_on_and_off_render_valid_audio_video(self):

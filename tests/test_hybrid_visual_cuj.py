@@ -146,8 +146,13 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
         self.assertTrue(self.paths.artifact_path("output/final.mp4").is_file())
         manifest = read_json(self.paths.artifact_path("output/final_manifest.json"))
         self.assertEqual(manifest["schema_version"], "story-auto-hybrid-final/1.0.0")
+        self.assertEqual(manifest["render_mode"], "hybrid_hook")
         self.assertEqual(manifest["source_video_audio"], "MUTED_BY_CONTRACT")
         self.assertTrue(manifest["audio_visualizer"]["enabled"])
+        self.assertEqual(len(manifest["streams"]["audio"]), 1)
+        self.assertAlmostEqual(manifest["duration_seconds"], float(read_json(self.paths.artifact_path("output/alignment.json"))["duration_seconds"]), delta=.12)
+        self.assertEqual(manifest["final_sha256"], sha256_file(self.paths.artifact_path("output/final.mp4")))
+        self.assertEqual(manifest["input_hashes"]["alignment"], sha256_file(self.paths.artifact_path("output/alignment.json")))
         kinds = [item["source_kind"] for item in manifest["timeline"]]
         self.assertEqual(kinds[:3], ["OPENING_VIDEO", "OPENING_VIDEO", "OPENING_VIDEO"])
         self.assertIn("STOCK_IMAGE_FALLBACK", kinds)
