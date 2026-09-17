@@ -588,6 +588,15 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Settings copy now states the real policy: Full Image is the only **global default**; Hybrid Visual and Full Video remain available **per video**. Old `Coming soon` wording was removed.
 - Qualification: Full Image + common render + Hybrid browser CUJ + release-mode suite = 40/40 PASS.
 
+### Provider / recovery matrix checkpoint (2026-09-18)
+
+- Recovery audit confirms the canonical safety boundaries remain intact across BytePlus, Elyum, Full Video continuity, Hybrid Opening, Flow recovery and Production Flow phases A–D.
+- Known provider job identity resumes/polls the same job; it does not authorize a replacement dispatch. An ambiguous create reuses only the durable client/task identity allowed by that provider contract.
+- Preview review, Keep/unlock, Kill, replacement authorization and ambiguous consequence reconciliation remain explicit owner boundaries. A confirmed Keep with acquisition failure can retry only clean-output acquisition; it cannot spend Keep twice.
+- New-run continuity cannot silently reuse a provider preview bound to a prior run. Cost/credit blocks remain pre-mutation and record zero provider submissions.
+- The broad recovery run initially exposed one **test isolation defect**, not a product failure: a Phase B unit test mocked production state but never created the project that `_run_visuals_for_production()` correctly loads first. The test now owns its real Full Image fixture and no longer depends on test order/ambient state.
+- Focused Phase B rerun: 16/16 PASS. Provider/recovery matrix after the fixture repair: 74/74 PASS.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

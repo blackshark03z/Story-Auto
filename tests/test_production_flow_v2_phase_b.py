@@ -165,6 +165,7 @@ class PhaseBQualityPolicyTests(unittest.TestCase):
     def test_visual_operation_compiles_auto_qc_correction_before_generation(self):
         with tempfile.TemporaryDirectory() as root:
             app = OperatorService(root)
+            _fixture(app, "prj_auto_recovery", "AUTO_ACCEPT", 1)
             state = {
                 "active_stage":"VISUALS",
                 "recovery":{"status":"RECOVERY_READY", "reason_code":"AUTO_QC_CORRECTIVE_REPLAN_READY",
