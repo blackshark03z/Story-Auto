@@ -95,6 +95,13 @@ class OperatorUiTests(unittest.TestCase):
         for token in ("choose_quality_policy", "data-quality-policy-surface", "data-project-qc-policy", "Use Automatic", "Use Manual review", "set_qc_policy", "This project action is not available"):
             self.assertIn(token,script)
 
+    def test_home_primary_action_reloads_workspace_before_dispatch(self):
+        script=(Path(__file__).parents[1]/"story_auto/ui/static/app.js").read_text(encoding="utf-8")
+        binding=script.split("function bindProjectCards() {",1)[1].split("async function showHome",1)[0]
+        self.assertIn("await openProject(projectId, false)",binding)
+        self.assertIn("state.snapshot.production.next_action?.action",binding)
+        self.assertNotIn("handleProjectAction(button.dataset.projectAction)",binding)
+
     def test_complete_cuj_has_single_rerender_action_and_repeat_use_cta(self):
         script=(Path(__file__).parents[1]/"story_auto/ui/static/app.js").read_text(encoding="utf-8")
         complete=script.split("function renderComplete(snapshot) {",1)[1].split("function bindDiagnosticsDisclosure()",1)[0]

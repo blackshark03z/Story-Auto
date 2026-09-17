@@ -131,8 +131,13 @@ class ProductionQueries:
         else:
             try:
                 state = read_json(state_path)
+                project_evidence = next((item for item in state.get("evidence", [])
+                                         if isinstance(item, dict) and item.get("path") == "project.json"), None)
+                if (state.get("schema_version") != PRODUCTION_STATE_SCHEMA_VERSION
+                        or project_evidence != self._signature(paths, "project.json")):
+                    raise ValueError("stale compact production state")
             except Exception:
-                # Legacy projects are reconciled only when opened/commanded; cards remain cheap.
+                # Legacy/stale projects are reconciled only when opened/commanded; cards remain cheap.
                 state = {"pipeline_status": "RECONCILE_REQUIRED", "active_stage": "SOURCE", "next_action": {"action": "run_to_final", "label": "Continue production"}, "final_output": {"present": (paths.root / "output" / "final.mp4").is_file()}}
         content = paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
         title = next((line[2:].strip() for line in content.splitlines() if line.startswith("# ") and line[2:].strip()), project_id)

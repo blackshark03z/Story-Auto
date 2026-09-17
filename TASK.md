@@ -622,6 +622,14 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Focused Production Flow A-D + UI + Hybrid CUJ regression after the root fix: 51 tests PASS, 2 system-Chrome-only UI tests skipped because Google Chrome is not installed; Playwright Hybrid browser CUJs PASS.
 - UI action dispatch is now fail-visible as a final CUJ safety net: if a future/legacy action ID bypasses the canonical mapper, the project page reports that the action is unavailable and opens project review instead of silently doing nothing. Canonical backend action IDs are regression-checked against UI handlers. Final Phase D + UI + Hybrid CUJ hardening gate: 24 tests PASS, 2 system-Chrome-only UI tests skipped; JavaScript syntax and `git diff --check` PASS.
 
+### Home-card freshness + full-regression checkpoint (2026-09-18)
+
+- Home project cards no longer execute the action ID captured from a possibly stale compact card. A primary click first opens/reconciles the current project workspace, then dispatches the fresh `production.next_action.action`; stale card state therefore cannot trigger a superseded production step.
+- Cheap project-list reads now trust compact `production_state.json` only when its schema is current and its persisted `project.json` evidence signature still matches the live project configuration. Otherwise the card reports `RECONCILE_REQUIRED` without opening the large generation manifest.
+- The Elyum Settings preflight test was updated to the current multi-key contract (`credential_slots`, per-model credential slot/balance/affordability) and now mocks `provider_keys()` as well as the client/status surface, so unit tests never depend on the owner's real DPAPI credential store.
+- Focused Phase A + UI + Elyum preflight + Hybrid CUJ qualification: 25 tests PASS, 2 system-Chrome-only UI tests skipped; JavaScript syntax and `git diff --check` PASS.
+- A repository-wide `unittest discover` qualification attempt ran 762 tests and exposed four errors. Three are test-tooling environment errors because `pytest` is not installed while three test modules import it. The fourth was the stale single-key Elyum test contract described above and is now repaired. This run is recorded as **NOT FULLY QUALIFIED**, not as a product regression pass; canonical historical full-suite evidence uses `python -m pytest -q`.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

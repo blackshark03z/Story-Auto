@@ -63,21 +63,25 @@ class ElyumProviderPreflightTests(unittest.TestCase):
     def test_settings_preflight_verifies_t2v_by_read_only_estimate(self):
         with tempfile.TemporaryDirectory() as root, \
              patch("story_auto.application.operator.ElyumSeedanceClient", _PreflightClient), \
+             patch("story_auto.application.operator.provider_keys", return_value=["fixture-key"]), \
              patch("story_auto.application.operator.provider_key_status", return_value={
                  "configured": True, "count": 1, "source": "DPAPI_STORE", "removable": True,
              }):
             result = OperatorService(root).test_elyum_connection()
         self.assertEqual(result["status"], "CONNECTED")
         self.assertTrue(result["live_verified"])
-        self.assertEqual(result["balance"], 150)
+        self.assertEqual(result["credential_slots"], [{"credential_slot": 1, "balance": 150}])
         self.assertEqual(result["seedance_t2v_models"], [
-            {"model_id": "seedance-2-5", "estimated_credits_6s": 54},
-            {"model_id": "seedance-2-fast", "estimated_credits_6s": 30},
+            {"model_id": "seedance-2-5", "estimated_credits_6s": 54, "credential_slot": 1,
+             "balance": 150, "affordable": True},
+            {"model_id": "seedance-2-fast", "estimated_credits_6s": 30, "credential_slot": 1,
+             "balance": 150, "affordable": True},
         ])
 
     def test_settings_preflight_fails_closed_without_verified_seedance_t2v(self):
         with tempfile.TemporaryDirectory() as root, \
              patch("story_auto.application.operator.ElyumSeedanceClient", _NoModelClient), \
+             patch("story_auto.application.operator.provider_keys", return_value=["fixture-key"]), \
              patch("story_auto.application.operator.provider_key_status", return_value={
                  "configured": True, "count": 1, "source": "DPAPI_STORE", "removable": True,
              }):

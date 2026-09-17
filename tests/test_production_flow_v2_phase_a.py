@@ -6,7 +6,7 @@ from pathlib import Path
 
 from story_auto.application.production_coordinator import ProductionCoordinator
 from story_auto.application.production_queries import ProductionQueries
-from story_auto.core.artifacts import atomic_write_json
+from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
 from story_auto.core.project.production_state import ProductionStateReconciler
 
@@ -63,6 +63,18 @@ class ProductionStateTests(unittest.TestCase):
             card = ProductionQueries(runtime).project_list_item(paths.project_id)
             self.assertEqual(card["project_id"], paths.project_id)
             self.assertEqual(card["production"]["pipeline_status"], "RECONCILE_REQUIRED")
+
+    def test_project_list_rejects_compact_state_after_project_settings_change(self):
+        with tempfile.TemporaryDirectory() as root:
+            paths, runtime = _project(root)
+            reconciler = ProductionStateReconciler()
+            reconciler.reconcile(paths, load_project(runtime, paths.project_id)[1])
+            project = read_json(paths.project_file)
+            project.setdefault("settings", {})["qc_policy"] = "MANUAL_REVIEW"
+            atomic_write_json(paths.project_file, project)
+            card = ProductionQueries(runtime).project_list_item(paths.project_id)
+            self.assertEqual(card["production"]["pipeline_status"], "RECONCILE_REQUIRED")
+            self.assertEqual(card["primary_action"]["action_id"], "run_to_final")
 
 
 class ProductionCoordinatorTests(unittest.TestCase):

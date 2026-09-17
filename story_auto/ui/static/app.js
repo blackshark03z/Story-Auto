@@ -124,8 +124,11 @@ function projectCard(project) {
 function bindProjectCards() {
   document.querySelectorAll('[data-open-project]').forEach(button => button.addEventListener('click', () => openProject(button.dataset.openProject)));
   document.querySelectorAll('[data-project-action]').forEach(button => button.addEventListener('click', async () => {
-    await openProject(button.dataset.project, false);
-    await handleProjectAction(button.dataset.projectAction);
+    const projectId = button.dataset.project;
+    await openProject(projectId, false);
+    if (state.project !== projectId || !state.snapshot?.production) return;
+    const freshAction = state.snapshot.production.next_action?.action || 'review_project';
+    await handleProjectAction(freshAction);
   }));
 }
 
