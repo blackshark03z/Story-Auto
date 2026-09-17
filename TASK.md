@@ -598,6 +598,14 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - The broad recovery run initially exposed one **test isolation defect**, not a product failure: a Phase B unit test mocked production state but never created the project that `_run_visuals_for_production()` correctly loads first. The test now owns its real Full Image fixture and no longer depends on test order/ambient state.
 - Focused Phase B rerun: 16/16 PASS. Provider/recovery matrix after the fixture repair: 74/74 PASS.
 
+### Active-mode offline CUJ matrix checkpoint (2026-09-18)
+
+- One provider-free/offline acceptance matrix now exercises the active delivery journeys together: Full Image, Production Coordinator A/B behavior, CUJ-enabled Hybrid including both Playwright browser journeys, Full Video two-shot recovery/final-render UAT, and release-mode availability/fail-closed rules.
+- Full Video UAT covers same-job reload/resume, explicit preview review, Keep, continuity handoff, pre-mutation insufficient-credit blocking, reject -> explicit Kill -> separately authorized replacement, and final render without live provider spend.
+- Hybrid covers `New Video -> Hybrid Visual` and `Opening import -> Continue -> COMPLETE -> Open final video` through the ordinary product surface.
+- Result: **46/46 PASS**. No live provider request, Keep/Kill consequence, or provider credit spend occurred in this matrix.
+- This checkpoint is evidence for `FORMAT + PIPELINE + CUJ SMOOTHNESS`; it does not promote deferred visual/aesthetic quality.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.
