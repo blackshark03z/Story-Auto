@@ -92,6 +92,55 @@ def _preview_valid(paths, generation: dict[str, Any]) -> bool:
     return metadata.get("sha256") == asset.get("sha256")
 
 
+def preflight_elyum_opening_slot(runtime_root: Path | str, project_id: str, slot_id: str, *,
+                                 client: ElyumSeedanceClient | None = None,
+                                 resolution: str = "480p") -> dict[str, Any]:
+    """Read-only per-slot Seedance model/cost preflight; never dispatches a render."""
+    runtime, paths = _project(runtime_root, project_id)
+    active = client or ElyumSeedanceClient()
+    readiness = active.readiness()
+    if readiness.get("status") != "READY":
+        raise ElyumSeedanceError(readiness.get("reason_code") or "CREDENTIAL_MISSING")
+    if resolution not in {"480p", "720p", "1080p"}:
+        raise ElyumSeedanceError("RESOLUTION_UNSUPPORTED", resolution)
+    with ProjectLock(paths.runtime, project_id):
+        manifest, slot = _load_slot(paths, project_id, slot_id)
+        prompt_sha = slot.get("prompt_sha256")
+        target = float(slot.get("duration_seconds") or 0.0)
+        provider_duration = int(math.ceil(target))
+        if not str(slot.get("prompt") or "").strip() or not 4 <= provider_duration <= 30:
+            raise ElyumSeedanceError("OPENING_API_SLOT_INVALID")
+    balance = active.account_balance()
+    models: list[dict[str, Any]] = []
+    for model_id in active.seedance_model_ids()[:12]:
+        try:
+            estimate = active.estimate_video(model=model_id, duration=provider_duration, mode="t2v", resolution=resolution)
+        except ElyumSeedanceError:
+            continue
+        models.append({
+            "model_id": model_id,
+            "estimate_credits": int(estimate),
+            "affordable": int(balance) >= int(estimate),
+        })
+    preflight = {
+        "status": "READY" if models else "NO_COMPATIBLE_MODEL",
+        "provider": PROVIDER_ID,
+        "resolution": resolution,
+        "provider_duration_seconds": provider_duration,
+        "prompt_sha256": prompt_sha,
+        "balance": int(balance),
+        "models": models,
+        "checked_at": _now(),
+    }
+    with ProjectLock(paths.runtime, project_id):
+        manifest, slot = _load_slot(paths, project_id, slot_id)
+        if slot.get("prompt_sha256") != prompt_sha or int(math.ceil(float(slot.get("duration_seconds") or 0.0))) != provider_duration:
+            raise ElyumSeedanceError("OPENING_PREFLIGHT_STALE")
+        slot["elyum_preflight"] = preflight
+        _persist(paths, manifest)
+    return _view(runtime.root, project_id)
+
+
 def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, slot_id: str, *, model: str,
                                    client: ElyumSeedanceClient | None = None, resolution: str = "480p",
                                    max_credits: int = 44, wait_seconds: int = 50,

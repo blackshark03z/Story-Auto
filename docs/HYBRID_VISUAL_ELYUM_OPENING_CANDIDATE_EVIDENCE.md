@@ -31,4 +31,4 @@ Settings `Test connection` now performs the promotion preflight through Story Au
 
 This removes the need for the Tech Lead to read an external key file directly. Production Elyum generation remains disabled until an authorized saved/environment credential actually returns at least one verified Seedance T2V model through this product surface.
 
-Current focused verification: 21 Elyum/provider tests PASS, Python/JS syntax PASS, and `SECURITY_GATE=PASS`. No live generation, Keep, Kill, or credit spend occurred in this qualification.
+Current product-surface qualification: 55 relevant tests PASS, including a real browser surface check for `Check Elyum options -> Generate preview -> Accept/Reject -> Keep/Kill` state visibility. Python/JS syntax PASS and `SECURITY_GATE=PASS`. No live generation, Keep, Kill, or credit spend occurred in this qualification. Elyum consequence controls are wired into the Hybrid Opening workspace, but live production use remains gated by read-only model/credential preflight and explicit owner actions.

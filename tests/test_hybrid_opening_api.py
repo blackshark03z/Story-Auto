@@ -185,10 +185,10 @@ class HybridOpeningApiTests(unittest.TestCase):
                         page.locator("#byteplusLiveStatus").get_by_text("Connected", exact=True).wait_for(timeout=5000)
                         page.locator("#homeNav").click()
                         page.locator('[data-open-project="prj_h3_browser"]').click()
-                        page.get_by_role("button", name="Generate with API", exact=True).first.wait_for(timeout=5000)
-                        self.assertGreaterEqual(page.get_by_role("button", name="Generate with API", exact=True).count(), 1)
+                        page.get_by_role("button", name="Generate with BytePlus", exact=True).first.wait_for(timeout=5000)
+                        self.assertGreaterEqual(page.get_by_role("button", name="Generate with BytePlus", exact=True).count(), 1)
                         self.assertGreaterEqual(page.get_by_text("Import clip", exact=True).count(), 1)
-                        page.get_by_role("button", name="Generate with API", exact=True).first.click()
+                        page.get_by_role("button", name="Generate with BytePlus", exact=True).first.click()
                         page.wait_for_timeout(300)
                         self.assertTrue(generate_mock.called)
                         args = generate_mock.call_args.args

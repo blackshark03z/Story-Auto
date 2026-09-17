@@ -248,23 +248,66 @@ function openingBuilderSurface(snapshot) {
   const opening = snapshot.opening_builder;
   if (!opening) return '';
   if (opening.status === 'NOT_CONFIGURED') {
-    return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder</h2><p>The manual opening contract has not been prepared for this project yet. If canonical opening video requests already exist, Story Auto can convert their exact prompts into manual slots without calling a provider.</p></div><span class="status-chip">NOT CONFIGURED</span></div><div class="button-row"><button data-opening-prepare type="button">Prepare opening prompts</button></div><small>Hybrid Visual remains release-disabled; this action only materializes the local prompt/slot contract.</small></section>`;
+    return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder</h2><p>The manual opening contract has not been prepared for this project yet. If canonical opening video requests already exist, Story Auto can convert their exact prompts into manual slots without calling a provider.</p></div><span class="status-chip">NOT CONFIGURED</span></div><div class="button-row"><button data-opening-prepare type="button">Prepare opening prompts</button></div><small>This action only materializes the local prompt/slot contract.</small></section>`;
   }
   const target = opening.render_target || {};
-  const apiProvider = snapshot.opening_api_provider || {};
+  const providers = snapshot.opening_api_providers || {byteplus:snapshot.opening_api_provider || {},elyum:{}};
+  const byteplus = providers.byteplus || {};
+  const elyum = providers.elyum || {};
   const slots = (opening.slots || []).map(slot => {
     const ready = slot.status === 'READY' && slot.asset_ready;
     const api = slot.api_generation || {};
+    const providerId = api.provider || '';
     const apiState = api.status || 'NOT_STARTED';
-    const apiUsable = apiProvider.status === 'READY' && !['AMBIGUOUS','FAILED_TERMINAL'].includes(apiState);
-    const apiLabel = api.provider_task_id || apiState === 'GENERATING' || apiState === 'SUBMITTED' ? 'Resume API generation' : 'Generate with API';
-    const apiButton = !ready && apiUsable ? `<button data-opening-api="${esc(slot.slot_id)}" type="button">${apiLabel}</button>` : '';
-    const apiNote = !ready && apiState === 'AMBIGUOUS' ? '<small>API submission is ambiguous. Story Auto will not submit again automatically; import a clip manually for this slot.</small>' : (!ready && apiState === 'FAILED_TERMINAL' ? '<small>API task ended unsuccessfully. Import a clip manually or replace the opening plan.</small>' : (!ready && apiProvider.status !== 'READY' ? '<small>Opening API is not configured. Manual import remains available.</small>' : ''));
+    const noProvider = !providerId;
+    const byteplusActive = providerId === 'byteplus_seedance';
+    const elyumActive = providerId === 'elyum_seedance';
+    const preflight = slot.elyum_preflight || {};
+    const elyumModels = Array.isArray(preflight.models) ? preflight.models : [];
+    const affordableModels = elyumModels.filter(item => item.affordable === true);
+    let providerControls = '';
+    if (!ready && noProvider) {
+      if (byteplus.status === 'READY') providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Generate with BytePlus</button>`;
+      if (elyum.configured) {
+        if (preflight.status === 'READY' && elyumModels.length) {
+          const options = elyumModels.map(item => `<option value="${esc(item.model_id)}" ${item.affordable ? '' : 'disabled'}>${esc(item.model_id)} · ${esc(item.estimate_credits)} credits${item.affordable ? '' : ' · insufficient balance'}</option>`).join('');
+          providerControls += `<select data-opening-elyum-model="${esc(slot.slot_id)}">${options}</select>`;
+          providerControls += affordableModels.length ? `<button data-opening-elyum-generate="${esc(slot.slot_id)}" type="button">Generate Elyum preview</button>` : '';
+        } else {
+          providerControls += `<button data-opening-elyum-preflight="${esc(slot.slot_id)}" type="button">Check Elyum options</button>`;
+        }
+      }
+    } else if (!ready && byteplusActive && !['AMBIGUOUS','FAILED_TERMINAL'].includes(apiState)) {
+      providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Resume BytePlus generation</button>`;
+    } else if (!ready && elyumActive) {
+      const model = api.provider_model || '';
+      if (['SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED'].includes(apiState)) {
+        providerControls += `<button data-opening-elyum-resume="${esc(slot.slot_id)}" data-model="${esc(model)}" type="button">${apiState === 'AMBIGUOUS' ? 'Reconcile same Elyum request' : 'Resume Elyum preview'}</button>`;
+      } else if (apiState === 'PREVIEW_READY') {
+        providerControls += `<button data-opening-elyum-accept="${esc(slot.slot_id)}" type="button">Accept preview</button><button class="button-quiet" data-opening-elyum-reject="${esc(slot.slot_id)}" type="button">Reject preview</button>`;
+      } else if (apiState === 'KEEP_REQUIRED') {
+        providerControls += `<button class="button-primary" data-opening-elyum-keep="${esc(slot.slot_id)}" data-credits="${esc(api.unlock_credits ?? '')}" type="button">Keep & use${api.unlock_credits != null ? ` · ${esc(api.unlock_credits)} credits` : ''}</button>`;
+      } else if (apiState === 'PREVIEW_REJECTED') {
+        providerControls += `<button data-opening-elyum-kill="${esc(slot.slot_id)}" type="button">Kill & release hold</button>`;
+      }
+    }
+    const unresolvedElyum = elyumActive && ['SUBMITTED','GENERATING','WAIT_UNAVAILABLE','AMBIGUOUS','PREVIEW_READY','KEEP_REQUIRED','PREVIEW_REJECTED','KEEP_DISPATCHING','KILL_DISPATCHING','KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState);
+    const importButton = unresolvedElyum ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
+    let apiNote = '';
+    if (!ready && noProvider && byteplus.status !== 'READY' && !elyum.configured) apiNote = '<small>No video API is configured. Manual import remains available.</small>';
+    if (!ready && preflight.status === 'READY' && !affordableModels.length) apiNote = `<small>Elyum models are available, but the current balance (${esc(preflight.balance)}) is below every quoted option for this slot.</small>`;
+    if (elyumActive && apiState === 'PREVIEW_READY') apiNote = '<small>Locked Elyum preview. It is not an Opening asset yet: review it, then Keep to spend and download the original.</small>';
+    if (elyumActive && apiState === 'KEEP_REQUIRED') apiNote = '<small>Preview accepted. Keep is the Elyum spend boundary; Story Auto will not call it automatically.</small>';
+    if (elyumActive && apiState === 'PREVIEW_REJECTED') apiNote = '<small>Preview rejected. Kill releases the held credits; manual import reopens after the consequence is resolved.</small>';
+    if (elyumActive && ['KEEP_AMBIGUOUS','KILL_AMBIGUOUS'].includes(apiState)) apiNote = '<small>Provider consequence outcome is ambiguous. Story Auto will not retry automatically or switch providers.</small>';
+    if (byteplusActive && apiState === 'AMBIGUOUS') apiNote = '<small>BytePlus submission is ambiguous. Story Auto will not submit or switch provider automatically.</small>';
+    const lockedPreview = !ready && elyumActive && api.preview_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,api.preview_asset.path)}" aria-label="${esc(slot.slot_id)} Elyum locked preview"></video>` : '';
     const preview = ready && slot.normalized_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,slot.normalized_asset.path)}" aria-label="${esc(slot.slot_id)} normalized opening clip"></video>` : '';
-    const source = slot.source_asset ? `<small>${apiState === 'SUCCEEDED' ? 'Generated by BytePlus API' : 'Imported'} ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip bound yet.</small>';
-    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${apiButton}<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label></div>${apiNote}${source}${preview}</article>`;
+    const sourceKind = slot.source_asset?.provider === 'elyum_seedance' ? 'Generated by Elyum' : slot.source_asset?.provider === 'byteplus_seedance' || (byteplusActive && apiState === 'SUCCEEDED') ? 'Generated by BytePlus' : 'Imported';
+    const source = slot.source_asset ? `<small>${sourceKind} · ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip bound yet.</small>';
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${apiNote}${source}${lockedPreview}${preview}</article>`;
   }).join('');
-  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder Ã‚Â· ${esc(opening.opening_duration_seconds)}s</h2><p>Generate these clips externally or later by API, then import each result into its exact slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}Ãƒâ€”${esc(target.height || '?')} Ã‚Â· ${esc(target.fps || '?')} fps Ã‚Â· silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Choose BytePlus, Elyum preview/Keep, or manual import per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
 }
 
 function hybridBodySurface(snapshot) {
@@ -336,6 +379,34 @@ function bindOpeningBuilderControls() {
   }));
   document.querySelectorAll('[data-opening-api]').forEach(button => button.addEventListener('click', async () => {
     await runAction('generate_opening_api',`Generating ${button.dataset.openingApi} with BytePlus API...`,{slot_id:button.dataset.openingApi});
+  }));
+  document.querySelectorAll('[data-opening-elyum-preflight]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('preflight_elyum_opening',`Checking Elyum models and cost for ${button.dataset.openingElyumPreflight}...`,{slot_id:button.dataset.openingElyumPreflight});
+  }));
+  document.querySelectorAll('[data-opening-elyum-generate]').forEach(button => button.addEventListener('click', async () => {
+    const slotId=button.dataset.openingElyumGenerate;
+    const selector=[...document.querySelectorAll('[data-opening-elyum-model]')].find(item => item.dataset.openingElyumModel === slotId);
+    const modelId=selector?.value || '';
+    if (!modelId) { toast('Choose an affordable Elyum model first.',true); return; }
+    await runAction('generate_elyum_opening',`Generating locked Elyum preview for ${slotId}...`,{slot_id:slotId,model_id:modelId});
+  }));
+  document.querySelectorAll('[data-opening-elyum-resume]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('generate_elyum_opening',`Resuming exact Elyum request for ${button.dataset.openingElyumResume}...`,{slot_id:button.dataset.openingElyumResume,model_id:button.dataset.model || ''});
+  }));
+  document.querySelectorAll('[data-opening-elyum-accept]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('accept_elyum_opening',`Accepting locked preview for ${button.dataset.openingElyumAccept}...`,{slot_id:button.dataset.openingElyumAccept});
+  }));
+  document.querySelectorAll('[data-opening-elyum-reject]').forEach(button => button.addEventListener('click', async () => {
+    await runAction('reject_elyum_opening',`Rejecting locked preview for ${button.dataset.openingElyumReject}...`,{slot_id:button.dataset.openingElyumReject});
+  }));
+  document.querySelectorAll('[data-opening-elyum-keep]').forEach(button => button.addEventListener('click', async () => {
+    const credits=button.dataset.credits ? ` (${button.dataset.credits} credits)` : '';
+    if (!window.confirm(`Keep this Elyum preview${credits} and use it in the Opening? This is the spend action.`)) return;
+    await runAction('keep_elyum_opening',`Keeping and acquiring ${button.dataset.openingElyumKeep}...`,{slot_id:button.dataset.openingElyumKeep});
+  }));
+  document.querySelectorAll('[data-opening-elyum-kill]').forEach(button => button.addEventListener('click', async () => {
+    if (!window.confirm('Kill this Elyum preview and release its held credits? This may use the account kill allowance.')) return;
+    await runAction('kill_elyum_opening',`Killing rejected preview for ${button.dataset.openingElyumKill}...`,{slot_id:button.dataset.openingElyumKill});
   }));
   document.querySelectorAll('[data-opening-import]').forEach(input => input.addEventListener('change', async event => {
     const file = event.target.files?.[0]; if (!file) return;

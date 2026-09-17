@@ -57,6 +57,11 @@ from story_auto.providers.byteplus_seedance import (BytePlusSeedanceClient, Byte
                                                   generate_opening_slot_api, seedance_readiness)
 from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeedanceError,
                                                 authorize_elyum_replacement as authorize_elyum_locked_replacement,
+                                                generate_elyum_opening_preview,
+                                                keep_elyum_opening_preview,
+                                                kill_elyum_opening_preview,
+                                                preflight_elyum_opening_slot,
+                                                review_elyum_opening_preview,
                                                 kill_elyum_preview as kill_elyum_locked_preview,
                                                 keep_elyum_preview as keep_elyum_locked_preview,
                                                 review_elyum_preview as review_elyum_locked_preview)
@@ -352,6 +357,7 @@ class OperatorService:
             "hybrid_body":hybrid_body_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "hybrid_preview":hybrid_preview_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "opening_api_provider":seedance_readiness() if config.render_mode=="hybrid_hook" else None,
+            "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status()} if config.render_mode=="hybrid_hook" else None),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
 
@@ -420,6 +426,38 @@ class OperatorService:
 
     def generate_opening_api(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return generate_opening_slot_api(self.runtime.root, project_id, slot_id)
+
+    def preflight_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
+        return preflight_elyum_opening_slot(self.runtime.root, project_id, slot_id)
+
+    def generate_elyum_opening(self, project_id: str, *, slot_id: str, model_id: str) -> dict[str, Any]:
+        view = hybrid_opening_view(self.runtime.root, project_id) or {}
+        slot = next((item for item in view.get("slots", []) if item.get("slot_id") == slot_id), None)
+        preflight = slot.get("elyum_preflight") if isinstance(slot, dict) else None
+        if not isinstance(preflight, dict) or preflight.get("status") != "READY":
+            raise OperatorServiceError("ELYUM_OPENING_PREFLIGHT_REQUIRED")
+        choice = next((item for item in preflight.get("models", []) if item.get("model_id") == model_id), None)
+        if not isinstance(choice, dict):
+            raise OperatorServiceError("ELYUM_OPENING_MODEL_NOT_VERIFIED")
+        if choice.get("affordable") is not True:
+            raise OperatorServiceError("ELYUM_OPENING_INSUFFICIENT_CREDITS")
+        return generate_elyum_opening_preview(
+            self.runtime.root, project_id, slot_id, model=model_id,
+            resolution=str(preflight.get("resolution") or "480p"),
+            max_credits=int(choice.get("estimate_credits") or 0),
+        )
+
+    def review_elyum_opening(self, project_id: str, *, slot_id: str, decision: str) -> dict[str, Any]:
+        label = str(decision or "").upper()
+        reason = "Owner accepted locked Opening preview" if label == "ACCEPT" else "Owner rejected locked Opening preview"
+        return review_elyum_opening_preview(self.runtime.root, project_id, slot_id, decision=label, reason=reason)
+
+    def keep_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
+        return keep_elyum_opening_preview(self.runtime.root, project_id, slot_id, confirm_spend=True)
+
+    def kill_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
+        return kill_elyum_opening_preview(self.runtime.root, project_id, slot_id,
+                                          reason="Owner rejected locked Opening preview", confirm_kill=True)
     def inspect_imports(self, *, source_mode: str, imported_audio: dict[str, Any] | None,
                         imported_srt: dict[str, Any] | None) -> dict[str, Any]:
         """Return the canonical readiness result for untrusted browser uploads."""
@@ -1047,6 +1085,7 @@ class OperatorService:
             "removable": bool(credential["removable"]),
             "provider": "Elyum",
             "transport": "MCP_STREAMABLE_HTTP",
+            "provider_id": "elyum_seedance",
             "live_verified": False,
         }
 

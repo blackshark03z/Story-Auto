@@ -572,6 +572,6 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Provider registry checkpoint `f5254f3` remains authoritative for capability-first routing and pre-dispatch-only provider switching.
 - Elyum Hybrid Opening adapter now has engineering coverage for T2V preflight, deterministic clientRef replay, locked preview review, explicit Keep/Kill consequence boundaries, successful bind into the canonical Opening slot, manual fallback, and cost no-dispatch.
 - Elyum credentials reuse Story Auto Windows DPAPI + environment override and Settings Save/Test/Remove; Test is read-only.
-- Evidence: `docs/HYBRID_VISUAL_ELYUM_OPENING_CANDIDATE_EVIDENCE.md`. Targeted/regression: 28 tests PASS; DPAPI fake-key round-trip PASS.
-- Status: **ENGINEERING_READY / PRODUCT_MODEL_PREFLIGHT_IMPLEMENTED / PRODUCTION_ROUTING_DISABLED**. Settings `Test connection` now reads the live model catalog and verifies exact Seedance T2V ids by read-only 6s/480p estimates; live Generate/Keep/Kill stays disabled until an authorized credential returns at least one verified model.
-- Model-preflight qualification: 21 Elyum/provider tests PASS, Python/JS syntax PASS, `SECURITY_GATE=PASS`; no provider generation/spend occurred.
+- Evidence: `docs/HYBRID_VISUAL_ELYUM_OPENING_CANDIDATE_EVIDENCE.md`. Backend consequence lifecycle + browser product surface are covered; DPAPI fake-key round-trip remains PASS.
+- Status: **PRODUCT_SURFACE_WIRED / LIVE_PROVIDER_GATED**. Hybrid Opening now exposes Elyum per-slot preflight, model/cost choice, locked-preview review, explicit Keep spend, explicit Kill release, and same-request reconciliation. Manual import remains available whenever no unresolved provider consequence exists.
+- Product-surface qualification: 55 relevant tests PASS, including browser state visibility; Python/JS syntax PASS and `SECURITY_GATE=PASS`. No live provider generation/Keep/Kill or credit spend occurred in this qualification.
