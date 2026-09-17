@@ -17,14 +17,14 @@ Current CADS guidance requires durable decisions to be phrased around capabiliti
 4. **Cross-provider fallback is allowed only before confirmed or ambiguous dispatch.** `NOT_CONFIGURED`, capability mismatch, preflight failure and confirmed-not-dispatched may choose another provider. Ambiguous/confirmed dispatch must reconcile the same provider/effect identity first.
 5. **Elyum keeps its own consequence lifecycle.** Preview creation/hold, Owner review, `Keep` spend and `Kill` release are not flattened into the BytePlus async-task lifecycle.
 6. **Manual external generation remains universal fallback** for Hybrid Opening and converges into the same normalized slot contract.
-7. **Dola is experimental/session-based until a stable official developer contract is qualified.** It may later implement the same provider contract, but cookie/session automation must stay isolated from core planning/rendering and cannot be a stable dependency yet.
+7. **Dola is experimental and official-contract-only until a stable developer API is qualified.** Story Auto must not implement Dola by reverse-engineering private/internal endpoints or importing browser/app cookies into an unofficial API path. Dola may later implement the same provider contract only through an official supported API contract; until then, users may still use Dola through the existing manual external-generation path.
 8. Provider credentials use the existing Story Auto credential boundary; secrets never belong in project JSON, logs, diagnostics or committed source.
 
 ## Initial provider tiers
 
 - Tier A: `byteplus_seedance` — direct documented async API, production baseline.
 - Tier A: `elyum_seedance` — MCP/API provider with estimate/balance and Keep/Kill consequence lifecycle; promote incrementally from Goal 54 evidence.
-- Tier B: `dola_session` — experimental session provider, not production-routed.
+- Tier B: `dola_official` — experimental placeholder for a future official Dola API contract; not production-routed. Unofficial cookie/internal-endpoint adapters are explicitly excluded.
 - Tier C: `manual_external` — always-available acquisition fallback.
 
 ## Behavioral/System Flow invariant
@@ -35,4 +35,4 @@ Provider-specific state may be richer internally, but downstream consumers recei
 
 ## Revisit triggers
 
-Revisit routing policy when measured provider success/cost/latency/quality evidence is sufficient to support a smart router; when Dola exposes a stable official API contract; or when a provider changes billing/retry semantics materially.
+Revisit routing policy when measured provider success/cost/latency/quality evidence is sufficient to support a smart router; when Dola exposes and documents a stable official API contract that can be qualified without reverse engineering; or when a provider changes billing/retry semantics materially.

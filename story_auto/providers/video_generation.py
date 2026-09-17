@@ -43,15 +43,15 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         "production_routed": False,
         "experimental": False,
     },
-    "dola_session": {
-        "provider_id": "dola_session",
+    "dola_official": {
+        "provider_id": "dola_official",
         "display_name": "Dola",
         "tier": "B",
-        "transport": "SESSION_BASED_EXPERIMENTAL",
+        "transport": "OFFICIAL_API_NOT_QUALIFIED",
         "model_family": "seedance",
-        "models": [],
+        "models": ["2.5"],
         "modes": ["T2V", "I2V"],
-        "lifecycle": "UNQUALIFIED_SESSION",
+        "lifecycle": "OFFICIAL_CONTRACT_REQUIRED",
         "consequence_model": "UNKNOWN_UNTIL_QUALIFIED",
         "production_routed": False,
         "experimental": True,
@@ -93,15 +93,15 @@ def _runtime_readiness(provider_id: str) -> dict[str, Any]:
         return dict(ElyumSeedanceClient().readiness())
     if provider_id == "manual_external":
         return {"status": "READY", "reason_code": None}
-    if provider_id == "dola_session":
-        return {"status": "EXPERIMENTAL_NOT_IMPLEMENTED", "reason_code": "SESSION_ADAPTER_NOT_QUALIFIED"}
+    if provider_id == "dola_official":
+        return {"status": "EXPERIMENTAL_NOT_IMPLEMENTED", "reason_code": "OFFICIAL_API_CONTRACT_NOT_QUALIFIED"}
     raise ValueError("unknown video provider")
 
 
 def video_provider_catalog() -> list[dict[str, Any]]:
     """Return a secret-free capability/readiness catalog for product surfaces."""
     rows: list[dict[str, Any]] = []
-    for provider_id in ("byteplus_seedance", "elyum_seedance", "dola_session", "manual_external"):
+    for provider_id in ("byteplus_seedance", "elyum_seedance", "dola_official", "manual_external"):
         row = provider_descriptor(provider_id)
         readiness = _runtime_readiness(provider_id)
         row["status"] = readiness.get("status", "UNKNOWN")

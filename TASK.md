@@ -575,3 +575,11 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Evidence: `docs/HYBRID_VISUAL_ELYUM_OPENING_CANDIDATE_EVIDENCE.md`. Backend consequence lifecycle + browser product surface are covered; DPAPI fake-key round-trip remains PASS.
 - Status: **PRODUCT_SURFACE_WIRED / LIVE_PROVIDER_GATED**. Hybrid Opening now exposes Elyum per-slot preflight, model/cost choice, locked-preview review, explicit Keep spend, explicit Kill release, and same-request reconciliation. Manual import remains available whenever no unresolved provider consequence exists.
 - Product-surface qualification: 55 relevant tests PASS, including browser state visibility; Python/JS syntax PASS and `SECURITY_GATE=PASS`. No live provider generation/Keep/Kill or credit spend occurred in this qualification.
+
+### Dola provider contract research (2026-09-17)
+
+- Research SoT: `docs/DOLA_PROVIDER_RESEARCH_2026-09-17.md`.
+- Dola currently exposes Seedance 2.5 browser generation with short 4–15s clips and free/paid credits, but no stable provider-authored developer API contract was found in the accepted research surface.
+- Public Dola Terms prohibit reverse engineering. The known cookie client explicitly reverse-engineers Android/web-session behavior, so Story Auto will **not** implement that private/internal route as a product adapter.
+- Registry identity changed from `dola_session` to `dola_official`: experimental, `OFFICIAL_API_CONTRACT_NOT_QUALIFIED`, not production-routed.
+- Until an official supported API is qualified, Dola remains available through the existing Manual external generation → Import clip journey.

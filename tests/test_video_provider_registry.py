@@ -29,11 +29,13 @@ class VideoProviderRegistryTests(unittest.TestCase):
     def test_catalog_exposes_tiers_without_secret_material(self):
         catalog = video_provider_catalog()
         ids = [row["provider_id"] for row in catalog]
-        self.assertEqual(ids, ["byteplus_seedance", "elyum_seedance", "dola_session", "manual_external"])
+        self.assertEqual(ids, ["byteplus_seedance", "elyum_seedance", "dola_official", "manual_external"])
         by_id = {row["provider_id"]: row for row in catalog}
         self.assertTrue(by_id["byteplus_seedance"]["production_routed"])
         self.assertFalse(by_id["elyum_seedance"]["production_routed"])
-        self.assertTrue(by_id["dola_session"]["experimental"])
+        self.assertTrue(by_id["dola_official"]["experimental"])
+        self.assertEqual(by_id["dola_official"]["reason_code"], "OFFICIAL_API_CONTRACT_NOT_QUALIFIED")
+        self.assertNotEqual(by_id["dola_official"]["transport"], "SESSION_BASED_EXPERIMENTAL")
         self.assertEqual(by_id["manual_external"]["status"], "READY")
         serialized = json.dumps(catalog).lower()
         self.assertNotIn("api_key", serialized)
