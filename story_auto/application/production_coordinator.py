@@ -29,6 +29,18 @@ class ProductionCoordinator:
         production progress or a new canonical recovery boundary can authorize
         another operation in this invocation.
         """
+        hybrid = state.get("hybrid", {}) if isinstance(state.get("hybrid"), dict) else {}
+        readiness = hybrid.get("readiness", {}) if isinstance(hybrid.get("readiness"), dict) else {}
+        missing = readiness.get("missing", []) if isinstance(readiness.get("missing"), list) else []
+        hybrid_progress = {
+            "ready": readiness.get("ready"),
+            "missing": sorted(
+                (str(item.get("slot_id") or ""), str(item.get("reason") or ""))
+                for item in missing if isinstance(item, dict)
+            ),
+            "missing_body_images": sorted(str(item) for item in hybrid.get("missing_body_images", []) if item is not None),
+            "missing_stock": sorted(str(item) for item in hybrid.get("missing_stock", []) if item is not None),
+        } if hybrid else None
         meaningful = {
             "pipeline_status": state.get("pipeline_status"),
             "active_stage": state.get("active_stage"),
@@ -40,6 +52,7 @@ class ProductionCoordinator:
             "evidence": state.get("evidence"),
             "evidence_fingerprint": state.get("evidence_fingerprint"),
             "flow": state.get("flow"),
+            "hybrid_progress": hybrid_progress,
         }
         return json.dumps(meaningful, sort_keys=True, default=str, separators=(",", ":"))
 

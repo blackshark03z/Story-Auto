@@ -106,6 +106,32 @@ class ProductionCoordinatorTests(unittest.TestCase):
         self.assertEqual((result["outcome"], result["reason_code"], result["stage"], result["operation"], calls),
                          ("SAFETY_BLOCKED", "STAGE_NO_PROGRESS", "VISUALS", "visuals", ["visuals"]))
 
+    def test_hybrid_partial_slot_progress_does_not_trigger_false_no_progress(self):
+        def hybrid_state(missing_ids):
+            state = _state("VISUALS")
+            state["hybrid"] = {
+                "readiness": {"ready": False, "missing": [
+                    {"slot_id": slot_id, "reason": "IMAGE_REQUIRED"} for slot_id in missing_ids
+                ]},
+                "missing_body_images": list(missing_ids),
+                "missing_stock": [],
+            }
+            return state
+
+        states = iter([
+            hybrid_state(["BODY_0001", "BODY_0002"]),
+            hybrid_state(["BODY_0002"]),
+            _state("RENDER", "COMPLETE"),
+        ])
+        calls: list[str] = []
+        coordinator = ProductionCoordinator(
+            lambda _: next(states),
+            {"visuals": lambda _: calls.append("visuals")},
+        )
+        result = coordinator.run_until("prj_hybrid_partial")
+        self.assertEqual(result["outcome"], "FINAL_VIDEO_COMPLETE")
+        self.assertEqual(calls, ["visuals", "visuals"])
+
 
 if __name__ == "__main__":
     unittest.main()

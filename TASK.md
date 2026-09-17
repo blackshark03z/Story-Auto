@@ -571,6 +571,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Verification: `tests.test_ui + tests.test_application` = 26 tests PASS (2 environment-specific system-Chrome browser tests skipped); Hybrid canonical CUJ = 4/4 PASS including Playwright `New video -> Hybrid Visual` and `Import opening -> Continue -> COMPLETE -> Open final video`; JavaScript syntax and `git diff --check` PASS.
 - No provider, render-format, quality-policy, or generation semantics changed in this slice.
 
+### Coordinator Hybrid progress checkpoint (2026-09-18)
+
+- CUJ audit found that the generic no-progress fingerprint did not include Hybrid slot readiness. A VISUALS pass could therefore complete a subset of Hybrid assets, remain in the same outer stage, and be falsely reported as `STAGE_NO_PROGRESS`.
+- The coordinator fingerprint now includes only compact product-significant Hybrid progress: readiness, missing `(slot_id, reason)` pairs, missing body-image slots, and missing stock slots. It does not include large manifests, timestamps, secrets, or mutable provider payloads.
+- The original fail-closed guard remains intact: a genuinely unchanged VISUALS state still stops after one operation with `STAGE_NO_PROGRESS`.
+- Regression proves partial slot progress can continue safely to final while unchanged-state protection still fires. Coordinator + canonical Hybrid CUJ qualification: 12/12 PASS including both Playwright browser CUJs.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.
