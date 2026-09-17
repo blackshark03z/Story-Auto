@@ -16,6 +16,10 @@ from story_auto.providers.tts.kokoro_local import KokoroReadiness
 
 
 class OperatorApplicationTests(unittest.TestCase):
+    def test_word_count_handles_unicode_words_without_encoding_artifacts(self):
+        from story_auto.application.operator import _word_count
+        self.assertEqual(_word_count("Một câu chuyện Việt Nam — déjà vu, l'été."), 8)
+
     def _owner_acceptance_fixture(self, app, project_id, count=1):
         app.create_project(project_id=project_id,render_mode="full_image",settings={"qc_policy":"MANUAL_REVIEW"},content="# Owner acceptance\n\n## Narration\n\nUse existing visuals.\n")
         paths,_=app._project(project_id)

@@ -90,6 +90,16 @@ class OperatorUiTests(unittest.TestCase):
         self.assertIn("void runAction('run_to_final'",success)
         self.assertIn("wizard.creating = false; showWizardError",script)
 
+    def test_complete_cuj_has_single_rerender_action_and_repeat_use_cta(self):
+        script=(Path(__file__).parents[1]/"story_auto/ui/static/app.js").read_text(encoding="utf-8")
+        complete=script.split("function renderComplete(snapshot) {",1)[1].split("function bindDiagnosticsDisclosure()",1)[0]
+        self.assertEqual(complete.count("$('#renderAgain')"),1)
+        self.assertIn('id="newVideoAfterComplete"',complete)
+        self.assertIn("Create another video",complete)
+        self.assertIn("$('#newVideoAfterComplete')?.addEventListener('click', openWizard)",complete)
+        for marker in ("Ã¢", "Ã‚", "Ã¯", "Ãƒ"):
+            self.assertNotIn(marker,script)
+
     def test_new_video_browser_creation_transitions_while_home_refresh_is_slow(self):
         chrome=Path(os.environ.get("PROGRAMFILES(X86)",r"C:\\Program Files (x86)"))/"Google/Chrome/Application/chrome.exe"
         if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the focused UI regression")

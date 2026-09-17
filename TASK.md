@@ -562,6 +562,15 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Product HEAD after QV2-A: `001253f0924d025b3903657064ea5b17c6dc314e`; runtime Xianxia Hybrid UAT PASS at 42.583333 s. This proves technical renderability only, not visual-quality acceptance.
 - Decision policy is updated in `docs/decisions/0005-product-journey-and-hybrid-flow-acceptance.md`.
 
+### CUJ completion / repeat-use checkpoint (2026-09-18)
+
+- Audit found a real COMPLETE-screen defect: `Render again` had two click handlers and could attempt the same rerender command twice from one owner click. The duplicate binding is removed; one click now owns one rerender action.
+- COMPLETE now exposes an explicit `Create another video` CTA that returns directly to the canonical New Video wizard, so repeat daily use does not dead-end at the finished artifact.
+- User-visible mojibake on project/status/provider/wizard surfaces was repaired; the UI regression now rejects common mojibake markers.
+- Narration word-count regex was repaired from an encoding-corrupted character class to Unicode `\w` plus apostrophe/hyphen, preserving multilingual duration estimates without junk codepoints.
+- Verification: `tests.test_ui + tests.test_application` = 26 tests PASS (2 environment-specific system-Chrome browser tests skipped); Hybrid canonical CUJ = 4/4 PASS including Playwright `New video -> Hybrid Visual` and `Import opening -> Continue -> COMPLETE -> Open final video`; JavaScript syntax and `git diff --check` PASS.
+- No provider, render-format, quality-policy, or generation semantics changed in this slice.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

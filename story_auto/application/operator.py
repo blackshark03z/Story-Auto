@@ -217,7 +217,7 @@ def _updated_at(paths) -> str:
 
 
 def _word_count(narration: str) -> int:
-    return len(re.findall(r"\b[\wÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢'-]+\b", narration, flags=re.UNICODE))
+    return len(re.findall(r"\b[\w'-]+\b", narration, flags=re.UNICODE))
 
 
 def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any]:
@@ -371,7 +371,7 @@ class OperatorService:
                 "style":config.settings.get("ui",{}).get("production_style", "Natural cinematic"),
                 "quality":"Automatic" if production["quality"]["policy"]==AUTO_ACCEPT else "Manual" if production["quality"]["policy"]==MANUAL_REVIEW else "AI review",
                 "waveform":"On" if full_image.get("audio_visualizer",True) else "Off",
-                "resolution":f"{render.get('width','Default')} ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â {render.get('height','Default')}",
+                "resolution":f"{render.get('width','Default')} × {render.get('height','Default')}",
             },
             "final_path":production["final_output"]["path"],
             "flow":production.get("flow"),
@@ -712,9 +712,9 @@ class OperatorService:
         if artifacts["generation_requests.json"]:
             ratio=(finished_visuals/total_visuals) if total_visuals else 0
             progress,stage=45+round(35*ratio),"Create visuals"
-            activity=f"Creating visuals ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
+            activity=f"Creating visuals — {finished_visuals} of {total_visuals} scenes" if total_visuals else "Visuals are ready to create."
         if counts.get("QC_PENDING"):
-            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
+            progress,stage,activity=max(progress,78),"Quality check",f"Checking quality — {counts['QC_PENDING']} scene{'s' if counts['QC_PENDING']!=1 else ''} need review"
         if artifacts["render_plan.json"]:
             progress,stage,activity=max(progress,88),"Render","Rendering the final video."
         if artifacts["final.mp4"] and not render_stale:
@@ -1305,11 +1305,11 @@ class OperatorService:
         if provider=="kokoro_local":
             kokoro_readiness=KokoroLocalProvider().readiness(kokoro_settings)
             voice_row={"name":"Voice",
-                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
+                       "detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if kokoro_readiness.ready else kokoro_readiness.user_message,
                        "status":"Ready" if kokoro_readiness.ready else "Needs attention",
                        "technical_code":kokoro_readiness.technical_code}
         else:
-            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â local narrator" if provider else "Choose a narrator for new videos",
+            voice_row={"name":"Voice","detail":f"{_VOICE_NAMES.get(voice_id,voice_id)} — local narrator" if provider else "Choose a narrator for new videos",
                        "status":"Ready" if provider else "Not configured"}
         return {
             "defaults":{"render_mode":defaults_payload["render_mode"],"ambient_style":defaults_payload["ambient_style"],"voice_id":voice_id,"voice_name":_VOICE_NAMES.get(voice_id,voice_id),"production_style":defaults_payload["visual_style"],
@@ -1320,8 +1320,8 @@ class OperatorService:
             "voice_inventory_failure":inventory_failure,
             "providers":[
                 voice_row,
-                {"name":"Full Image visuals","detail":"Google Flow ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
-                {"name":"Full Video visuals","detail":f"BytePlus ModelArk ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {seedance_status['model']} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
+                {"name":"Full Image visuals","detail":"Google Flow · Full Image only","status":"Connected" if flow_status["status"]=="CONNECTED" else flow_status["status"].replace("_"," ").title()},
+                {"name":"Full Video visuals","detail":f"BytePlus ModelArk · {seedance_status['model']} · API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
                 {"name":"Opening API video","detail":f"BytePlus ModelArk · {seedance_status['model']} · optional Hybrid opening slots","status":"Ready" if byteplus_status["configured"] else "Not configured"},
                 {"name":"Hybrid stock video","detail":"Pexels API - semantic stock - image fallback when unavailable","status":"Ready" if pexels_status["configured"] else "Not configured"},
                 {"name":"AI brain","detail":("External Anthropic-compatible gateway" if llm.get("provider") == "external_anthropic" else "Gemini 3.8 planning and quality checks"),"status":"Ready" if llm else "Not configured"},
