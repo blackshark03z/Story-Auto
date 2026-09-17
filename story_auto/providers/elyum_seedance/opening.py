@@ -133,7 +133,7 @@ def generate_elyum_opening_preview(runtime_root: Path | str, project_id: str, sl
             slot["api_generation"] = generation = {"schema_version": OPENING_API_VERSION, "provider": PROVIDER_ID, "provider_model": model, "status": "PRE_DISPATCH", "provider_submissions": 0, "provider_create_calls": 0, "client_ref": client_ref, "resolution": resolution, "prompt_sha256": slot.get("prompt_sha256"), "duration_seconds": target, "provider_duration_seconds": provider_duration, "created_at": _now(), "updated_at": _now()}
             _persist(paths, manifest)
     if job_id is None:
-        balance = active.account_balance(); estimate = active.estimate_video(model=model, duration=provider_duration, mode="t2v")
+        balance = active.account_balance(); estimate = active.estimate_video(model=model, duration=provider_duration, mode="t2v", resolution=resolution)
         with ProjectLock(paths.runtime, project_id):
             manifest, slot = _load_slot(paths, project_id, slot_id); generation = slot["api_generation"]
             generation.update({"balance_before": int(balance), "estimate_credits": int(estimate), "max_credits": int(max_credits), "last_preflight_at": _now()})

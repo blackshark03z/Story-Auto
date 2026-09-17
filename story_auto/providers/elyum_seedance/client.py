@@ -252,12 +252,51 @@ class ElyumSeedanceClient:
             raise ElyumSeedanceError("ACCOUNT_BALANCE_INVALID")
         return int(balance)
 
-    def estimate_video(self, *, model: str, duration: int, mode: str) -> int:
+    def model_catalog(self) -> Any:
+        """Read the provider model catalog without creating or spending anything."""
+        return self._call("elyum_models", {})
+
+    def seedance_model_ids(self) -> list[str]:
+        """Extract candidate Seedance model ids/slugs from Elyum's live catalog."""
+        payload = self.model_catalog()
+        found: list[str] = []
+
+        def add(value: Any) -> None:
+            if not isinstance(value, str):
+                return
+            candidate = value.strip()
+            if candidate and "seedance" in candidate.lower() and candidate not in found:
+                found.append(candidate)
+
+        def visit(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    lower = str(key).lower()
+                    if lower in {"id", "slug", "model", "modelid", "model_id"}:
+                        add(value)
+                    if isinstance(key, str) and "seedance" in key.lower() and isinstance(value, (dict, list)):
+                        add(key)
+                    visit(value)
+            elif isinstance(node, list):
+                for value in node:
+                    visit(value)
+            elif isinstance(node, str) and ("-" in node or "_" in node):
+                add(node)
+
+        visit(payload)
+        return found
+
+    def estimate_video(self, *, model: str, duration: int, mode: str, resolution: str | None = None) -> int:
         if mode not in {"t2v", "i2v", "ugc", "clone"}:
             raise ElyumSeedanceError("MODE_UNSUPPORTED", mode)
         if not 2 <= int(duration) <= 30:
             raise ElyumSeedanceError("DURATION_UNSUPPORTED", str(duration))
-        payload = self._call("elyum_estimate", {"kind": "video", "mode": mode, "model": model, "duration": int(duration)})
+        arguments: dict[str, Any] = {"kind": "video", "mode": mode, "model": model, "duration": int(duration)}
+        if resolution is not None:
+            if resolution not in SUPPORTED_RESOLUTIONS:
+                raise ElyumSeedanceError("RESOLUTION_UNSUPPORTED", resolution)
+            arguments["resolution"] = resolution
+        payload = self._call("elyum_estimate", arguments)
         credits = _find_first(payload, {"credits", "credit", "cost", "heldcredits", "held_credits"})
         if isinstance(credits, bool) or not isinstance(credits, (int, float)):
             raise ElyumSeedanceError("ESTIMATE_INVALID")

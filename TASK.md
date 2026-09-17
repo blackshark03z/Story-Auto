@@ -573,4 +573,5 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Elyum Hybrid Opening adapter now has engineering coverage for T2V preflight, deterministic clientRef replay, locked preview review, explicit Keep/Kill consequence boundaries, successful bind into the canonical Opening slot, manual fallback, and cost no-dispatch.
 - Elyum credentials reuse Story Auto Windows DPAPI + environment override and Settings Save/Test/Remove; Test is read-only.
 - Evidence: `docs/HYBRID_VISUAL_ELYUM_OPENING_CANDIDATE_EVIDENCE.md`. Targeted/regression: 28 tests PASS; DPAPI fake-key round-trip PASS.
-- Status: **ENGINEERING_READY / LIVE_MODEL_PREFLIGHT_PENDING / PRODUCTION_ROUTING_DISABLED**. Do not expose live Elyum Generate/Keep/Kill until the exact account-supported T2V model id is proven by live read-only preflight.
+- Status: **ENGINEERING_READY / PRODUCT_MODEL_PREFLIGHT_IMPLEMENTED / PRODUCTION_ROUTING_DISABLED**. Settings `Test connection` now reads the live model catalog and verifies exact Seedance T2V ids by read-only 6s/480p estimates; live Generate/Keep/Kill stays disabled until an authorized credential returns at least one verified model.
+- Model-preflight qualification: 21 Elyum/provider tests PASS, Python/JS syntax PASS, `SECURITY_GATE=PASS`; no provider generation/spend occurred.

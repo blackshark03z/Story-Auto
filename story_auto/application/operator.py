@@ -1071,12 +1071,24 @@ class OperatorService:
                     "reason_code": "ELYUM_CREDENTIAL_MISSING", "live_verified": False}
         try:
             balance = client.account_balance()
+            candidates = client.seedance_model_ids()
+            verified_models = []
+            for model_id in candidates[:12]:
+                try:
+                    estimate = client.estimate_video(model=model_id, duration=6, mode="t2v", resolution="480p")
+                except ElyumSeedanceError:
+                    continue
+                verified_models.append({"model_id": model_id, "estimated_credits_6s": int(estimate)})
         except ElyumSeedanceError as error:
             return {**self.elyum_connection_status(), "status": "ERROR",
                     "reason_code": error.failure_class, "live_verified": False}
+        if not verified_models:
+            return {**self.elyum_connection_status(), "status": "ERROR",
+                    "reason_code": "ELYUM_SEEDANCE_T2V_MODEL_UNVERIFIED", "live_verified": False,
+                    "checked_at": datetime.now(timezone.utc).isoformat(), "balance": int(balance)}
         return {**self.elyum_connection_status(), "status": "CONNECTED", "reason_code": None,
                 "live_verified": True, "checked_at": datetime.now(timezone.utc).isoformat(),
-                "balance": int(balance)}
+                "balance": int(balance), "seedance_t2v_models": verified_models}
 
     def pexels_connection_status(self) -> dict[str, Any]:
         credential = provider_key_status("pexels")

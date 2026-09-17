@@ -1,7 +1,7 @@
 # Hybrid Visual Elyum Opening engineering candidate evidence
 
 Date: 2026-09-16
-Status: ENGINEERING_READY / LIVE_MODEL_PREFLIGHT_PENDING / PRODUCTION_ROUTING_DISABLED
+Status: ENGINEERING_READY / PRODUCT_MODEL_PREFLIGHT_IMPLEMENTED / PRODUCTION_ROUTING_DISABLED
 
 ## Goal
 
@@ -25,8 +25,10 @@ Reuse the existing Elyum Seedance consequence-safe adapter for Hybrid Opening sl
 - Elyum Opening + Provider Registry + Application regression: 28/28 PASS.
 - Windows DPAPI round-trip with a fake test key: PASS; plaintext absent from credential store file.
 
-## Remaining promotion gate
+## Productized live-model preflight
 
-Production Elyum generation remains disabled until a live read-only preflight through an authorized credential source confirms the exact T2V model id/capability for the account. The platform blocked direct access to the historical external key file during this session, so that evidence was not fabricated or bypassed.
+Settings `Test connection` now performs the promotion preflight through Story Auto's own credential boundary: it reads `elyum_account`, reads `elyum_models`, extracts Seedance model ids, then calls read-only `elyum_estimate` in `t2v` mode for 6 seconds at 480p. Only model ids whose exact T2V estimate succeeds are returned as verified options, with sanitized credit estimates. No generate/Keep/Kill call is part of this check.
 
-No live generation, Keep, Kill, or credit spend occurred in this qualification.
+This removes the need for the Tech Lead to read an external key file directly. Production Elyum generation remains disabled until an authorized saved/environment credential actually returns at least one verified Seedance T2V model through this product surface.
+
+Current focused verification: 21 Elyum/provider tests PASS, Python/JS syntax PASS, and `SECURITY_GATE=PASS`. No live generation, Keep, Kill, or credit spend occurred in this qualification.

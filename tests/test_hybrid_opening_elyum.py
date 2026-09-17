@@ -34,8 +34,8 @@ class FakeElyum:
         self.make_calls = 0; self.keep_calls = 0; self.kill_calls = 0; self.client_refs = []
     def readiness(self): return {"status":"READY","provider_id":self.provider}
     def account_balance(self): return self.balance
-    def estimate_video(self, *, model, duration, mode):
-        self.last_estimate = (model, duration, mode); return self.estimate
+    def estimate_video(self, *, model, duration, mode, resolution=None):
+        self.last_estimate = (model, duration, mode, resolution); return self.estimate
     def make_video(self, **kwargs):
         self.make_calls += 1; self.client_refs.append(kwargs["client_ref"]); self.last_make = kwargs
         if self.ambiguous_create and self.make_calls == 1:
@@ -75,7 +75,7 @@ class ElyumHybridOpeningTests(unittest.TestCase):
             view=generate_elyum_opening_preview(root,"prj_elyum_opening","OPENING_O1",model=MODEL,client=client,preview_fetcher=self._fetch)
             gen=view["slots"][0]["api_generation"]
             self.assertEqual(gen["status"],"PREVIEW_READY"); self.assertFalse(view["slots"][0]["asset_ready"])
-            self.assertEqual(client.last_estimate,(MODEL,6,"t2v")); self.assertEqual(client.last_make["mode"],"t2v"); self.assertFalse(client.last_make["audio"])
+            self.assertEqual(client.last_estimate,(MODEL,6,"t2v","480p")); self.assertEqual(client.last_make["mode"],"t2v"); self.assertFalse(client.last_make["audio"])
             self.assertEqual(gen["provider_submissions"],1); self.assertEqual(gen["provider_job_id"],"elyum-job-1")
 
     def test_ambiguous_create_replays_exact_same_client_ref(self):
