@@ -530,7 +530,7 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - H3 opening API acquisition remains optional and must reuse the H1/H2 slots if implemented; it is not required to validate the manual low-cost Hybrid V1 journey.
 - Real-asset H5 local UAT now PASSes machine checks via `tools/hybrid_visual_uat.py`: Xianxia kept-clean opening assets + real anchor/continuity images -> 42.583333s mixed preview, SHA-256 `7aa58eee8a40dfa014d082cdc6bc297f506ae1627b4cd99c314de791f78851dd`, exact source order `OPENING_VIDEO×2 -> IMAGE×3 -> STOCK_IMAGE_FALLBACK -> IMAGE`, waveform enabled, visual audio muted. Runtime evidence is under `../evidence/hybrid_visual_h5_uat/`.
 - The same UAT workspace projection truthfully remains `FEATURE_NOT_AVAILABLE` while reporting opening/body/preview READY; release activation is therefore still fenced correctly.
-- Owner visual acceptance is the next gate: watch the real-asset preview and judge motion, cuts/source changes, subtitle/waveform placement and overall quality. Do not promote to canonical final render or enable Hybrid Visual before that human decision.
+- Superseded by Owner priority 2026-09-18: visual/aesthetic acceptance is deferred and is no longer the next blocker. Keep technical integrity/provenance gates, but prioritize correct format contract, reliable pipeline/recovery and a smooth canonical CUJ.
 - Post-SSD Kokoro probe currently reports `KOKORO_MODEL_NOT_FOUND`; UAT used Windows Zira locally so this independent environment drift did not contaminate H5 qualification.
 
 ### Hybrid Visual canonical CUJ / Product Flow Acceptance (2026-09-16)
@@ -546,7 +546,21 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Stale-state test proves replacing an Opening asset after final moves the project back to QUALITY and removes RENDER COMPLETE authority.
 - Browser gates PASS: New video exposes/selects Hybrid Visual; prepared project performs opening import -> Continue -> COMPLETE -> Open final video.
 - Post-promotion qualification: **76 tests PASS**, Python/JS syntax PASS, `SECURITY_GATE=PASS`, `YOUTUBE_AUTO_RUNTIME_IMPORTS=0`.
-- Next work is a separate **Hybrid Quality V2** track (motion/effects, stock relevance, transitions, pacing, subtitle/waveform styling). Do not reopen the accepted CUJ merely because output quality is not yet optimized.
+- Hybrid Quality V2 remains a deferred backlog track (motion/effects, stock relevance, transitions, pacing, subtitle/waveform styling). Owner priority from 2026-09-18 is to **skip further quality optimization for now** and focus active work on correct output format, pipeline correctness/recovery and CUJ smoothness. Do not reopen the accepted CUJ merely because output quality is not yet optimized.
+
+### Owner delivery priority — Format + Pipeline + CUJ (2026-09-18)
+
+- Owner directive: **skip further visual/aesthetic quality work for now; improve it later**.
+- Visual quality remains explicitly `QUALITY_DEFERRED` and must not block the current delivery path.
+- Active product goal is now: **correct format + correct/recoverable pipeline + smooth CUJ**.
+- Correct format means each selected mode produces its canonical artifact/media contract with master narration/subtitle/waveform ownership preserved and technically valid duration/streams.
+- Pipeline acceptance focuses on deterministic stage progression, no duplicate/ambiguous provider effects, safe resume/recovery, stale-state invalidation, fallback behavior, and canonical final-output promotion.
+- CUJ acceptance focuses on one coherent user journey: clear current state, visible action result/progress, obvious next action, no dead-end or hidden backend wait, resume without redoing completed work, and safe repeat-run lifecycle after completion.
+- This priority change does **not** waive security, provenance, media validity, fail-closed behavior, cost/consequence boundaries, or technical QUALITY checks.
+- Deferred backlog includes motion/acting naturalness, aesthetic polish, stock relevance tuning, transition taste, pacing polish, and subtitle/waveform styling.
+- QV2-A engineering evidence already landed (mixed CUT/CROSSFADE + deterministic anti-loop motion grammar) and may remain as-is; no further quality tuning is required before continuing CUJ/pipeline work.
+- Product HEAD after QV2-A: `001253f0924d025b3903657064ea5b17c6dc314e`; runtime Xianxia Hybrid UAT PASS at 42.583333 s. This proves technical renderability only, not visual-quality acceptance.
+- Decision policy is updated in `docs/decisions/0005-product-journey-and-hybrid-flow-acceptance.md`.
 
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 

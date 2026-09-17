@@ -43,6 +43,25 @@ Canonical status after this decision:
 
 Quality work proceeds as a separate improvement track and must not reopen the accepted Product Journey unless a quality change actually breaks the journey contract.
 
+### Owner priority update — 2026-09-18
+
+The Owner explicitly deferred further visual/aesthetic quality optimization. Visual quality is backlog work and is **not a blocker** for the current Story Auto delivery goal.
+
+Current acceptance priority is:
+
+1. **Correct format contract** — each mode produces the expected canonical artifacts/media structure and preserves master narration/subtitle/waveform ownership.
+2. **Correct, recoverable pipeline** — Run/Continue advances the intended stages without duplicate provider effects, stale-state leakage, hidden redispatch, or requiring the Owner to reconstruct backend state manually.
+3. **Smooth CUJ** — the user can tell what just happened, what is running/complete/blocked, what action is next, and can reach the canonical final output or resume after interruption without redoing accepted work.
+4. **Repeat-use readiness** — a completed run can safely lead to another run without stale context or artifacts being treated as current.
+
+This deferment applies to aesthetic optimization such as motion naturalness, acting/expression quality, stock relevance polish, transition taste, pacing polish, and subtitle/waveform styling. It does **not** waive technical integrity, provenance, deterministic recovery, duration/media validity, security, or fail-closed behavior.
+
+Canonical current status therefore remains:
+
+`PRODUCT_FLOW_ACCEPTED / QUALITY_DEFERRED`
+
+with active work focused on `FORMAT + PIPELINE + CUJ SMOOTHNESS` rather than Hybrid Quality V2 optimization.
+
 ## Activation boundary
 
 New Hybrid projects created through the product UI write `settings.hybrid_visual.cuj_enabled=true`. Historical Hybrid projects without that explicit activation remain fail-closed as `FEATURE_NOT_AVAILABLE`; this prevents a new product policy from silently mutating old project semantics.
