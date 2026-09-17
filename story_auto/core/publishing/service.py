@@ -14,7 +14,7 @@ from story_auto.core.project import RuntimeLayout, load_project
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual import DEFAULT_VISUAL_POLICY, compile_image_prompt
 from story_auto.providers.flow.validation import validate_image
-from story_auto.providers.llm.gemini import GeminiProvider, LLMRequest
+from story_auto.providers.llm import AnthropicCompatibleProvider, GeminiProvider, LLMRequest
 
 
 PUBLISHING_VERSION = "story-auto-publishing/1.0.0"
@@ -45,9 +45,17 @@ def _schema() -> dict[str, Any]:
 def run_publishing_metadata(runtime_root: Path | str, project_id: str, *, provider: GeminiProvider | None = None) -> str:
     paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     llm = config.settings.get("llm", {})
-    if not isinstance(llm, dict) or llm.get("provider") != "gemini":
+    if not isinstance(llm, dict) or llm.get("provider") not in {"gemini", "external_anthropic"}:
         raise PublishingError("PUBLISHING_LLM_NOT_CONFIGURED")
-    model = str(llm.get("model", "gemini-3.8-flash"))
+    if llm.get("provider") == "external_anthropic":
+        external = llm.get("external_anthropic")
+        if not isinstance(external, dict):
+            raise PublishingError("PUBLISHING_LLM_NOT_CONFIGURED")
+        model = str(external.get("model_alias") or "")
+        if not model:
+            raise PublishingError("PUBLISHING_LLM_NOT_CONFIGURED")
+    else:
+        model = str(llm.get("model", "gemini-3.8-flash"))
     narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration
     final_manifest = read_json(paths.artifact_path("output/final_manifest.json"))
     direct = {"narration_sha256": _hash(narration), "final_sha256": final_manifest["final_sha256"],
@@ -62,7 +70,10 @@ def run_publishing_metadata(runtime_root: Path | str, project_id: str, *, provid
             current = read_json(package_path)
             if current.get("title_candidates") and current.get("description"):
                 return "SKIP"
-        active = provider or GeminiProvider()
+        active = provider or (AnthropicCompatibleProvider(base_url=str(llm.get("external_anthropic", {}).get("base_url") or ""),
+                                                          model_alias=model,
+                                                          auth_mode=str(llm.get("external_anthropic", {}).get("auth_mode") or "x-api-key"))
+                              if llm.get("provider") == "external_anthropic" else GeminiProvider())
         response = active.generate_structured(LLMRequest(
             model=model,
             prompt=(f"{PUBLISHING_PROMPT_VERSION}\nCreate 3 accurate, compelling YouTube title candidates, a useful description, "
@@ -80,7 +91,8 @@ def run_publishing_metadata(runtime_root: Path | str, project_id: str, *, provid
                    "thumbnail": {"brief": brief, **({key: value for key, value in prior.get("thumbnail", {}).items()
                                                         if key in {"request_id", "path", "sha256", "metadata"}})},
                    "approved": False,
-                   "provenance": {"provider": "gemini", "model": model, "prompt_version": PUBLISHING_PROMPT_VERSION,
+                   "provenance": {"provider": response.usage.get("provider", "gemini") if isinstance(response.usage, dict) else "gemini",
+                                  "model": response.model, "configured_model": model, "prompt_version": PUBLISHING_PROMPT_VERSION,
                                   "request_id": response.request_id, "usage": response.usage}}
         atomic_write_json(package_path, package)
         checkpoints.record("publishing_metadata", fingerprint=stage_fp, status="SUCCESS",

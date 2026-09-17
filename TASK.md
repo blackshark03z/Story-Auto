@@ -610,3 +610,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Scope: BytePlus, Elyum, and Pexels Settings credential UX. Existing environment override semantics and provider execution routing remain unchanged.
 - Acceptance evidence: batch append preserves old keys, duplicates are idempotent, invalid batches do not mutate, browser Settings proves saved-key count grows 2 -> 3 without rendering secrets, legacy single-key route remains compatible.
 - Qualification: 48 provider/application/release tests PASS; focused credential/browser suite 9/9 PASS; Python/JS syntax PASS; `SECURITY_GATE=PASS`; `git diff --check` PASS.
+
+### AI brain upgrade: Gemini 3.8 + external Anthropic-compatible gateway (2026-09-17)
+
+- Decision SoT: `docs/decisions/0008-gemini-3-8-and-external-llm-gateway.md`.
+- Gemini HARD reasoning baseline is now `gemini-3.8-flash`, followed by 3.7, 3.6, 3.5, then established 2.5 fallbacks. New Gemini projects default to 3.8; existing project bindings remain immutable.
+- Added generic `external_anthropic` brain provider rather than a reseller-specific adapter. Contract: Anthropic Messages `/v1/messages`, configurable HTTPS base URL/path prefix, model alias, `x-api-key` or Bearer auth, append-only DPAPI key pool, live Test connection.
+- External model names are treated as gateway aliases; provenance records configured alias + gateway-reported model without claiming upstream vendor identity.
+- Settings journey supports Use Gemini 3.8, configure external gateway, add multiple keys, Test connection, remove saved keys, and switch back to Gemini. Brain defaults apply only to new projects.
+- Safety: non-loopback HTTP, URL credentials, query/fragment URLs and path traversal fail closed; secrets never enter project/runtime-default JSON or Settings responses.
+- A named reseller such as ETFBit is not considered production-qualified until its actual API base URL + model alias pass Story Auto's live Test connection. The shop/account URL is not used as an API endpoint.

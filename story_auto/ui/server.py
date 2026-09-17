@@ -94,6 +94,16 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 return self._json(self.service.test_elyum_connection())
             if parts==["api","settings","elyum","clear"]:
                 return self._json(self.service.clear_elyum_key())
+            if parts==["api","settings","external-llm","configure"]:
+                return self._json(self.service.configure_external_llm(base_url=body.get("base_url",""),model_alias=body.get("model_alias",""),auth_mode=body.get("auth_mode","x-api-key")))
+            if parts==["api","settings","external-llm","save"]:
+                return self._json(self.service.save_external_llm_keys(body.get("keys",body.get("key",""))))
+            if parts==["api","settings","external-llm","test"]:
+                return self._json(self.service.test_external_llm_connection())
+            if parts==["api","settings","external-llm","clear"]:
+                return self._json(self.service.clear_external_llm_keys())
+            if parts==["api","settings","brain","gemini"]:
+                return self._json(self.service.use_gemini_brain())
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","full_image"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:

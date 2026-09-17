@@ -91,18 +91,34 @@ class RuntimeDefaults:
         full_image = settings.get("full_image")
         if not isinstance(full_image, dict) or not isinstance(full_image.get("audio_visualizer"), bool):
             raise ValueError("runtime default waveform setting is invalid")
+        llm = settings.get("llm")
+        if isinstance(llm, dict):
+            if llm.get("provider") == "external_anthropic":
+                llm.pop("model", None)
+            elif llm.get("provider") == "gemini":
+                llm.pop("external_anthropic", None)
         settings.setdefault("ui", {})["production_style"] = value["visual_style"]
         value["schema_version"] = RUNTIME_DEFAULTS_SCHEMA_VERSION
         return value
 
+    @staticmethod
+    def _normalize_brain(snapshot: dict[str, Any]) -> dict[str, Any]:
+        llm = snapshot.get("llm")
+        if isinstance(llm, dict):
+            if llm.get("provider") == "external_anthropic":
+                llm.pop("model", None)
+            elif llm.get("provider") == "gemini":
+                llm.pop("external_anthropic", None)
+        return snapshot
+
     def project_snapshot(self, explicit: dict[str, Any] | None) -> dict[str, Any]:
         """Copy defaults for exactly one new project, then apply its choices."""
         value = self.read()
-        snapshot = _merge(value["project_settings"], explicit or {})
+        snapshot = self._normalize_brain(_merge(value["project_settings"], explicit or {}))
         snapshot.setdefault("ui", {}).setdefault("production_style", value["visual_style"])
         return snapshot
 
     def creation_snapshot(self) -> dict[str, Any]:
         """Return global defaults for the New Video draft without project scans."""
         value = self.read()
-        return _merge(self.factory(value["narrator"]["voice_id"]), value["project_settings"])
+        return self._normalize_brain(_merge(self.factory(value["narrator"]["voice_id"]), value["project_settings"]))

@@ -115,13 +115,24 @@ class ProjectConfig:
                 raise ProjectValidationError(f"settings.tts.{provider}.voice_id is required")
         llm = self.settings.get("llm")
         if llm is not None:
-            if not isinstance(llm, dict) or llm.get("provider") != "gemini":
-                raise ProjectValidationError("settings.llm.provider must be gemini")
-            model = llm.get("model", "gemini-3.8-flash")
-            if not isinstance(model, str) or not model.strip():
-                raise ProjectValidationError("settings.llm.model must be non-empty text")
+            if not isinstance(llm, dict) or llm.get("provider") not in {"gemini", "external_anthropic"}:
+                raise ProjectValidationError("settings.llm.provider must be gemini or external_anthropic")
             if any(key.lower() in {"api_key", "key", "token", "secret", "credential"} for key in llm):
                 raise ProjectValidationError("settings.llm must not contain credentials")
+            if llm.get("provider") == "gemini":
+                model = llm.get("model", "gemini-3.8-flash")
+                if not isinstance(model, str) or not model.strip():
+                    raise ProjectValidationError("settings.llm.model must be non-empty text")
+            else:
+                external = llm.get("external_anthropic")
+                if not isinstance(external, dict) or set(external) - {"base_url", "model_alias", "auth_mode"}:
+                    raise ProjectValidationError("settings.llm.external_anthropic is invalid")
+                if not isinstance(external.get("base_url"), str) or not external["base_url"].strip():
+                    raise ProjectValidationError("settings.llm.external_anthropic.base_url is required")
+                if not isinstance(external.get("model_alias"), str) or not external["model_alias"].strip():
+                    raise ProjectValidationError("settings.llm.external_anthropic.model_alias is required")
+                if str(external.get("auth_mode", "x-api-key")).lower().replace("x_api_key","x-api-key") not in {"x-api-key", "bearer"}:
+                    raise ProjectValidationError("settings.llm.external_anthropic.auth_mode is invalid")
         binding = self.settings.get("flow_binding")
         if binding is not None:
             if (not isinstance(binding, dict) or set(binding) != {"connection_id", "connection_revision"}

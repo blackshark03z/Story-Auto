@@ -68,6 +68,7 @@ from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeeda
 from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
 from story_auto.providers.credentials import append_provider_keys, clear_provider_keys, provider_key_status, provider_keys
+from story_auto.providers.llm import AnthropicCompatibleProvider, ExternalLLMError, normalize_base_url
 from story_auto.providers.video_generation import video_provider_catalog
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
                                                         LiveFlowProjects, managed_binding, managed_flow_settings)
@@ -241,6 +242,12 @@ def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any
     if isinstance(model_snapshot,str) and model_snapshot.strip():
         result["tts"]["kokoro_local"]["model_snapshot"]=model_snapshot
     if isinstance(llm.get("max_attempts"),int): result["llm"]["max_attempts"]=llm["max_attempts"]
+    external=llm.get("external_anthropic")
+    if isinstance(external,dict):
+        base_url=str(external.get("base_url") or "").strip()
+        model_alias=str(external.get("model_alias") or "").strip()
+        if base_url and model_alias:
+            result["llm"]["external_anthropic"]={"base_url":base_url,"model_alias":model_alias,"auth_mode":str(external.get("auth_mode") or "x-api-key").replace("x_api_key","x-api-key")}
     return result
 
 
@@ -1201,6 +1208,72 @@ class OperatorService:
                 "rate_limit": result.get("rate_limit", {}),
                 "sample_results": len(result.get("videos", []))}
 
+    def external_llm_connection_status(self) -> dict[str, Any]:
+        credential = provider_key_status("external_llm")
+        settings = self.runtime_defaults.creation_snapshot()
+        llm = settings.get("llm", {}) if isinstance(settings, dict) else {}
+        external = llm.get("external_anthropic", {}) if isinstance(llm, dict) else {}
+        base_url = str(external.get("base_url") or "").strip() if isinstance(external, dict) else ""
+        model_alias = str(external.get("model_alias") or "").strip() if isinstance(external, dict) else ""
+        auth_mode = str(external.get("auth_mode") or "x-api-key").strip().lower().replace("x_api_key","x-api-key") if isinstance(external, dict) else "x-api-key"
+        configured = bool(base_url and model_alias and credential["configured"])
+        return {
+            "status": "CONFIGURED" if configured else "NOT_CONFIGURED",
+            "configured": configured,
+            "credential_configured": bool(credential["configured"]),
+            "credential_count": int(credential["count"]),
+            "saved_credential_count": int(credential.get("saved_count", credential["count"])),
+            "credential_source": credential["source"],
+            "removable": bool(credential["removable"]),
+            "base_url": base_url,
+            "model_alias": model_alias,
+            "auth_mode": auth_mode,
+            "selected_for_new_projects": llm.get("provider") == "external_anthropic",
+            "live_verified": False,
+        }
+
+    def configure_external_llm(self, *, base_url: str, model_alias: str, auth_mode: str = "x-api-key") -> dict[str, Any]:
+        normalized = normalize_base_url(base_url)
+        alias = str(model_alias or "").strip()
+        if not alias:
+            raise OperatorServiceError("EXTERNAL_LLM_MODEL_ALIAS_REQUIRED")
+        mode = str(auth_mode or "x-api-key").strip().lower().replace("x_api_key","x-api-key")
+        if mode not in {"x-api-key", "bearer"}:
+            raise OperatorServiceError("EXTERNAL_LLM_AUTH_MODE_INVALID")
+        self.runtime_defaults.update({"project_settings": {"llm": {
+            "provider": "external_anthropic",
+            "external_anthropic": {"base_url": normalized, "model_alias": alias, "auth_mode": mode},
+        }}})
+        return self.external_llm_connection_status()
+
+    def use_gemini_brain(self) -> dict[str, Any]:
+        self.runtime_defaults.update({"project_settings": {"llm": {"provider": "gemini", "model": "gemini-3.8-flash"}}})
+        return self.external_llm_connection_status()
+
+    def save_external_llm_keys(self, keys: Any) -> dict[str, Any]:
+        values = _provider_key_batch(keys, minimum_length=8, label="external LLM API")
+        result = append_provider_keys("external_llm", values)
+        return {**self.external_llm_connection_status(), **result}
+
+    def clear_external_llm_keys(self) -> dict[str, Any]:
+        clear_provider_keys("external_llm")
+        return self.external_llm_connection_status()
+
+    def test_external_llm_connection(self) -> dict[str, Any]:
+        status = self.external_llm_connection_status()
+        if not status["base_url"] or not status["model_alias"]:
+            return {**status, "status": "NOT_CONFIGURED", "reason_code": "EXTERNAL_LLM_CONFIG_MISSING"}
+        if not status["credential_configured"]:
+            return {**status, "status": "NOT_CONFIGURED", "reason_code": "EXTERNAL_LLM_CREDENTIAL_MISSING"}
+        try:
+            probe = AnthropicCompatibleProvider(base_url=status["base_url"], model_alias=status["model_alias"],
+                                                auth_mode=status["auth_mode"]).capability_probe(live=True)
+        except ExternalLLMError as error:
+            return {**status, "status": "ERROR", "reason_code": error.failure_class, "live_verified": False}
+        return {**status, "status": "CONNECTED", "reason_code": None, "live_verified": True,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "gateway_reported_model": probe.get("gateway_reported_model")}
+
     def settings_overview(self) -> dict[str, Any]:
         defaults_payload=self.runtime_defaults.read()
         latest_settings=self.runtime_defaults.creation_snapshot()
@@ -1213,6 +1286,7 @@ class OperatorService:
         byteplus_status=self.byteplus_connection_status()
         elyum_status=self.elyum_connection_status()
         pexels_status=self.pexels_connection_status()
+        external_llm_status=self.external_llm_connection_status()
         video_providers=video_provider_catalog()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
         flow_status={**flow_status,
@@ -1250,7 +1324,7 @@ class OperatorService:
                 {"name":"Full Video visuals","detail":f"BytePlus ModelArk ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· {seedance_status['model']} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
                 {"name":"Opening API video","detail":f"BytePlus ModelArk · {seedance_status['model']} · optional Hybrid opening slots","status":"Ready" if byteplus_status["configured"] else "Not configured"},
                 {"name":"Hybrid stock video","detail":"Pexels API - semantic stock - image fallback when unavailable","status":"Ready" if pexels_status["configured"] else "Not configured"},
-                {"name":"AI quality","detail":"Gemini planning and quality checks","status":"Ready" if llm else "Not configured"},
+                {"name":"AI brain","detail":("External Anthropic-compatible gateway" if llm.get("provider") == "external_anthropic" else "Gemini 3.8 planning and quality checks"),"status":"Ready" if llm else "Not configured"},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
             "flow_connection":flow_status,
@@ -1258,8 +1332,9 @@ class OperatorService:
             "byteplus":byteplus_status,
             "elyum":elyum_status,
             "pexels":pexels_status,
+            "external_llm":external_llm_status,
             "video_providers":video_providers,
-            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.8-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.8-flash"),"llm_provider":llm.get("provider","gemini"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
@@ -1292,6 +1367,7 @@ class OperatorService:
             "seedance":seedance_readiness(),
             "elyum":self.elyum_connection_status(),
             "pexels":self.pexels_connection_status(),
+            "external_llm":self.external_llm_connection_status(),
         }
 
     def _flow_connection_overview(self) -> dict[str, Any]:

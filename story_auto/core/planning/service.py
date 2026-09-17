@@ -38,7 +38,7 @@ from story_auto.core.visual import (
 from .ambient import (AmbientPlanningPolicyError, plan_visual_chapters,
                       reference_visual_brief, validate_visual_brief)
 from .timeline_recovery import repair_grouping, defect_feedback
-from story_auto.providers.llm import (GeminiProvider, GeminiProviderError,
+from story_auto.providers.llm import (AnthropicCompatibleProvider, GeminiProvider, GeminiProviderError,
                                       GeminiReasoningRouter, LLMRequest,
                                       RoutedGeminiProvider)
 
@@ -71,10 +71,20 @@ def _slug(value: str) -> str:
 
 def _settings(config) -> tuple[str, dict[str, Any]]:
     llm = config.settings.get("llm")
-    if not isinstance(llm, dict) or llm.get("provider") != "gemini":
-        raise PlanningError("GEMINI_MODEL_UNAVAILABLE", "settings.llm.provider must be gemini")
-    model = llm.get("model", "gemini-3.8-flash")
-    if not isinstance(model, str) or not model.strip(): raise PlanningError("GEMINI_MODEL_UNAVAILABLE")
+    if not isinstance(llm, dict):
+        raise PlanningError("LLM_MODEL_UNAVAILABLE", "settings.llm is required")
+    provider = str(llm.get("provider") or "gemini")
+    if provider == "gemini":
+        model = llm.get("model", "gemini-3.8-flash")
+    elif provider == "external_anthropic":
+        external = llm.get("external_anthropic")
+        if not isinstance(external, dict):
+            raise PlanningError("EXTERNAL_LLM_NOT_CONFIGURED")
+        model = external.get("model_alias")
+    else:
+        raise PlanningError("LLM_PROVIDER_UNAVAILABLE", provider)
+    if not isinstance(model, str) or not model.strip():
+        raise PlanningError("LLM_MODEL_UNAVAILABLE")
     return model, llm
 
 def _timeline_schema() -> dict[str, Any]:
@@ -858,7 +868,7 @@ def run_visual_planning_stages(runtime_root: Path | str, project_id: str, *, pro
     shot_producer = AMBIENT_SHOT_POLICY_VERSION if ambient else (FULL_IMAGE_WINDOW_POLICY_VERSION if full_image else SHOT_PROMPT_VERSION)
     media_producer = AMBIENT_MEDIA_POLICY_VERSION if ambient else (FULL_IMAGE_MEDIA_POLICY_VERSION if full_image else MEDIA_POLICY_VERSION)
     request_producer = AMBIENT_GENERATION_PROMPT_VERSION if ambient else (FULL_IMAGE_GENERATION_PROMPT_VERSION if full_image else GENERATION_PROMPT_VERSION)
-    active = None if (ambient or full_image) else (provider or _default_provider(paths))
+    active = None if (ambient or full_image) else (provider or _default_provider(paths, config))
     with ProjectLock(paths.runtime, project_id):
         shot_inputs = {"timeline_sha256":timeline_sha,"continuity_sha256":continuity_sha}
         shot_settings = {"ambient_style":ambient_style} if ambient else ({"full_image":{key:media_settings["full_image"][key] for key in ("image_duration_seconds", "cadence")}} if full_image else {k:v for k,v in llm_settings.items() if k != "api_key"})
@@ -970,9 +980,16 @@ def approve_shot_plan(runtime_root: Path | str, project_id: str) -> None:
 
 def _provenance(model: str, stage: str, prompt_version: str, inputs: dict[str, str], response) -> dict[str, Any]:
     schemas = {"story_timeline": TIMELINE_SCHEMA_VERSION, "continuity": CONTINUITY_SCHEMA_VERSION, "shot_plan": SHOT_SCHEMA_VERSION}
-    return {"provider":"gemini", "model":response.model, "configured_model":model, "planning_stage":stage, "prompt_version":prompt_version, "schema_version":schemas[stage], "direct_input_hashes":inputs, "request_id":response.request_id, "attempts":response.attempts, "latency_ms":response.latency_ms, "usage":response.usage}
+    provider_name = response.usage.get("provider", "gemini") if isinstance(response.usage, dict) else "gemini"
+    return {"provider":provider_name, "model":response.model, "configured_model":model, "planning_stage":stage, "prompt_version":prompt_version, "schema_version":schemas[stage], "direct_input_hashes":inputs, "request_id":response.request_id, "attempts":response.attempts, "latency_ms":response.latency_ms, "usage":response.usage}
 
-def _default_provider(paths) -> RoutedGeminiProvider:
+def _default_provider(paths, config):
+    llm = config.settings.get("llm", {}) if isinstance(config.settings, dict) else {}
+    if llm.get("provider") == "external_anthropic":
+        external = llm.get("external_anthropic", {})
+        return AnthropicCompatibleProvider(base_url=str(external.get("base_url") or ""),
+                                           model_alias=str(external.get("model_alias") or ""),
+                                           auth_mode=str(external.get("auth_mode") or "x-api-key"))
     return RoutedGeminiProvider(GeminiReasoningRouter(
         cache_dir=paths.runtime.cache / "gemini_reasoning",
         ledger_path=paths.runtime.evidence / "gemini_reasoning_ledger.json"))
@@ -1015,7 +1032,7 @@ def run_planning_stages(runtime_root: Path | str, project_id: str, *, provider: 
     narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration; narration_sha = narration_hash(narration)
     alignment_path = paths.artifact_path("output/alignment.json"); alignment = read_json(alignment_path); alignment_sha = sha256_file(alignment_path)
     timeline_fp = fingerprint(stage_name="story_timeline", producer_version=TIMELINE_PROMPT_VERSION, artifact_schema_version=TIMELINE_SCHEMA_VERSION, direct_inputs={"alignment_sha256":alignment_sha,"narration_sha256":narration_sha,"model":model}, settings={k:v for k,v in settings.items() if k != "api_key"})
-    active = provider or _default_provider(paths)
+    active = provider or _default_provider(paths, config)
     with ProjectLock(paths.runtime, project_id):
         checkpoints = CheckpointStore(paths); timeline_path = paths.artifact_path("output/story_timeline.json")
         decision = checkpoints.decide("story_timeline", timeline_fp)
