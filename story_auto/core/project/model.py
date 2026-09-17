@@ -117,7 +117,7 @@ class ProjectConfig:
         if llm is not None:
             if not isinstance(llm, dict) or llm.get("provider") != "gemini":
                 raise ProjectValidationError("settings.llm.provider must be gemini")
-            model = llm.get("model", "gemini-3.5-flash")
+            model = llm.get("model", "gemini-3.8-flash")
             if not isinstance(model, str) or not model.strip():
                 raise ProjectValidationError("settings.llm.model must be non-empty text")
             if any(key.lower() in {"api_key", "key", "token", "secret", "credential"} for key in llm):

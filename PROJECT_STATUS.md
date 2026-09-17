@@ -118,7 +118,7 @@ Build OS/workflow findings and upgrade recommendations are captured in
 - TTS: ElevenLabs + Typecast + explicitly selected Kokoro Local.
 - Kokoro Local `Ready` requires its configured runtime, exact local model
   snapshot, selected voice, and load-only initialization probe to pass.
-- Planning LLM: Gemini 3.5 Flash baseline; 3.6 Flash benchmark candidate.
+- Planning LLM: Gemini 3.8 Flash is the HARD-first baseline; 3.7/3.6/3.5 remain deterministic fallbacks and Flash-Lite remains the BULK tier.
 - Visual provider: Google Flow for images/video.
 - Canonical alignment timing.
 - Story timeline / continuity / shots / media separation.

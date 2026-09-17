@@ -73,7 +73,7 @@ def _settings(config) -> tuple[str, dict[str, Any]]:
     llm = config.settings.get("llm")
     if not isinstance(llm, dict) or llm.get("provider") != "gemini":
         raise PlanningError("GEMINI_MODEL_UNAVAILABLE", "settings.llm.provider must be gemini")
-    model = llm.get("model", "gemini-3.5-flash")
+    model = llm.get("model", "gemini-3.8-flash")
     if not isinstance(model, str) or not model.strip(): raise PlanningError("GEMINI_MODEL_UNAVAILABLE")
     return model, llm
 

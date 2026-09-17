@@ -113,8 +113,9 @@ class GeminiProvider:
             parts.append({"inlineData": {"mimeType": media.mime_type,
                                          "data": base64.b64encode(media.data).decode("ascii")}})
         body = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": request.response_schema}}
+        modern_flash = request.model.startswith(("gemini-3.6-", "gemini-3.7-", "gemini-3.8-"))
         for key in ("temperature", "maxOutputTokens", "topP"):
-            if key in request.settings:
+            if key in request.settings and not (modern_flash and key in {"temperature", "topP"}):
                 body["generationConfig"][key] = request.settings[key]
         attempts = 0
         started = time.monotonic()

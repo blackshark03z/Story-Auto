@@ -47,7 +47,7 @@ def run_publishing_metadata(runtime_root: Path | str, project_id: str, *, provid
     llm = config.settings.get("llm", {})
     if not isinstance(llm, dict) or llm.get("provider") != "gemini":
         raise PublishingError("PUBLISHING_LLM_NOT_CONFIGURED")
-    model = str(llm.get("model", "gemini-3.5-flash"))
+    model = str(llm.get("model", "gemini-3.8-flash"))
     narration = parse_content_markdown(paths.content_file.read_text(encoding="utf-8")).narration
     final_manifest = read_json(paths.artifact_path("output/final_manifest.json"))
     direct = {"narration_sha256": _hash(narration), "final_sha256": final_manifest["final_sha256"],

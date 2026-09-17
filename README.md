@@ -28,7 +28,7 @@ release-supported creation mode during this freeze.
 ## V1 provider choices
 
 - TTS: **ElevenLabs**, **Typecast**, or explicit local **Kokoro Local**.
-- Planning LLM: **Gemini API**, baseline `gemini-3.5-flash`; `gemini-3.6-flash` is the first benchmark candidate.
+- Planning LLM: **Gemini API**, HARD-first `gemini-3.8-flash` with deterministic 3.7/3.6/3.5 fallback; Flash-Lite remains the BULK tier.
 - Image/video generation: **Google Flow** through an isolated browser-automation provider adapter.
 - Final composition: local FFmpeg/FFprobe pipeline.
 

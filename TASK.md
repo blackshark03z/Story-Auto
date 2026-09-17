@@ -1,5 +1,14 @@
 # Goal 54 — Full Video Seedance Provider Qualification
 
+## Gemini 3.8 reasoning baseline — 2026-09-17
+
+- Promote `gemini-3.8-flash` to HARD-first reasoning and new/default project model.
+- Preserve deterministic fallback through Gemini 3.7/3.6/3.5 and existing 2.5 safety fallbacks.
+- Preserve Flash-Lite BULK routing.
+- Remove deprecated sampling parameters from Gemini 3.6+ request shapes while preserving legacy request compatibility.
+- SoT: `docs/decisions/0008-gemini-3-8-brain-baseline.md`.
+
+
 ## Goal
 
 Reopen `full_video_ai` as an active development Goal by proving the smallest

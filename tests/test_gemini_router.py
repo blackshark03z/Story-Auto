@@ -42,8 +42,8 @@ def invoke(value, tier="HARD", confidence=True):
 def test_hard_and_bulk_router_model_order():
     with tempfile.TemporaryDirectory() as tmp:
         hard, calls = router(tmp, lambda *_: {"ok": True, "confidence": "HIGH"})
-        assert invoke(hard).model == "gemini-3.6-flash"
-        assert calls[0][1] == "gemini-3.6-flash"
+        assert invoke(hard).model == "gemini-3.8-flash"
+        assert calls[0][1] == "gemini-3.8-flash"
     with tempfile.TemporaryDirectory() as tmp:
         bulk, calls = router(tmp, lambda *_: {"ok": True, "confidence": "HIGH"})
         assert invoke(bulk, "BULK").model == "gemini-3.5-flash-lite"
@@ -92,8 +92,8 @@ def test_low_confidence_bulk_escalates_to_hard():
     with tempfile.TemporaryDirectory() as tmp:
         value, calls = router(tmp, lambda _key, model: {"ok": True, "confidence": "LOW"} if "lite" in model else {"ok": True, "confidence": "HIGH"})
         result = invoke(value, "BULK")
-        assert result.model == "gemini-3.6-flash"
-        assert [x[1] for x in calls] == ["gemini-3.5-flash-lite", "gemini-3.6-flash"]
+        assert result.model == "gemini-3.8-flash"
+        assert [x[1] for x in calls] == ["gemini-3.5-flash-lite", "gemini-3.8-flash"]
 
 
 def test_429_routes_to_another_project_without_hammering_same_project():
@@ -107,9 +107,9 @@ def test_429_routes_to_another_project_without_hammering_same_project():
 
 def test_model_fallback_and_project_model_health():
     with tempfile.TemporaryDirectory() as tmp:
-        value, calls = router(tmp, lambda _key, model: GeminiProviderError("GEMINI_MODEL_UNAVAILABLE") if model == "gemini-3.6-flash" else {"ok": True, "confidence": "HIGH"})
-        assert invoke(value).model == "gemini-3.5-flash"
-        assert [x[1] for x in calls] == ["gemini-3.6-flash", "gemini-3.5-flash"]
+        value, calls = router(tmp, lambda _key, model: GeminiProviderError("GEMINI_MODEL_UNAVAILABLE") if model == "gemini-3.8-flash" else {"ok": True, "confidence": "HIGH"})
+        assert invoke(value).model == "gemini-3.7-flash"
+        assert [x[1] for x in calls] == ["gemini-3.8-flash", "gemini-3.7-flash"]
 
 
 @pytest.mark.parametrize("failure", ["GEMINI_INVALID_REQUEST", "GEMINI_SAFETY_REFUSAL"])
@@ -126,10 +126,10 @@ def test_structured_schema_validation_and_cache_reuse_and_secret_redaction():
         count = {"n": 0}
         def behavior(_key, model):
             count["n"] += 1
-            return {"broken": True} if model == "gemini-3.6-flash" else {"ok": True, "confidence": "HIGH"}
+            return {"broken": True} if model == "gemini-3.8-flash" else {"ok": True, "confidence": "HIGH"}
         value, calls = router(tmp, behavior)
         first = invoke(value); second = invoke(value)
-        assert first.model == "gemini-3.5-flash" and second.cache_hit and second.request_count == 0
+        assert first.model == "gemini-3.7-flash" and second.cache_hit and second.request_count == 0
         ledger = (Path(tmp) / "ledger.json").read_text(encoding="utf-8")
         assert "secret-a" not in ledger and "key-01" in ledger and count["n"] == 2
 
@@ -137,8 +137,8 @@ def test_structured_schema_validation_and_cache_reuse_and_secret_redaction():
 def test_credential_health_is_scoped_by_project_and_model():
     with tempfile.TemporaryDirectory() as tmp:
         value, _ = router(tmp, lambda *_: {"ok": True, "confidence": "HIGH"})
-        value.health[("project-a", "gemini-3.6-flash")] = 1300
-        assert invoke(value).model == "gemini-3.5-flash"
+        value.health[("project-a", "gemini-3.8-flash")] = 1300
+        assert invoke(value).model == "gemini-3.7-flash"
 
 
 def test_routed_provider_preserves_planning_contract_and_records_actual_model():
@@ -148,6 +148,6 @@ def test_routed_provider_preserves_planning_contract_and_records_actual_model():
         response = provider.generate_structured(LLMRequest("gemini-3.5-flash", "structured", SCHEMA,
             {"max_attempts": 1}, "request-1", "story_timeline"))
         assert response.request_id == "request-1"
-        assert response.model == "gemini-3.6-flash"
+        assert response.model == "gemini-3.8-flash"
         assert response.usage["credential_alias"] == "key-01"
-        assert calls[0][1] == "gemini-3.6-flash"
+        assert calls[0][1] == "gemini-3.8-flash"

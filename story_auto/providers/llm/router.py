@@ -13,8 +13,8 @@ from story_auto.core.artifacts import atomic_write_json, read_json
 from story_auto.providers.credentials import provider_keys
 from .gemini import GeminiProvider, GeminiProviderError, LLMMedia, LLMRequest, LLMResponse
 
-ROUTER_VERSION = "story-auto-gemini-router/1.0.0"
-HARD_MODELS = ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash")
+ROUTER_VERSION = "story-auto-gemini-router/1.1.0"
+HARD_MODELS = ("gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash")
 BULK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite")
 
 

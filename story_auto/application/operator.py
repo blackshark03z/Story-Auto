@@ -225,7 +225,7 @@ def _creation_settings(settings: dict[str, Any], voice_id: str) -> dict[str, Any
     tts=settings.get("tts",{}) if isinstance(settings,dict) else {}
     kokoro=tts.get("kokoro_local",{}) if isinstance(tts,dict) else {}
     result={
-        "llm":{"provider":str(llm.get("provider","gemini")),"model":str(llm.get("model","gemini-3.5-flash"))},
+        "llm":{"provider":str(llm.get("provider","gemini")),"model":str(llm.get("model","gemini-3.8-flash"))},
         "tts":{"provider":"kokoro_local","allow_cross_provider_fallback":False,"kokoro_local":{
             "voice_id":voice_id,
             "runtime_path":str(kokoro.get("runtime_path") or Path(os.environ.get("STORY_AUTO_KOKORO_RUNTIME","D:/kokoro"))),
@@ -1259,7 +1259,7 @@ class OperatorService:
             "elyum":elyum_status,
             "pexels":pexels_status,
             "video_providers":video_providers,
-            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.5-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
+            "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.8-flash"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
