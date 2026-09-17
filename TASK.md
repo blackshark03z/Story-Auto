@@ -637,6 +637,13 @@ The Owner has now selected a new `XIANXIA_ANCHOR_V2` still direction after corre
 - Targeted dependency-contract qualification: 2/2 PASS. Full hermetic qualification with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: **829 passed, 4 skipped, 286 subtests passed**.
 - The four skips are environment-specific browser checks; this qualification made no live provider request and performed no Keep/Kill or provider-credit consequence.
 
+### System-Chrome browser acceptance checkpoint (2026-09-18)
+
+- The four environment skips above were test-discovery drift, not missing browser capability: Chrome was installed under 64-bit `Program Files`, while the affected tests checked only `Program Files (x86)`.
+- A shared test-only Chrome locator now checks the supported machine locations, and one stale full-width-plus `New video` selector was aligned with the current accessible button name. Product UI/runtime behavior is unchanged.
+- The four previously skipped browser journeys now execute in real headless system Chrome and pass: wizard shell/hydration, Audio+SRT readiness gating, creation while home refresh is slow, and visible production-action outcomes.
+- Focused browser qualification: 4/4 PASS. Full hermetic qualification with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`: **833 passed, 286 subtests passed, zero skipped**. No provider request or external consequence occurred.
+
 ### Hybrid Visual provider-configuration checkpoint (2026-09-16)
 
 - Pexels credential UX is product-complete without making Pexels a hard dependency; evidence: `docs/HYBRID_VISUAL_PROVIDER_SETUP_EVIDENCE.md`.

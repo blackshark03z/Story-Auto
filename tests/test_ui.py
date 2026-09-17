@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 from story_auto.ui import create_server
 from story_auto.providers.tts.kokoro_local import KokoroReadiness
+from tests.browser_support import system_chrome_path
 
 
 class OperatorUiTests(unittest.TestCase):
@@ -113,8 +114,8 @@ class OperatorUiTests(unittest.TestCase):
             self.assertNotIn(marker,script)
 
     def test_new_video_browser_creation_transitions_while_home_refresh_is_slow(self):
-        chrome=Path(os.environ.get("PROGRAMFILES(X86)",r"C:\\Program Files (x86)"))/"Google/Chrome/Application/chrome.exe"
-        if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the focused UI regression")
+        chrome=system_chrome_path()
+        if chrome is None: self.skipTest("Google Chrome is not installed for the focused UI regression")
         from playwright.sync_api import sync_playwright
         with tempfile.TemporaryDirectory() as root, \
              patch("story_auto.application.operator.available_voices",return_value=("bm_george",)), \
@@ -153,8 +154,8 @@ class OperatorUiTests(unittest.TestCase):
 
     def test_production_action_outcomes_are_visible_without_provider_dispatch(self):
         """A 200 response from the coordinator must retain its operator meaning."""
-        chrome=Path(os.environ.get("PROGRAMFILES(X86)",r"C:\\Program Files (x86)"))/"Google/Chrome/Application/chrome.exe"
-        if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the focused UI regression")
+        chrome=system_chrome_path()
+        if chrome is None: self.skipTest("Google Chrome is not installed for the focused UI regression")
         from playwright.sync_api import sync_playwright
         project_id="prj_action_outcomes"
         stages={name:{"status":"COMPLETE" if name in {"SOURCE","TIMING","PLAN"} else "READY"} for name in ("SOURCE","TIMING","PLAN","VISUALS","QUALITY","RENDER")}

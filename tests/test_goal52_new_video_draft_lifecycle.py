@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-import os
 from pathlib import Path
 import tempfile
 import threading
@@ -11,6 +10,7 @@ import wave
 
 from story_auto.application.operator import OperatorService
 from story_auto.ui import create_server
+from tests.browser_support import system_chrome_path
 
 
 def _wav(seconds: int = 2) -> bytes:
@@ -45,8 +45,8 @@ class Goal52DraftLifecycleTests(unittest.TestCase):
         self.assertIn("source:draft.source, audio:draft.importedAudio, srt:draft.importedSrt", script)
 
     def test_real_browser_shell_is_fast_and_hydration_cannot_reset_source(self):
-        chrome = Path(os.environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe"
-        if not chrome.is_file():
+        chrome = system_chrome_path()
+        if chrome is None:
             self.skipTest("Google Chrome is not installed for the focused UI regression")
         from playwright.sync_api import sync_playwright
 

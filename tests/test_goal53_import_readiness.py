@@ -14,6 +14,7 @@ from unittest.mock import patch
 from story_auto.application.operator import OperatorService, OperatorServiceError
 from story_auto.core.audio import SrtError, parse_srt_bytes
 from story_auto.ui import create_server
+from tests.browser_support import system_chrome_path
 
 
 def _wav(seconds: int = 2) -> bytes:
@@ -180,8 +181,8 @@ class Goal53ImportReadinessTests(unittest.TestCase):
         self.assertEqual((invalid_srt["status"], invalid_srt["code"], invalid_srt["srt"]["code"]), ("BLOCKED", "SRT_INVALID", "SRT_TIMESTAMP_INVALID"))
 
     def test_browser_shows_actionable_readiness_and_gates_continue(self):
-        chrome = Path(__import__("os").environ.get("PROGRAMFILES(X86)", r"C:\\Program Files (x86)")) / "Google/Chrome/Application/chrome.exe"
-        if not chrome.is_file(): self.skipTest("Google Chrome is not installed for the browser acceptance test")
+        chrome = system_chrome_path()
+        if chrome is None: self.skipTest("Google Chrome is not installed for the browser acceptance test")
         from playwright.sync_api import sync_playwright
 
         with tempfile.TemporaryDirectory() as root:
@@ -190,7 +191,7 @@ class Goal53ImportReadinessTests(unittest.TestCase):
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch(headless=True, executable_path=str(chrome))
                     page = browser.new_page(); page.goto(f"http://127.0.0.1:{server.server_address[1]}")
-                    page.get_by_role("button", name="＋ New video", exact=True).first.click()
+                    page.get_by_role("button", name="New video").first.click()
                     page.locator('input[name="inputSource"][value="AUDIO_SRT"]').check()
                     page.get_by_role("button", name="Continue", exact=True).click()
                     page.locator("#existingAudio").set_input_files({"name": "voice.wav", "mimeType": "audio/wav", "buffer": _wav()})
