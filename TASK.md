@@ -32,6 +32,8 @@ No new live generation or Keep/Kill budget is authorized by this plan.
   output settings. Unbound or stale final files are preserved, not advertised.
 - CUJ: Home refreshes before acting; a changed action requires another deliberate
   user choice. A late response cannot overwrite a newer project/Home/wizard.
+  Opening and closing New video also revokes pending Home intent, even when the
+  old project response arrives after the dialog closes (browser red/green proven).
   Review and Workspace share canonical final-output authority.
 - Recovery: interrupted BytePlus POST without a saved ID is ambiguous, never
   automatically redispatched. Elyum confirmed Keep survives failed acquisition;

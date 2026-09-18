@@ -169,6 +169,21 @@ class HomeActionFreshnessTests(unittest.TestCase):
         self.assertEqual(self.page.evaluate("state.snapshot.project_id"), "prj_other")
         self.assertEqual(self.actions, [])
 
+    def test_opening_then_closing_new_video_cancels_pending_card_intent(self):
+        self.delay_project = "prj_home"
+        self.page.route("**/api/creation-defaults", lambda route: route.fulfill(status=200, content_type="application/json", body="{}"))
+        self.home()
+        self.page.get_by_role("button", name="Continue production", exact=True).click()
+        self.assertTrue(self.started.wait(3))
+        self.page.locator("#newVideoTop").click()
+        self.page.get_by_role("dialog").wait_for()
+        self.page.locator("#closeWizard").click()
+        with self.page.expect_response(lambda response: response.url.endswith("/workspace")):
+            self.release.set()
+        self.page.wait_for_function("state.busy === false")
+        self.assertEqual(self.actions, [])
+        self.assertIsNone(self.page.evaluate("state.snapshot"))
+
     def test_completed_card_opens_fresh_result_and_repeat_creation(self):
         self.cards = [self.card("prj_home", "open_final", "Open final video")]
         complete = self.workspaces["prj_home"]

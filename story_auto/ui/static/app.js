@@ -1080,6 +1080,11 @@ async function validateSourceImports(wizard=state.wizard) {
 }
 
 async function openWizard() {
+  // Starting a different journey revokes any not-yet-executed Home intent,
+  // even if the dialog closes before the old workspace response arrives.
+  if (state.projectOpenToken && !state.snapshot) { state.view = 'home'; state.project = null; }
+  state.projectOpenToken = null;
+  if (!state.runToken) setBusy(false);
   const isNew = !state.wizard;
   if (isNew) state.wizard = freshDraft();
   const wizard=state.wizard;

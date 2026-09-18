@@ -228,7 +228,7 @@ class ElyumHybridOpeningTests(unittest.TestCase):
                             evidence = Path(destination); evidence.mkdir(parents=True, exist_ok=True)
                             for name, width, height in (("desktop",1366,768),("narrow",760,820)):
                                 page.set_viewport_size({"width":width,"height":height})
-                                page.evaluate("window.scrollTo(0,0)")
+                                page.evaluate("window.scrollTo({top:0,left:0,behavior:'instant'})")
                                 page.screenshot(path=str(evidence / f"opening-acquire-{name}.png"), full_page=True)
                                 self.assertLessEqual(page.evaluate("document.documentElement.scrollWidth"), width)
                             (evidence / "opening-acquire.json").write_text(json.dumps({
