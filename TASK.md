@@ -50,7 +50,24 @@ Verification uses isolated temporary runtimes, fake provider transports, real lo
 FFmpeg output, and actual browser interaction. Historical tests using arbitrary
 bytes as a "valid final" now use a real tiny render with current input/approval
 bindings. This strengthens the oracle rather than bypassing final validation.
-Final repository gate results are recorded below after the frozen-candidate run.
+Final repository gates on frozen implementation commit
+`dba1e79fc2fd729ac5dbe49127e9d2e1f07b08ab`:
+
+- `technical_validation=PASS`: **849 passed, 304 subtests passed, 0 skipped**,
+  full suite in 273.95 seconds with third-party pytest plugin autoload disabled.
+- Quality gate PASS, frozen design contract `story-auto.frozen-design/1.0.0`
+  unchanged; security gate PASS and no YouTube Auto runtime imports.
+- JavaScript syntax check and Git whitespace check PASS; clean worktree during
+  the final run. Application tree `d441afc01d306f7b05c363a25bd3c9bee6c35cd6`;
+  tests tree `837292f07e76588421c6c4c96d6493ec01f0934b`.
+- Full machine-readable report:
+  `D:\Story Auto\evidence\cads_delivery_20260918\final-suite.xml`.
+  The following documentation-only closeout does not change either tested tree.
+- `engineering_delivery=COMPLETE` for this bounded batch;
+  `live_provider_acceptance=NOT_RUN`, `owner_real_use_acceptance=NOT_CLAIMED`.
+  Commits are local; no remote push, stable-tag promotion or running owner-session
+  restart is included in this closeout. Next consequential step is a separately
+  bounded real-use/provider acceptance run under Owner authorization.
 
 Rendered evidence is local at `D:\Story Auto\evidence\cads_delivery_20260918`:
 `stale-final-{desktop,narrow}`, `fresh-final-{desktop,narrow}`,
