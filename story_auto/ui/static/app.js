@@ -274,9 +274,12 @@ function openingBuilderSurface(snapshot) {
   const providers = snapshot.opening_api_providers || {byteplus:snapshot.opening_api_provider || {},elyum:{}};
   const byteplus = providers.byteplus || {};
   const elyum = providers.elyum || {};
+  const dola = providers.dola || {};
+  const flowCookie = providers.flow_cookie || {};
   const providerPolicy = String(snapshot.opening_provider_policy || 'AUTO').toUpperCase();
   const allowBytePlus = providerPolicy === 'AUTO' || providerPolicy === 'BYTEPLUS';
   const allowElyum = providerPolicy === 'AUTO' || providerPolicy === 'ELYUM';
+  const allowDola = providerPolicy === 'AUTO' || providerPolicy === 'DOLA';
   const slots = (opening.slots || []).map(slot => {
     const ready = slot.status === 'READY' && slot.asset_ready;
     const api = slot.api_generation || {};
@@ -285,11 +288,28 @@ function openingBuilderSurface(snapshot) {
     const noProvider = !providerId;
     const byteplusActive = providerId === 'byteplus_seedance';
     const elyumActive = providerId === 'elyum_seedance';
+    const dolaActive = providerId === 'dola_cookie';
+    const flowCookieActive = providerId === 'flow_cookie';
     const preflight = slot.elyum_preflight || {};
     const elyumModels = Array.isArray(preflight.models) ? preflight.models : [];
     const affordableModels = elyumModels.filter(item => item.affordable === true);
     let providerControls = '';
+    let flowControls = '';
+    if (!ready && noProvider && providerPolicy === 'AUTO') {
+      let inner = '<small>Save a named Flow session in Settings first. Existing image and body generation are unchanged.</small>';
+      if (flowCookie.configured) {
+        if (Number(slot.duration_seconds) > 8) inner = '<small>Flow reference video supports opening slots up to 8 seconds. Import a clip for this longer slot.</small>';
+        else if (!flowCookie.generation_enabled) inner = '<small>Experimental Flow generation is not enabled for this runtime. Saved sessions can still be tested in Settings.</small>';
+        else inner = `<label>Flow session <select data-opening-flow-account="${esc(slot.slot_id)}" aria-label="Flow session for ${esc(slot.slot_id)}">${(flowCookie.accounts || []).map(a=>`<option value="${esc(a.account_id)}">${esc(a.account_id)} · revision ${esc(a.revision)}</option>`).join('')}</select></label><label>Flow project URL <input type="url" data-opening-flow-project="${esc(slot.slot_id)}" aria-label="Flow project for ${esc(slot.slot_id)}" placeholder="https://flow.google.com/project/..."></label><label>Reference PNG <input type="file" accept="image/png,.png" data-opening-flow-reference="${esc(slot.slot_id)}" aria-label="Flow reference for ${esc(slot.slot_id)}"></label><small>One 8-second video, trimmed to this slot. Your existing Flow allowance may be consumed.</small><button data-opening-flow="${esc(slot.slot_id)}" type="button">Generate one Flow video</button>`;
+      }
+      flowControls = `<details class="opening-flow-options"><summary>Flow video from reference image (experimental)</summary>${inner}</details>`;
+    } else if (!ready && flowCookieActive) {
+      flowControls = `<small>Flow session ${esc(api.account_id)} · revision ${esc(api.revision)}. Recovery checks this same video only; it never creates a replacement.</small><button data-opening-flow="${esc(slot.slot_id)}" data-resume="true" type="button">Check / recover Flow video</button><button data-opening-flow-reset="${esc(slot.slot_id)}" type="button">Reset unused setup</button><small>Reset is allowed only when saved evidence proves that no upload or generation was attempted. Attempt history is preserved.</small>`;
+    }
     if (!ready && noProvider) {
+      if (allowDola && dola.configured && Number(slot.duration_seconds) <= 10) {
+        providerControls += `<label>Dola account <select aria-label="Dola account for ${esc(slot.slot_id)}" data-opening-dola-account="${esc(slot.slot_id)}">${(dola.accounts || []).map(a => `<option value="${esc(a.account_id)}">${esc(a.account_id)}</option>`).join('')}</select></label><button data-opening-dola="${esc(slot.slot_id)}" type="button">Generate with Dola</button>`;
+      }
       if (allowBytePlus && byteplus.status === 'READY') providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Generate with BytePlus</button>`;
       if (allowElyum && elyum.configured) {
         if (preflight.status === 'READY' && elyumModels.length) {
@@ -300,6 +320,10 @@ function openingBuilderSurface(snapshot) {
           providerControls += `<button data-opening-elyum-preflight="${esc(slot.slot_id)}" type="button">Check Elyum options</button>`;
         }
       }
+    } else if (!ready && dolaActive && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED') {
+      providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Try Dola after updating cookie</button>`;
+    } else if (!ready && dolaActive && api.provider_task_id && !['SUCCEEDED','FAILED_TERMINAL'].includes(apiState)) {
+      providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-resume="true" type="button">Check / recover Dola video</button>`;
     } else if (!ready && byteplusActive && !['AMBIGUOUS','FAILED_TERMINAL'].includes(apiState)) {
       providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Resume BytePlus generation</button>`;
     } else if (!ready && elyumActive) {
@@ -319,10 +343,12 @@ function openingBuilderSurface(snapshot) {
     const unresolvedProvider = !!providerId && !['FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED','FAILED_TERMINAL','KILLED','SUCCEEDED'].includes(apiState);
     const importButton = unresolvedProvider ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
+    if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : 'Submission needs attention; a second video will not be submitted automatically.'} ${esc(api.failure_class || '')}</small>`;
+    if (!ready && noProvider && allowDola && !dola.configured) apiNote = '<small>Add Dola accounts in Settings to use cookie-based text-to-video.</small>';
     if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
     else if (!ready && noProvider && providerPolicy === 'BYTEPLUS' && byteplus.status !== 'READY') apiNote = '<small>BytePlus is selected but not configured. Manual import remains available.</small>';
     else if (!ready && noProvider && providerPolicy === 'ELYUM' && !elyum.configured) apiNote = '<small>Elyum is selected but not configured. Manual import remains available.</small>';
-    else if (!ready && noProvider && byteplus.status !== 'READY' && !elyum.configured) apiNote = '<small>No video API is configured. Manual import remains available.</small>';
+    else if (!ready && noProvider && byteplus.status !== 'READY' && !elyum.configured && !dola.configured) apiNote = '<small>No video provider is configured. Add Dola accounts in Settings or import a clip.</small>';
     if (!ready && preflight.status === 'READY' && !affordableModels.length) apiNote = `<small>Elyum models are available, but the current balance (${esc(preflight.balance)}) is below every quoted option for this slot.</small>`;
     if (elyumActive && apiState === 'PREVIEW_READY') apiNote = '<small>Locked Elyum preview. It is not an Opening asset yet: review it, then Keep to spend and download the original.</small>';
     if (elyumActive && apiState === 'KEEP_REQUIRED') apiNote = '<small>Preview accepted. Keep is the Elyum spend boundary; Story Auto will not call it automatically.</small>';
@@ -332,9 +358,9 @@ function openingBuilderSurface(snapshot) {
     if (byteplusActive && apiState === 'AMBIGUOUS') apiNote = '<small>BytePlus submission is ambiguous. Story Auto will not submit or switch provider automatically.</small>';
     const lockedPreview = !ready && elyumActive && api.preview_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,api.preview_asset.path)}" aria-label="${esc(slot.slot_id)} Elyum locked preview"></video>` : '';
     const preview = ready && slot.normalized_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,slot.normalized_asset.path)}" aria-label="${esc(slot.slot_id)} normalized opening clip"></video>` : '';
-    const sourceKind = slot.source_asset?.provider === 'elyum_seedance' ? 'Generated by Elyum' : slot.source_asset?.provider === 'byteplus_seedance' || (byteplusActive && apiState === 'SUCCEEDED') ? 'Generated by BytePlus' : 'Imported';
+    const sourceKind = slot.source_asset?.provider === 'flow_cookie' ? 'Generated by Flow' : slot.source_asset?.provider === 'dola_cookie' ? 'Generated by Dola' : slot.source_asset?.provider === 'elyum_seedance' ? 'Generated by Elyum' : slot.source_asset?.provider === 'byteplus_seedance' || (byteplusActive && apiState === 'SUCCEEDED') ? 'Generated by BytePlus' : 'Imported';
     const source = slot.source_asset ? `<small>${sourceKind} · ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip bound yet.</small>';
-    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${apiNote}${source}${lockedPreview}${preview}</article>`;
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${flowControls}${apiNote}${source}${lockedPreview}${preview}</article>`;
   }).join('');
   return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Choose BytePlus, Elyum preview/Keep, or manual import per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Opening provider policy</strong><small>${esc(providerPolicy)}</small></div><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
 }
@@ -390,7 +416,56 @@ async function openingFilePayload(file) {
   return {filename:file.name,base64:encoded};
 }
 
+async function confirmFlowAction(message, actionLabel) {
+  if (document.getElementById('flowConfirmDialog')) return false;
+  const previousFocus=document.activeElement;
+  const dialog=document.createElement('dialog');
+  dialog.id='flowConfirmDialog';
+  dialog.setAttribute('aria-labelledby','flowConfirmTitle');
+  dialog.setAttribute('aria-describedby','flowConfirmMessage');
+  dialog.innerHTML=`<div class="dialog-shell"><header class="dialog-head"><h2 id="flowConfirmTitle">Review Flow action</h2></header><div class="dialog-content"><p id="flowConfirmMessage">${esc(message)}</p></div><footer class="dialog-actions"><button type="button" data-flow-cancel autofocus>Cancel</button><button type="button" data-flow-confirm>${esc(actionLabel)}</button></footer></div>`;
+  document.body.append(dialog);
+  return new Promise(resolve=>{
+    dialog.addEventListener('close',()=>{
+      const approved=dialog.returnValue==='confirmed';
+      dialog.remove();
+      if(previousFocus?.isConnected) previousFocus.focus();
+      resolve(approved);
+    },{once:true});
+    dialog.querySelector('[data-flow-cancel]').addEventListener('click',()=>dialog.close('cancelled'));
+    dialog.querySelector('[data-flow-confirm]').addEventListener('click',()=>dialog.close('confirmed'));
+    dialog.showModal();
+  });
+}
+
 function bindOpeningBuilderControls() {
+  document.querySelectorAll('[data-opening-flow-project]').forEach(input=>{
+    input.value=state.snapshot?.opening_api_providers?.flow_cookie?.generation_project_url || '';
+  });
+  document.querySelectorAll('[data-opening-flow-reset]').forEach(button=>button.addEventListener('click',async()=>{
+    if (!await confirmFlowAction('Reset this Flow setup only if saved evidence proves zero provider effects? History stays saved. This does not generate a replacement.','Reset unused setup')) return;
+    await runAction('reset_unused_flow_cookie_opening','Checking whether setup can be reset safely...',{slot_id:button.dataset.openingFlowReset,confirm_reset:true});
+  }));
+  document.querySelectorAll('[data-opening-flow]').forEach(button=>button.addEventListener('click',async()=>{
+    const slotId=button.dataset.openingFlow;
+    if (button.dataset.resume) {
+      await runAction('generate_flow_cookie_opening','Checking the same Flow video...',{slot_id:slotId,recovery_only:true});
+      return;
+    }
+    const select = suffix=>document.querySelector(`[data-opening-flow-${suffix}="${CSS.escape(slotId)}"]`);
+    const account=select('account')?.value || '';
+    const project=select('project')?.value.trim() || '';
+    const file=select('reference')?.files[0];
+    if (!account || !project || !file) { toast('Choose a Flow session, project URL and reference PNG.',true); return; }
+    if (file.size>20*1024*1024) { toast('Reference PNG must be 20 MB or smaller.',true); return; }
+    if (!await confirmFlowAction(`Generate one 8-second Flow video for ${slotId}? Session: ${account}. Project: ${project}. Reference: ${file.name}. It will be trimmed to this slot and may consume your Flow allowance.`,'Generate one video')) return;
+    button.disabled=true;
+    try {
+      const reference=await openingFilePayload(file);
+      await runAction('generate_flow_cookie_opening','Creating one Flow reference video...',{slot_id:slotId,account_id:account,project_url:project,imported_reference:reference,confirm_generate:true});
+    } catch (_) { toast('Could not read the reference PNG. Choose the file again.',true); }
+    finally { button.disabled=false; }
+  }));
   document.querySelectorAll('[data-opening-prepare]').forEach(button => button.addEventListener('click', async () => {
     await runAction('prepare_opening_builder','Preparing exact opening prompts from the saved plan…');
   }));
@@ -408,6 +483,12 @@ function bindOpeningBuilderControls() {
   }));
   document.querySelectorAll('[data-opening-api]').forEach(button => button.addEventListener('click', async () => {
     await runAction('generate_opening_api',`Generating ${button.dataset.openingApi} with BytePlus API...`,{slot_id:button.dataset.openingApi});
+  }));
+  document.querySelectorAll('[data-opening-dola]').forEach(button => button.addEventListener('click', async () => {
+    const slotId = button.dataset.openingDola;
+    const account = document.querySelector(`[data-opening-dola-account="${CSS.escape(slotId)}"]`)?.value || button.dataset.account || '';
+    if (!button.dataset.resume && !window.confirm(`Generate one Dola text-to-video clip for ${slotId} using account ${account}? A 5 or 10 second clip will be requested and trimmed to this slot. Account quota may be consumed. Image references are not supported yet.`)) return;
+    await runAction('generate_dola_opening',button.dataset.resume ? 'Checking the same Dola video...' : 'Submitting one Dola video...',{slot_id:slotId,account_id:account});
   }));
   document.querySelectorAll('[data-opening-elyum-preflight]').forEach(button => button.addEventListener('click', async () => {
     await runAction('preflight_elyum_opening',`Checking Elyum models and cost for ${button.dataset.openingElyumPreflight}...`,{slot_id:button.dataset.openingElyumPreflight});
@@ -638,6 +719,11 @@ function friendlyError(error) {
   const code = error?.payload?.failure_class || 'UNKNOWN_ERROR';
   const raw = error?.payload?.error || error?.message || code;
   const known = {
+    FLOW_COOKIE_NO_EFFECT_PROOF_REQUIRED: ['Keep this Flow attempt', 'Saved evidence cannot prove that nothing was sent. Use Check / recover Flow video; no replacement will be generated.', 'focus_opening_builder', 'Review opening'],
+    FLOW_COOKIE_ATTEMPT_IDENTITY_MISMATCH: ['The Flow session or inputs changed', 'This attempt keeps its original session revision, project and reference. Recover the original attempt; only unused setup with zero-effect proof can be reset.', 'focus_opening_builder', 'Review opening'],
+    FLOW_COOKIE_SLOT_DURATION_UNSUPPORTED: ['Opening slot is too long for Flow', 'Flow reference video supports slots up to 8 seconds. Use another qualified provider or import a clip.', 'focus_opening_builder', 'Review opening'],
+    FLOW_RPC_DISABLED: ['Flow generation is not enabled', 'This runtime is not enabled for the selected Flow project. No video was submitted. Saved cookie sessions can still be checked in Settings.', 'settings', 'Settings'],
+    FLOW_COOKIE_PROJECT_INVALID: ['Check the Flow project address', 'Use the exact HTTPS Flow project address from your browser, without extra query parameters.', 'focus_opening_builder', 'Review opening'],
     STORY_TIMELINE_INVALID: ['Visual planning needs another attempt',"Story Auto couldn't produce a complete visual plan. Your audio and timing are saved. Try again.",'retry','Retry planning'],
     FLOW_AUTH_REQUIRED: ['Google sign-in required','Sign in to Google Flow, then return here and choose Try again.','open_flow_sign_in','Open Flow sign-in'],
     FLOW_CDP_UNAVAILABLE: ['Google Flow is not open','Open the dedicated Story Auto Flow window, sign in if needed, then try again.','open_flow_sign_in','Open Flow sign-in'],
@@ -859,10 +945,26 @@ async function showSettings() {
   const narratorMessage = state.settings.defaults.narrator_message || (installedVoices().length ? '' : 'No installed Kokoro narrators are available. Configure Kokoro before creating a video.');
   const providerRows = state.settings.providers.map(provider => `<div class="provider-row"><div><strong>${esc(provider.name)}</strong><small>${esc(provider.detail)}</small></div><span class="provider-state ${provider.status !== 'Ready' ? 'attention' : ''}">${esc(provider.status)}</span></div>`).join('');
   const flow = state.settings.flow_connection || {};
+  const flowCookie = state.settings.flow_cookie || {};
+  const flowCookieAccounts = flowCookie.accounts || [];
+  const flowCookieDetails = `<section class="settings-section" aria-labelledby="flowCookieHeading">
+    <p class="eyebrow">EXPERIMENTAL · REFERENCE VIDEO</p><h2 id="flowCookieHeading">Flow cookie session</h2>
+    <p>Save a session without keeping your own Chrome window open. Saving or testing does not generate video or switch existing projects.</p>
+    <p>${esc(flowCookieAccounts.length ? `${flowCookieAccounts.length} saved session(s) · Configured, not checked` : flowCookie.status === 'NEEDS_ATTENTION' ? 'Saved sessions could not be read. Check local credential storage before continuing.' : 'No sessions saved. Choose a Cookie Editor JSON export to begin.')}</p>
+    <div class="settings-grid"><div class="field"><label for="flowCookieName">Session name</label><input id="flowCookieName" autocomplete="off" maxlength="80" placeholder="daily"><small>Use the same name to refresh its cookie. This creates a new revision; existing attempts never switch revisions silently.</small></div>
+    <div class="field"><label for="flowCookieFile">Cookie JSON file</label><input id="flowCookieFile" type="file" accept=".json,.txt,application/json"><small>Encrypted for this Windows user. Cookie values are never shown again or saved in project files.</small></div></div>
+    <div class="button-row"><button id="previewFlowCookie" type="button">Preview session</button><button id="saveFlowCookie" type="button">Save session</button></div>
+    <hr><div class="settings-grid"><div class="field"><label for="flowCookieAccount">Saved session</label><select id="flowCookieAccount" ${flowCookieAccounts.length ? '' : 'disabled'}>${flowCookieAccounts.length ? flowCookieAccounts.map(a=>`<option value="${esc(a.account_id)}">${esc(a.account_id)} · revision ${esc(a.revision)}</option>`).join('') : '<option>No saved sessions</option>'}</select></div>
+    <div class="field"><label for="flowCookieProject">Flow project URL</label><input id="flowCookieProject" type="url" placeholder="https://flow.google.com/project/..."><small>Open the target project in Flow and copy its address. This check only reads access.</small></div></div>
+    <div class="button-row"><button id="testFlowCookie" type="button" ${flowCookieAccounts.length ? '' : 'disabled'}>Test connection</button><button id="removeFlowCookie" type="button" ${flowCookieAccounts.length ? '' : 'disabled'}>Remove saved session</button></div>
+    ${flowCookieAccounts.length ? '' : '<small>Save a session first to enable the connection check.</small>'}
+    <p id="flowCookieStatus" role="status" aria-live="polite"></p>
+  </section>`;
   const byteplus = state.settings.byteplus || {};
   const elyum = state.settings.elyum || {};
   const pexels = state.settings.pexels || {};
   const externalLlm = state.settings.external_llm || {};
+  const dola = state.settings.dola || {};
   const videoProviders = state.settings.video_providers || [];
   const flowLabel = {CONNECTED:'Flow session ready',NOT_CONFIGURED:'Open Flow to connect',AUTH_REQUIRED:'Sign in to Flow to continue',STALE:'Flow session needs confirmation',PROJECT_MISMATCH:'Flow session needs confirmation',CAPABILITY_MISSING:'Flow image creation is unavailable'}[flow.status] || 'Open Flow to connect';
   const flowDetails = `<section class="settings-section"><h2>Flow session</h2><p>Story Auto uses its dedicated Chrome profile and automatically creates one Flow project for each new video.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(flowLabel)}</dd></div><div class="summary-row"><dt>Browser profile</dt><dd>Dedicated Story Auto session</dd></div><div class="summary-row"><dt>Validated capabilities</dt><dd>${esc(Object.entries(flow.observed_capabilities || {}).filter(([,ok]) => ok).map(([name]) => name).join(', ') || 'Not checked')}</dd></div></dl></section>`;
@@ -880,13 +982,20 @@ async function showSettings() {
   const externalLlmDetails = `<section class="settings-section"><p class="eyebrow">AI BRAIN</p><h2>Reasoning provider</h2><p>Gemini 3.8 is the production baseline. You can instead route new projects through any gateway that implements the Anthropic Messages API. Existing projects keep their saved provider.</p><dl class="summary-list"><div class="summary-row"><dt>Default for new projects</dt><dd id="brainProviderStatus">${esc(brainProvider === 'external_anthropic' ? 'External Anthropic-compatible gateway' : 'Gemini 3.8 Flash')}</dd></div><div class="summary-row"><dt>External status</dt><dd id="externalLlmLiveStatus">${esc(externalState)}</dd></div><div class="summary-row"><dt>Saved external keys</dt><dd>${esc(externalLlm.saved_credential_count ?? 0)}</dd></div></dl><div class="settings-grid"><div class="field"><label for="externalLlmBaseUrl">Gateway base URL</label><input id="externalLlmBaseUrl" type="url" value="${esc(externalLlm.base_url || '')}" placeholder="https://gateway.example.com or https://gateway.example.com/anthropic"><small>Use the API base URL, not the shop/account page. Story Auto appends /v1/messages.</small></div><div class="field"><label for="externalLlmModel">Model alias</label><input id="externalLlmModel" type="text" value="${esc(externalLlm.model_alias || '')}" placeholder="claude-sonnet-4-5 or gateway alias"></div><div class="field"><label for="externalLlmAuthMode">Authentication</label><select id="externalLlmAuthMode"><option value="x-api-key" ${externalLlm.auth_mode !== 'bearer' ? 'selected' : ''}>x-api-key</option><option value="bearer" ${externalLlm.auth_mode === 'bearer' ? 'selected' : ''}>Authorization: Bearer</option></select></div></div><div class="field" style="margin-top:16px"><label for="externalLlmApiKey">External gateway API keys</label><textarea id="externalLlmApiKey" rows="4" autocomplete="off" spellcheck="false" placeholder="Paste one key per line. New keys are appended; duplicates are ignored."></textarea><small>Keys are encrypted with Windows DPAPI. Base URL/model/auth mode are non-secret defaults for future projects.</small></div><div class="button-row" style="margin-top:14px"><button id="useGeminiBrain" type="button">Use Gemini 3.8</button><button id="saveExternalLlmConfig" type="button">Use external gateway</button><button id="saveExternalLlmKeys" type="button">Add gateway keys</button><button id="testExternalLlm" type="button" ${externalLlm.credential_configured && externalLlm.base_url && externalLlm.model_alias ? '' : 'disabled'}>Test connection</button><button id="clearExternalLlmKeys" class="button-quiet" type="button" ${externalLlm.removable ? '' : 'disabled'}>Remove saved keys</button></div><small>Gateway model names are aliases reported by that gateway. Story Auto does not claim they prove the upstream vendor/model identity.</small></section>`;
   const videoProviderRows = videoProviders.map(provider => `<div class="provider-row"><div><strong>${esc(provider.display_name)}</strong><small>Tier ${esc(provider.tier)} · ${esc(provider.model_family)} · ${esc(provider.transport)} · ${esc(provider.lifecycle)}</small></div><span class="provider-state ${provider.status !== 'READY' ? 'attention' : ''}">${esc(provider.experimental ? 'Experimental' : provider.production_routed ? provider.status : `${provider.status} · not routed`)}</span></div>`).join('');
   const videoProviderDetails = `<section class="settings-section"><h2>Video generation providers</h2><p>Capability-first registry. Model family and provider are separate; provider-specific lifecycle stays inside each adapter.</p><div class="provider-list">${videoProviderRows}</div><small>Provider switching is allowed only before a confirmed or ambiguous external dispatch. Manual external generation remains available for Hybrid Opening.</small></section>`;
+  const dolaAccounts = Array.isArray(dola.accounts) ? dola.accounts : [];
+  const dolaRows = dolaAccounts.length
+    ? dolaAccounts.map(account => `<div class="provider-row"><div><strong>${esc(account.account_id)}</strong><small>Cookie saved on this Windows user account.</small></div><button class="button-quiet" type="button" data-remove-dola-account="${esc(account.account_id)}">Remove</button></div>`).join('')
+    : '<p class="hint">No Dola accounts are saved.</p>';
+  const dolaDetails = `<section class="settings-section"><p class="eyebrow">EXPERIMENTAL VIDEO PROVIDER</p><h2>Dola accounts</h2><p>Paste a fresh browser cookie when an account needs renewal. Account names stay the same when you update their cookie.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(dola.configured ? 'Configured' : 'Not configured')}</dd></div><div class="summary-row"><dt>Saved accounts</dt><dd>${esc(dola.account_count || 0)}</dd></div><div class="summary-row"><dt>Connection check</dt><dd>Not checked</dd></div></dl><div class="provider-list" style="margin-top:14px">${dolaRows}</div><div class="field" style="margin-top:16px"><label for="dolaAccountsInput">Named Dola cookie accounts</label><textarea id="dolaAccountsInput" rows="5" autocomplete="off" spellcheck="false" placeholder="account-name[TAB]full cookie header"></textarea><small>One account per line. You can also paste JSON: [{"account_id":"name","cookie":"full cookie"}]. Cookies are encrypted for this Windows user and never shown again.</small></div><div id="dolaPreview" class="hint" aria-live="polite"></div><div class="button-row" style="margin-top:14px"><button id="previewDolaAccounts" type="button">Preview changes</button><button id="saveDolaAccounts" class="button-primary" type="button">Save accounts</button></div></section>`;
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
   $('#view').innerHTML = `<div class="settings-layout">
     <section class="settings-section"><p class="eyebrow">DEFAULT FOR NEW PROJECTS</p><h2>General defaults</h2><p>These durable defaults apply only when you create a new video. Existing projects keep their saved settings.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default output style</label><select id="defaultMode"><option value="full_image" selected>Full Image</option><option value="hybrid_hook" disabled>Hybrid Visual — choose per video</option><option value="full_video_ai" disabled>Full Video — choose per video</option></select><small>Full Image is the only global default. Hybrid Visual and Full Video remain available when creating an individual video.</small></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(selectedDefaultVoice)}</select>${narratorMessage ? `<small class="field-error">${esc(narratorMessage)}</small>` : ''}</div><div class="field"><label for="defaultQuality">Default Quality Review</label><select id="defaultQuality"><option value="AUTO_ACCEPT" ${state.settings.creation_defaults.qc_policy === 'AUTO_ACCEPT' ? 'selected' : ''}>Automatic</option><option value="MANUAL_REVIEW" ${state.settings.creation_defaults.qc_policy === 'MANUAL_REVIEW' ? 'selected' : ''}>Manual</option></select></div><label class="choice"><input id="defaultWaveform" type="checkbox" ${state.settings.creation_defaults.full_image?.audio_visualizer !== false ? 'checked' : ''}><strong>Waveform</strong><small>Show by default for Full Image projects.</small></label></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button" ${installedVoices().length ? '' : 'disabled'}>Save defaults</button></div></section>
     <section class="settings-section"><h2>Connections</h2><p>Human-level readiness for the services Story Auto can use.</p><div class="provider-list">${providerRows}</div></section>
     ${videoProviderDetails}
+    ${dolaDetails}
     ${externalLlmDetails}
     ${flowDetails}
+    ${flowCookieDetails}
     ${byteplusDetails}
     ${elyumDetails}
     ${pexelsDetails}
@@ -987,6 +1096,94 @@ async function showSettings() {
     try { await api('/api/settings/external-llm/clear',{method:'POST',body:'{}'}); toast('Saved external gateway keys removed.'); await showSettings(); }
     catch (error) { toast(friendlyError(error).message,true); }
   });
+  let flowCookieBusy = false;
+  async function flowCookieAction(message, work) {
+    if (flowCookieBusy) return;
+    flowCookieBusy = true;
+    const controls = ['previewFlowCookie','saveFlowCookie','testFlowCookie','removeFlowCookie'].map(id=>$('#'+id));
+    const previous = controls.map(button=>button.disabled);
+    const previousFocus = document.activeElement;
+    const status = $('#flowCookieStatus'); status.textContent = message;
+    controls.forEach(button=>button.disabled=true);
+    try { await work(status); }
+    catch (error) {
+      const localMessages = [
+        'Enter a session name and choose a cookie JSON file.',
+        'Cookie file is too large (maximum 1 MB).',
+      ];
+      status.textContent = localMessages.includes(error.message) ? error.message : friendlyError(error).message;
+      toast(status.textContent,true);
+    }
+    finally {
+      flowCookieBusy=false;
+      controls.forEach((button,i)=>button.disabled=previous[i]);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    }
+  }
+  async function flowCookieDraft() {
+    const account_id = $('#flowCookieName').value.trim();
+    const file = $('#flowCookieFile').files[0];
+    if (!account_id || !file) throw new Error('Enter a session name and choose a cookie JSON file.');
+    if (file.size > 1024*1024) throw new Error('Cookie file is too large (maximum 1 MB).');
+    return {account_id,cookies:await file.text()};
+  }
+  $('#previewFlowCookie').addEventListener('click',()=>flowCookieAction('Checking import...',async status=>{
+    const draft = await flowCookieDraft();
+    const preview = await api('/api/settings/flow-cookie/preview',{method:'POST',body:JSON.stringify(draft)});
+    status.textContent = `${preview.replacing ? 'Refresh' : 'Add'} session "${draft.account_id}". No generation or project change. Select Save session to confirm.`;
+  }));
+  $('#saveFlowCookie').addEventListener('click',()=>flowCookieAction('Checking import...',async status=>{
+    const draft = await flowCookieDraft();
+    const preview = await api('/api/settings/flow-cookie/preview',{method:'POST',body:JSON.stringify(draft)});
+    if (!await confirmFlowAction(`${preview.replacing ? 'Refresh' : 'Save'} Flow session "${draft.account_id}" for this Windows user? Existing projects and attempts will not switch automatically.`,'Save session')) {
+      status.textContent='Not saved. Your selected file is unchanged.'; return;
+    }
+    await api('/api/settings/flow-cookie/save',{method:'POST',body:JSON.stringify(draft)});
+    $('#flowCookieFile').value='';
+    toast('Flow session saved securely. Test connection before use.');
+    await showSettings();
+  }));
+  $('#testFlowCookie').addEventListener('click',()=>flowCookieAction('Checking Flow access. No video will be generated...',async status=>{
+    const result = await api('/api/settings/flow-cookie/test',{method:'POST',body:JSON.stringify({account_id:$('#flowCookieAccount').value,project_url:$('#flowCookieProject').value.trim()})});
+    status.textContent = result.message || result.reason_code || 'Check completed.';
+    if (!result.live_verified) toast(status.textContent,true);
+  }));
+  $('#removeFlowCookie').addEventListener('click',()=>flowCookieAction('Review local session removal...',async status=>{
+    const account=flowCookieAccounts.find(item=>item.account_id===$('#flowCookieAccount').value);
+    if (!account) return;
+    if (!await confirmFlowAction(`Remove saved Flow session "${account.account_id}" (revision ${account.revision}) from Story Auto? Pending recovery will need this session. This does not log out Google or stop work already running. Reimporting will create a different revision, never silently reuse an old attempt.`,'Remove saved session')) {
+      status.textContent='Not removed. Your saved session is unchanged.'; return;
+    }
+    await api('/api/settings/flow-cookie/remove',{method:'POST',body:JSON.stringify({account_id:account.account_id,expected_revision:account.revision,confirm_remove:true})});
+    toast('Saved session removed locally. Google sign-in is unchanged.');
+    await showSettings();
+  }));
+  async function previewDolaAccounts() {
+    const accounts = $('#dolaAccountsInput').value;
+    if (!accounts.trim()) { toast('Paste at least one named Dola cookie account.', true); $('#dolaAccountsInput').focus(); return null; }
+    const result = await api('/api/settings/dola/preview',{method:'POST',body:JSON.stringify({accounts})});
+    const target = $('#dolaPreview');
+    if (target) target.textContent = `${result.incoming_count} account(s): ${result.new_count} new, ${result.updated_count} updated. Names: ${(result.account_ids || []).join(', ')}.`;
+    return result;
+  }
+  $('#previewDolaAccounts')?.addEventListener('click', async () => {
+    try { await previewDolaAccounts(); } catch (error) { toast(friendlyError(error).message, true); }
+  });
+  $('#saveDolaAccounts')?.addEventListener('click', async () => {
+    try {
+      const preview = await previewDolaAccounts(); if (!preview) return;
+      if (!window.confirm(`Save ${preview.new_count} new and update ${preview.updated_count} Dola account(s)? Names: ${(preview.account_ids || []).join(', ')}`)) return;
+      const result = await api('/api/settings/dola/save',{method:'POST',body:JSON.stringify({accounts:$('#dolaAccountsInput').value})});
+      $('#dolaAccountsInput').value=''; const target=$('#dolaPreview'); if (target) target.textContent='';
+      toast(`${result.new_count || 0} new and ${result.updated_count || 0} updated Dola account(s) saved.`); await showSettings();
+    } catch (error) { toast(friendlyError(error).message, true); }
+  });
+  document.querySelectorAll('[data-remove-dola-account]').forEach(button => button.addEventListener('click', async () => {
+    const accountId=button.dataset.removeDolaAccount;
+    if (!window.confirm(`Remove saved Dola account "${accountId}"? You can add it again with a fresh cookie.`)) return;
+    try { await api('/api/settings/dola/remove',{method:'POST',body:JSON.stringify({account_id:accountId})}); toast(`Removed Dola account ${accountId}.`); await showSettings(); }
+    catch (error) { toast(friendlyError(error).message, true); }
+  }));
   $('#openDiagnostics')?.addEventListener('click', () => showDiagnostics($('#diagnosticProject').value));
   focusMain();
 }

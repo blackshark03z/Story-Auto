@@ -1,0 +1,9 @@
+# These frozen design files are byte-hashed by tools/quality_gate.py.
+# Keep their working-tree bytes at LF even when Windows core.autocrlf is true.
+DESIGN_FREEZE.md text eol=lf
+docs/specs/FROZEN_PRODUCT_DESIGN_V1.md text eol=lf
+docs/specs/DOMAIN_MODEL_V1.md text eol=lf
+docs/specs/ARTIFACT_CONTRACTS_V1.md text eol=lf
+docs/specs/FAILURE_RECOVERY_V1.md text eol=lf
+docs/specs/QUALITY_ACCEPTANCE_V1.md text eol=lf
+contracts/frozen_design_v1.json text eol=lf

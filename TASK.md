@@ -1,5 +1,563 @@
 # Story Auto — current delivery and historical checkpoints
 
+## Cookie-owned Flow delivery — 2026-09-21 current checkpoint
+
+2026-09-23 LIVE REUSE GATE refreshed (read-only, zero generations): the earlier
+`flow-product-20260922` revision 1 check returned
+`FLOW_COOKIE_SESSION_UNAVAILABLE`. Owner then signed in on the existing
+dedicated profile and the automatic export created
+`flow_profile_export_20260922T220617741020Z.json` (36 scoped cookies).
+The fresh export passed isolated browser catalog read (13 records); it was
+saved under NEW DPAPI alias `flow-product-20260923` revision 1, preserving
+both older aliases/revision bindings. The application service verified the
+named account against the exact Flow project: READ_VERIFIED,13 records,
+zero uploads/generations. The 8775 UI test process was restarted with the
+experimental gate ON for only a94d36d0-5f95-420d-97b4-dc7cf0c87453;
+HTTP200, new alias visible and completed project unchanged. This is a scoped
+candidate runtime, not a default production promotion. Source-Chrome-close
+survival remains untested, and no new Flow generation was needed.
+Full local unittest discovery: 923 tests PASS in306.360s. Preserve all
+existing attempt bindings; do not silently rebind old jobs or retry them.
+
+2026-09-23 REAL PRODUCT JOURNEY TECHNICAL COMPLETE, VIDEO QUALITY OWNER ACCEPTED:
+prj_flow_real_product / evidence/flow-real-product-journey-20260921 is now
+FINAL_VIDEO_COMPLETE. Three Flow IMAGE body requests produced distinct assets;
+Pexels stock slot used the canonical generated-image fallback. Final MP4 is
+39.583333s H264/AAC 1280x720,22,131,107 bytes; final hash equals sealed
+final_manifest, full ffmpeg decode PASS. Seven-frame visual contact sheet shows
+on-topic village/river/bridge/hills and readable subtitles. One continuity note:
+a brief person in Opening O2 differs from the body traveler; the Owner explicitly
+accepted the current final video on 2026-09-23 despite this note. This decision
+applies to this exact final MP4, not Dola or the whole product. Evidence
+product-acceptance-audit-20260923.json, final-contact-sheet.png.
+
+Home card stale-state bug FIXED: Hybrid list cards now derive composed status
+from current manifests; live desktop IAB shows Complete/100%/Open final video,
+and project page shows result poster and reachable Open final video link. Current
+real UI server is runtime-root evidence/flow-real-product-journey-20260921 on
+127.0.0.1:8775. Narrow view also showed result actions. One IAB inline play click
+crashed its tab, while a fresh tab loaded and the asset endpoint returned HTTP200
+video/mp4; full media decode passed. Browser playback on other surfaces unverified.
+Targeted browser CUJ rerun PASS (1/1,19.359s) after source import correction.
+2026-09-23 direct video URL in IAB showed first and final frame; direct player
+tab preserved for Owner. This narrows the observed crash to the embedded preview
+play action in the IAB, not the HTTP asset or MP4 decode. Smooth playback in
+the supported external browser was subsequently verified: isolated headless
+Chrome opened the real project via Home, played the inline final video from 0
+to 3.72s, then sought to 35s and continued to 36.15s (1280x720, no media or
+page errors). Screenshot: evidence/flow-real-product-journey-20260921/
+chrome-final-preview-20260923.png. The asset endpoint now supports one byte
+range per request (206, bounded streaming; invalid range 416); focused test
+and live 1KB response PASS. Repeated IAB inline play still crashed after the
+range fix, so this is an IAB-specific unresolved preview limitation, not a
+claimed fix. No additional provider generation occurred.
+UX skill gate: function/discoverability/hierarchy are evidenced; Owner accepted
+the current video quality, but whole-product acceptance is still PENDING. Dola
+live remains unqualified,
+zero configured accounts (live Settings `NOT_CONFIGURED` / `DOLA_COOKIE_MISSING`;
+23 focused offline Dola tests PASS). Chrome-rendered Settings confirms the
+Dola named-account input, Preview, and Save are reachable; evidence
+`settings-dola-empty-20260923.png`. Do not call overall Product Accepted yet.
+Release security scan PASS for tracked source and64 untracked text files; no
+credential or signed-URL patterns found, no youtube_auto runtime imports.
+
+2026-09-22 PRODUCT OPENING MILESTONE PASS (not whole-product acceptance):
+prj_flow_real_product now has3 READY/SUCCEEDED named-cookie Opening slots.
+Each sealed journal ACQUIRED,upload_attempts1,submit_attempts1;3 distinct output
+identities. All3 original MP4s hash-match journals and fully decode with ffmpeg;
+H264/AAC1280x720,8seconds each, canonical slots normalized to6seconds. Evidence:
+flow-real-product-journey-20260921/opening-media-verification.json and O1/O2/O3
+result JSONs. Actual village reference generated via existing IMAGE CDP adapter
+in reference-acquisition-handshake-fixed; visually inspected, retained original
+JPEG payload and lossless PNG conversion provenance. Old ambiguous run untouched.
+
+CDP fix: native same-loopback endpoint omits synthetic websocket-client Origin;
+no Chrome flags/security policy changed. Exact target URL path and matching
+protocol/port gate added after independent review. Recovery runner provenance now
+slot-scoped, never overwritten on recovery; regression added.93 tests PASS16.493s
+(flow, current editor, handshake, runner). Existing live process used initial
+runner version; its unchanged reference provenance remains accurate. New runner
+version applies to subsequent invocations. Next real gate: body images/stock,
+final render, rendered UI and owner review. Connection service currently hardcodes
+9222 whereas actual profile uses9333: resolve canonical runtime configuration before
+automatic body generation; do not fake binding or substitute fixture acceptance.
+
+2026-09-22 current CDP diagnosis supersedes assumption that Chrome is closed:
+9333 is listening; CdpPage.open fails WebSocketBadStatusException HTTP403 with
+Origin rejection. Evidence cdp-current-diagnosis.json, zero effects. Playwright
+explicit export succeeded: flow_profile_export_20260921T221734203070Z.json,
+36 cookies, roundtrip verified. Do not repeatedly ask owner to reopen Chrome or
+claim cookie failure from this separate IMAGE client handshake failure. No new
+reference/image/video dispatch. Need address CDP client handshake compatibility
+without weakening Chrome security, or use a supplied appropriate PNG reference.
+
+2026-09-22 new cookie export221213005168Z passed fresh owned-browser catalog read
+(36 cookies,3 records,zero writes). Saved as flow-product-20260922 revision1,
+preserving flow-owner revision2 and its unresolved attempt. Sequential canonical
+Opening runner tools/flow_product_openings.py added; CLI loads, live run NOT STARTED.
+It stops before the next slot on unresolved result, and existing attempts recover
+only. Appropriate village reference remains missing: existing xianxia anchor
+visually mismatches narration. Bounded existing IMAGE adapter invocation recorded
+FLOW_CDP_UNAVAILABLE / NOT_ATTEMPTED in reference-acquisition/result.json; no submit.
+CUA inventory exposes only empty IAB, not dedicated Chrome. Need dedicated9333
+profile available for existing IMAGE route or an appropriate supplied reference;
+cookie VIDEO support does not establish cookie IMAGE support. No product accepted.
+
+2026-09-22 live continuation BLOCKED on session access: named flow-owner read and
+the previously successful export both now return FLOW_COOKIE_SESSION_UNAVAILABLE.
+Evidence: flow-real-product-journey-20260921/current-export-read.json; zero uploads
+and generations. Port9333 has no listener; dedicated profile directory exists.
+Explicit profile launch was rejected by execution policy. Do not route around
+that denial. Need owner to open the existing dedicated Flow profile / restore its
+authenticated session. No account refresh, old-attempt rebind or generation made.
+Third consecutive goal-turn check:9333 still has no listener and no newer
+flow_profile_export file exists. No launch retry or provider dispatch. Dola has
+zero configured accounts. Goal is BLOCKED pending restored authenticated Flow
+session; no safe live acceptance progress is available without that external
+change. Resume from existing planned project, not a replacement or old-job retry.
+Product acceptance remains unproven.
+
+2026-09-22 real product journey: canonical OperatorService.run_to_final completed
+prepare + plan for prj_flow_real_product in evidence/flow-real-product-journey-20260921.
+Real existing narration/SRT (39.568481 seconds) and input-provenance.json retained;
+no fixture planner injected. Timeline, continuity bible, opening manifest and body
+plan now exist. planning-result.json records OWNER_DECISION_REQUIRED with the
+specific HYBRID_OPENING_CLIPS_REQUIRED gate, not a new authorization requirement:
+Owner already permits bounded existing-allowance generation without repeated asks.
+Three Opening clips remain missing; no final output or product acceptance claimed.
+Next: acquire semantically appropriate reference assets and qualify a usable named
+session for sequential canonical Opening generation. Preserve unresolved old
+attempt 437137e32e38456396ed20951f6977ba and its revision2 binding. Body IMAGE routing
+and UI creation are not proven cookie-only by this service-level planning result.
+
+
+Composed regression launch issue FIXED: both failures were in browser CUJ tests
+forcing Playwright chromium-1243/chrome-win64/chrome.exe via executable_path.
+Use normal chromium.launch(headless=True) selection; no skips or weakened
+assertions added. Exact same15 CUJ/mixed-render/cookie-Opening tests now PASS
+in34.440s, including browser import-to-final and new-video Hybrid wizard.
+This qualifies the fixture regression only (synthetic planning/audio/images),
+not real-provider full journey or Owner acceptance. No provider effects this turn.
+
+Composed regression refresh NOT PASS: tests.test_hybrid_visual_cuj,
+tests.test_hybrid_visual_mixed_render, tests.test_flow_cookie_opening ran15 tests
+in26.781s,2 errors. Output includes Playwright executable launch termination
+(exit3236495362) in browser CUJ; do not infer compositor regression or acceptance.
+Next capture both exact error cases and verify installed browser selection in
+test harness. Diagnostic video fresh-process recovery PASS remains separate.
+
+Fresh-process recovery of authorized diagnostic PASS: same output identity and
+byte hash; counters remain upload1/submit1. Recovery session overrides upload and
+submit to raise, so network writes cannot be hidden behind unchanged counters.
+Evidence: flow-authorized-diagnostic-20260921/fresh-process-recovery.json.
+Composition route audit: tools/hybrid_visual_uat.py is provider-free, manual-import
+preview with synthetic sentence timing, not the full canonical product journey.
+Do not relabel it Product Accepted. Canonical CUJ tests exercise composed services
+with fake planning/images/audio; use them for regression only. Next actual journey
+must preserve real media provenance and distinguish manual import from cookie-
+generated slots; old unresolved Opening must not be replaced by diagnostic output.
+
+AUTHORIZED DIAGNOSTIC SUCCEEDED: evidence/flow-authorized-diagnostic-20260921,
+sealed ACQUIRED, upload1/submit1, exact-lineage output.mp4 hash matches journal.
+ffprobe H264/AAC1280x720 8.000s; full ffmpeg decode no errors. Response summary
+non-null structured payload, no fixed error-keyword signals; not a general error
+classifier. This proves current exported session can generate reference video.
+Original Opening437137e32e38456396ed20951f6977ba remains separate/unresolved;
+do not silently import diagnostic as that attempt or claim root cause resolved.
+Next: zero-submit diagnostic recovery verification, then composed canonical
+Opening/final journey with honest provenance and unresolved old slot preserved.
+
+Owner now explicitly authorizes necessary bounded Flow diagnostics without asking
+per run ("thoai mai, khong hoi lai"). Existing-allowance only; no new subscription,
+top-up, blind retry or silent rebind of unresolved attempts. Supersedes pending
+one-diagnostic approval below. One separate attempt now running under evidence/
+flow-authorized-diagnostic-20260921, tools/flow_authorized_diagnostic.py. Durable
+intent max_submits1; original Opening attempt untouched. Response diagnostics
+persist type counts and fixed-token booleans only, no raw provider text/secrets.
+
+Owner-requested auto-getcookie completed2026-09-21T15:37:46Z: exact authenticated
+project tab verified;36 Google cookies exported to designated secret directory
+`D:\Story Auto\cookie\flow_profile_export_20260921T153746199592Z.json`.
+Readback equality verified; no values printed, no generation, no saved-account
+refresh/rebind. Reusable explicit-export helper: tools/export_flow_profile_cookie.py.
+This resolves export mechanics only, not old generation outcome or fresh-submit
+authorization. File is plaintext credential material; do not attach to reports/chat.
+
+Submit-acceptance audit: parse_rpc accepts a unique wrb.fr payload including null;
+rpc() checks HTTP200 and parses framing but does not establish generation
+acceptance. RECONCILING only proves submit() returned without transport/parser
+exception, not that the server accepted a generation. Original response was not
+persisted, so original rejection/pending cause cannot be reconstructed locally.
+Catalog absence cannot authorize retry. No further identical read loop planned.
+Next consequential option requires Owner direction: preserve unresolved attempt
+and explicitly authorize one separate diagnostic generation with bounded
+submission-response observations, no automatic retry. This is not a recovery or
+replacement of the old slot. Fresh session use must remain explicit; do not
+silently rebind revision2. Without that authority or provider-side status evidence,
+the original attempt remains unresolved and Product Accepted remains unproven.
+
+2026-09-21T15:29:56Z owner reopened9333; source tab is Flow home, no auto-export
+file found. In-memory extraction36 Google cookies -> fresh CookieBrowserRpcSession
+READ_VERIFIED for original project. Catalog still only original reference image,
+no marker-bearing video. Evidence: flow-named-opening-acceptance-20260921/
+reopened-cookie-read-20260921T152956Z.json. No upload/submit, no credential-store
+refresh, no journal rebind, no source-tab navigation. Access blocker resolved for
+diagnostic reads; original generation outcome remains unresolved. Fresh cookies
+must not silently replace the revision2-bound recovery factory.
+
+2026-09-21T15:21:07Z refresh: named revision2 now returns
+FLOW_COOKIE_SESSION_UNAVAILABLE before catalog/status inspection. No listener on
+9333. This is a current session-access blocker, not evidence of provider-job
+failure or definitive cookie expiry. Existing upload1/submit1 attempt preserved.
+Evidence: flow-named-opening-acceptance-20260921/provider-status-20260921T152107Z.json.
+Need owner reopen the same dedicated profile for read-only status diagnosis.
+Do not refresh revision2 silently: unresolved attempt is pinned to that revision;
+do not create a replacement generation or infer permission to rebind it.
+
+Diagnostic gap fix: future submit journals now retain only parsed response type
+counts (bounded2048 visited nodes), or explicit unavailable/unparseable label.
+No strings, numeric values, dictionary keys, cookies or raw response persisted.
+PARSED_NOT_ACCEPTANCE_PROOF deliberately cannot authorize retry or prove success.
+Existing unresolved attempt has no retroactive response; it is untouched.
+Focused transport/service/cookie-Opening26 tests PASS (5.146s), including redaction
+and pending-resume no-resubmit. No provider request in this implementation turn.
+Next remains read-only provider-visible status diagnosis of the existing attempt.
+
+Current unresolved-attempt diagnosis: live canonical catalog read returned exactly
+one record, the uploaded reference2bf797b9-2bc5-4a1a-a887-e067a1829f45 (CAE).
+No marker-bearing output/video record. Evidence:
+`D:\Story Auto\evidence\flow-named-opening-acceptance-20260921\catalog-diagnostic-20260920T225141Z.json`.
+This is no published output yet, NOT proof of failed/rejected generation or safe
+retry. Diagnostic used zero uploads/submits. Source review: submit response is
+parsed by rpc() but caller discards returned body; journal has no sanitized
+submission-response summary. Cannot retrospectively recover that response from
+the durable journal. Next inspect provider-visible status for this same project;
+add bounded secret-free acknowledgement diagnostics before any future authorized
+new submission. Do not weaken exact lineage or manufacture failure status.
+
+Bounded live Opening acceptance RECOVERY_REQUIRED: runtime
+`D:\Story Auto\evidence\flow-named-opening-acceptance-20260921`, project
+prj_flow_named_acceptance, slot OPENING_O1, account flow-owner revision2,
+provider project a94d36d0-5f95-420d-97b4-dc7cf0c87453. Initial journal observed
+RECONCILING, upload_attempts1, submit_attempts1. Never redispatch or replace it.
+Runner tools/flow_named_opening_acceptance.py resumes an existing attempt only;
+one real6-second normalized slot from8-second source. Remaining slots/full
+composition and owner quality acceptance are not yet fulfilled.
+Initial120-second observation and one recovery-only120-second observation both
+ended with asset_ready=false, no output bound. Both local runners exited normally;
+provider completion/failure remains UNKNOWN. Same attempt437137e32e38456396ed20951f6977ba,
+no second submit. Latest summary: runtime slot-result.json; sealed transport
+receipt assets/opening/flow/437137e32e38456396ed20951f6977ba/flow_rpc_attempt.json.
+Next inspect sanitized provider/catalog failure signals for this exact attempt;
+do not launch another generation or treat elapsed time as provider failure.
+
+Owner approved refresh; flow-owner now revision2, Windows DPAPI current-user.
+Fresh-process decrypt and actual service test PASS / READ_VERIFIED for project
+a94d36d0-5f95-420d-97b4-dc7cf0c87453 (empty catalog). Long cookie values absent
+from serialized encrypted store; no plaintext export, upload or generation.
+Evidence: `D:\Story Auto\evidence\flow-owner-refresh-20260920T224400Z.json`.
+Credential-save approval gate is CLOSED; do not ask for the same approval again.
+Next: bounded live Hybrid Opening-to-final acceptance on revision2 with exact
+project gate; preserve all old attempts/revision bindings. Product not accepted.
+
+Canonical adapter read now PASS using the current dedicated-profile cookies,
+in-memory only: CookieBrowserRpcSession -> catalog validates exact project
+a94d36d0-5f95-420d-97b4-dc7cf0c87453 and returns0 media (empty catalog).
+Evidence: `D:\Story Auto\evidence\flow-canonical-cookie-read-20260920T224155Z.json`.
+Zero uploads/generations, source Chrome untouched, flow-owner unchanged.
+Next effect is refreshing the encrypted named session from this newly verified
+profile; explicitly confirm that save before replacing revision1. Then bounded
+product journey, not another authentication-only canary.
+
+AUTH BLOCKER RESOLVED FOR BOUNDED READ: owner reopened dedicated profile on9333.
+Direct context-cookie extraction returned38 Google cookies (SID/HSID present).
+Two fresh plain Playwright browsers seeded in memory both reached exact project
+a94d36d0-5f95-420d-97b4-dc7cf0c87453 with editor/token/captcha and no login link.
+No-cookie control redirected /about. Zero uploads/generations; source stayed open;
+no secret export or saved-account revision change. Evidence:
+`D:\Story Auto\evidence\flow-session-recheck-20260920T223853Z.json`.
+Earlier223825Z run observed before editor hydration and remains UNVERIFIED;
+final run waits for editor/captcha readiness. Export-method difference is proven,
+but causal necessity of individual cookies and long-term persistence are not.
+Next: approved encrypted session refresh and actual read-catalog/product journey.
+
+Latest auth investigation: Owner refreshed export (17 cookies, updated
+2026-09-20T22:27:48Z). Exact screenshot project
+fa4e3966-7050-4713-98f0-526e317b2c0b also redirects to /about in owned browser.
+Offline import audit:17 raw ->17 normalized ->17 browser-accepted ->17 applicable
+to https://flow.google.com/; all values preserved, zero expired entries. This
+rules out dropped values/count or URL scope in this tested import, not every
+possible authentication semantic. No network calls in import audit, no generation,
+no saved-account overwrite. Root cause remains UNKNOWN; do not assert expiry,
+missing cookies or device binding as proven. Next discriminating experiment:
+owner login in a dedicated persistent profile, restart same profile, then compare
+cookie-only fresh-context read. Owner login is required before that experiment.
+
+Latest combined regression: test_flow*.py + test_dola*.py,363 tests PASS in70.228s.
+Actual metadata rechecked: flow-owner revision1, Dola0; source export timestamp
+unchanged (2026-09-20T18:46:33Z). No provider dispatch. Remaining material gates:
+fresh authenticated Flow session, real Opening-to-final/reload journey, valid
+Dola account/live attribution qualification, and Owner final quality acceptance.
+Credential blocker has persisted across three consecutive goal turns; safe UI
+gap closure and provider-free regression completed meanwhile. Await fresh data;
+do not repeat live probes against the unchanged invalid session or mark accepted.
+
+Rendered follow-up closed enabled Opening760px layout and final Settings cancel
+focus-return gaps, using fresh no-generation fixture51189. No provider effect or
+account change. Details/source hashes: docs/FLOW_COOKIE_SETTINGS_UX.md, latest
+gap-closure section. Actual Flow authentication/full product journey still pending.
+
+Owner-approved actual setup: saved `flow-owner` revision1 in Windows DPAPI store.
+Fresh-process decryption PASS; no long plaintext cookie values in stored JSON.
+Live read check NEEDS_ATTENTION / FLOW_COOKIE_SESSION_UNAVAILABLE, zero generation.
+Read-only diagnostic launched browser and got HTTP200, but project redirected to
+flow.google.com/about; required session token/captcha unavailable. This export
+does not currently authenticate the owned browser; exact invalidation cause unknown.
+Evidence: `D:\Story Auto\evidence\cookie-settings-live-20260921\save-read-check.json`
+and `read-diagnostic.json`. Next: fresh authenticated export or owner login;
+do not generate or claim product acceptance from the saved/configured state.
+
+Final regression refresh: Flow discovery339 PASS (60.801s); Settings8 PASS
+(1.310s), including HTTP literal-confirmation and displayed-revision forwarding.
+Real-store recheck still Flow0/Dola0. No live generation or credential mutation.
+The next material acceptance step remains approved real session setup, then the
+bounded product journey; test-only progress is not Product Accepted.
+
+Current lifecycle checkpoint: local Flow session removal is implemented with
+expected-revision comparison and secret-free monotonic tombstones (schema1.1;
+schema1.0 remains readable). Delete/recreate cannot revive old attempt bindings.
+Final focused65 tests PASS (8.711s), JS syntax PASS. Includes legacy upgrade,
+failed-write preservation, removal/reimport and existing Opening recovery tests.
+Independent lifecycle review found no material defect. In-page Flow confirmation
+replaces native confirmations; Generate Escape/cancel and removal cancel were
+observed on the UI fixture, without provider effects. Latest read-only real-store
+counts: Flow0, Dola0. Await actual-session setup; no product acceptance claimed.
+
+Latest implemented milestone: explicit Flow reference-video action in Hybrid
+Opening (AUTO policy), reusing the qualified RPC journal and canonical clip
+normalization. Named revision/project/reference/prompt are pinned per slot.
+Recovery is read-only; explicit unused-setup reset requires a sealed zero-effect
+PREPARING journal and archives history. No default IMAGE/Full Video route change.
+Flow regression332 PASS at pre-final-test snapshot; final focused19 PASS includes
+three-slot lineage/resume, zero-effect reset after revision refresh and HTTP
+oversize-cookie rejection. Opening/Dola regression87 PASS before final additions.
+No new real provider generation. See docs/FLOW_COOKIE_OPENING_DELIVERY_20260921.md.
+Next: approved real Settings save/read check; one bounded composed
+opening-to-final live journey. Local removal is not remote Google revocation.
+
+Latest follow-up: named encrypted cookie storage, revision-pinned RPC session
+binding and Settings preview/save/read-check endpoints are implemented. Focused
+cookie/settings/RPC suite45 PASS. Actual preview at localhost:8786 exposed a
+generic missing-file error; fixed with an allowlist of local validation messages
+and verified rendered error after reload. No provider generation this follow-up.
+Saved real-session UI roundtrip and production routing remain pending; do not
+interpret Settings availability as product acceptance.
+
+Cookie authentication, one reference-video/recovery and one canonical-service
+video/idempotent-resume are live qualified with no external CDP attachment in
+the owned session factory. Total two submits/two videos. Flow tests309 PASS;
+focused34 PASS. Production routing unchanged and product acceptance NOT claimed.
+Current plan: `docs/COOKIE_FLOW_PRODUCT_ACCEPTANCE_PLAN.md`; exact source/media
+evidence: `docs/FLOW_COOKIE_VIDEO_QUALIFICATION_20260921.md`. Next is encrypted
+named session binding and supported product configuration, then complete journey.
+
+## Active Flow RPC delivery — 2026-09-20
+
+2026-09-21 closeout: main full suite 863 tests PASS; quality/security PASS; targeted
+Flow RPC/Dola/readiness 43 PASS. Settings preview verifies truthful Configured state.
+Experimental candidate is installed with default gate OFF. Stable production still
+requires production-QC and complete user-facing acceptance; see current SoT below.
+
+Owner requests delivery toward stable. Reviewed experimental reference-video
+transport is now integrated locally behind a default-OFF, exact-project gate.
+Current scope, live evidence, regression results, rollback and remaining product
+acceptance gates: `docs/FLOW_RPC_INTEGRATION_STATUS.md` and
+`docs/FLOW_RPC_OPERATIONS.md`. Preserve parallel Dola work. Do not treat older
+research qualifications or engineering canaries as production/owner acceptance.
+
+## Active delivery — Dola cookie integration, 2026-09-20
+
+Owner direction: stop Flow research and implement Dola AI with bulk cookies.
+The extra model number was a typo. Decision 0011 supersedes the official-only
+restriction for a distinctly named experimental `dola_cookie` provider.
+
+Plan: (1) named encrypted cookie pool and Settings; (2) direct HTTP T2V with
+durable early receipt and same-account recovery; (3) canonical Hybrid Opening
+integration; (4) focused tests, composed journey, rendered preview and review;
+(5) bounded live canary when a valid owner session is available.
+
+Current state: candidate implemented; 65 focused/integration tests plus 6 subtests
+PASS, quality/security gates PASS. Named-account refresh, early receipt,
+uncertain-submit stop, same-conversation recovery, three sequential fake-provider
+clips and canonical normalization are covered. Independent review findings on
+expired-cookie retry, orphan locks, polling auth errors and result attribution
+were addressed with regressions. Settings rendered at 1265px and 760px.
+
+Live state: zero saved Dola accounts; zero live Dola requests in this delivery.
+Cookie entry is available in Settings on candidate localhost:8781. Next action:
+Owner enters a valid session there, then one bounded real T2V canary must verify
+the private protocol, request-to-result identity and actual media. Result-link
+fields are a conservative candidate contract, not yet observed provider truth;
+missing linkage stops acquisition. Reference-image video, Full Video routing,
+unattended live stability and Owner quality acceptance remain unqualified.
+
+Flow qualification below is retained as evidence; further Flow research is
+paused by the Owner's new direction. See Decision 0011 and docs/dola-cookie-ux.md.
+
+## Current Flow qualification record — 2026-09-20
+
+This is the current source-of-truth boundary for the recent live Flow work. It
+adds evidence to the accepted Full Image browser adapter; it does not supersede
+the API-first Full Video decisions below.
+
+- **Exact reference attachment — ENGINEERING QUALIFIED.** The current adapter
+  resolves the actual media picker, reads candidate bytes only through the
+  existing authenticated browser session and a narrow Google/Flow asset-host
+  allowlist, and accepts attachment only when exactly one composer image matches
+  the requested local reference by perceptual content. Picker closure, a
+  selected-looking tile, and Add-control return status are not acceptance
+  oracles. A live no-Generate canary confirmed the exact composer reference with
+  distance 0 and stable draft cleanup; focused Flow tests passed 316 tests plus
+  163 subtests. The complete Git-tracked suite passed 852 tests plus 304
+  subtests. No credential or cookie was exported or persisted.
+- **Flow VIDEO with image reference — BOUNDED UI SMOKE PASS, NOT PRODUCTION
+  QUALIFIED.** Three deliberately distinct prompts were submitted once each in
+  one isolated Flow project with the exact same reference. All three results
+  downloaded as distinct H.264/AAC 1280x720 MP4 files of exactly 8.000 seconds
+  and fully decoded with FFmpeg. Observed result times were 56.6s, 47.0s and
+  58.2s. There were no Generate retries.
+- **One exact-lineage video canary — PASS.** A later isolated probe used the
+  implemented exact-reference attachment and activated Generate once. Passive
+  response observation found one new, unique three-UUID result identity; all
+  three identity hashes occurred in the prompt-bound response chain. The exact
+  mapped tile—not gallery position—downloaded a distinct H.264/AAC 1280x720,
+  8.000-second MP4 after 49.9 seconds, and full FFmpeg decode passed. Reload then
+  recovered exactly one tile by the same identity and downloaded byte-identical
+  MP4 output. Thumbnail bytes changed after reload, proving that thumbnail URL,
+  content hash and gallery order are not recovery identities.
+- **Exact-tuple video acquisition — EXPERIMENTAL GATE PASS.** The bounded
+  acquirer resolves exactly one rendered tile from the passively observed tuple,
+  fails closed on missing/duplicate identities and existing destinations, and
+  has no gallery-order fallback. A fresh live reload resolved 6/6 tiles and
+  downloaded the canary at 720p; the H.264/AAC 1280x720, 8.000-second output was
+  byte-identical to the original canary (`862ac9e3...31b7`). The run recorded
+  zero Generate activations and zero RPC replays. Ten combined decoder/acquirer
+  provider-free tests pass.
+- **Canonical attempt binding — PROVIDER-FREE GATE PASS.** The exact tuple can
+  now be persisted only on one fingerprint-matched VIDEO request/attempt whose
+  bound Flow project, provider-boundary entry and confirmed dispatch all verify.
+  The binding is hash-sealed, idempotent for the same tuple, conflict/tamper
+  rejecting, and re-read from the manifest before canonical acquisition. The
+  operator-facing canonical recovery tool accepts only project/request/attempt,
+  not tuple values. Twenty combined decoder/acquirer/binding tests plus three
+  subtests pass. No live canonical request was fabricated for this gate: the
+  existing canary remains truthfully classified as an isolated external probe.
+- **Dedicated Chrome restart recovery — PASS.** Immediately before restart,
+  passive reload observation resolved 5/5 visible tiles. Story Auto then closed
+  the exact Chrome process bound to its dedicated profile, reopened the exact
+  Flow project through `flow-open-session`, and resolved 6/6 visible tiles. All
+  five pre-restart identities remained present, the canary identity was unique
+  on both sides, and its downloaded 720p MP4 again matched the original SHA-256
+  byte for byte. Generate activations and RPC replays remained zero.
+- **Canonical reference-video ledger canary — PASS / production route unchanged.**
+  One isolated canonical request attached the exact reference, used one trusted
+  Playwright locator Generate activation, and persisted one provider submission.
+  The provider result arrived after the 480-second foreground wait, so the
+  attempt correctly stopped `AMBIGUOUS` rather than adopting the newest tile.
+  Recovery reconstructed the sealed 14-identity pre-click fingerprint from the
+  bounded two-identity delta (one rendered video plus one late reference-upload
+  identity), persisted the exact video tuple before acquisition, and completed
+  the same attempt with zero additional Generate activations and zero RPC replay.
+  The selected H.264/AAC 1280x720, 8.000-second MP4 is 2,517,046 bytes with
+  SHA-256 `7a4e3a57...20e3d`; post-reload canonical recovery reproduced identical
+  bytes. Evidence is under `canonical-live-timeout-audit-14` and
+  `canonical-live-recovery-15`.
+- **Remaining video boundaries.** The three-UUID tuple is an observed, stable
+  response-model identity but not a documented Flow job contract. The bounded
+  passive decoder is now implemented at the provider boundary as experimental
+  support with collision/size/depth fail-closed behavior, neutral component
+  names, no RPC replay and no raw response/auth persistence. Six provider-free
+  decoder tests and the composed Flow regression group pass (296 tests plus
+  166 subtests); frozen-design quality and security gates also pass. Two independent
+  read-only live reloads produced byte-identical evidence and resolved 6/6
+  currently rendered video tiles, including the exact-lineage canary. The
+  canonical binding/acquirer is now populated and recovered from real
+  Story Auto Generate response chains. Longer unattended sequential runs,
+  schema drift, cost/quota accounting and
+  subjective quality remain unverified. No Flow VIDEO production route is
+  accepted from this evidence.
+- **Final current-head qualification.** The focused video identity/acquisition/
+  response-model group passes with 39 tests plus 3 subtests; the complete
+  `test_flow*.py` group passes with 275 tests plus 117 subtests. Repository
+  quality, security, full Python compilation and diff-integrity checks all pass.
+  This qualification performed no additional Generate activation or RPC replay.
+- **Mid-generation client interruption — PASS / production route unchanged.**
+  Isolated request `req_84ccd34db833d19d116a` sealed a 16-identity baseline and
+  atomically persisted `PROVIDER_ACCEPTED_AWAITING_OUTPUT` after one trusted
+  Generate. The controlling client was then interrupted while Flow generated.
+  A fresh client recovered the unique 17th identity, bound it before acquisition
+  and completed the original attempt with one attempt, one provider submission,
+  no replacement Generate and no RPC replay. The resulting H.264/AAC 1280x720,
+  8.000-second MP4 is 3,195,640 bytes with SHA-256 `40d43ecc...b866e`.
+  Binding-only reload recovery reproduced identical bytes with zero Generate/RPC.
+  Evidence is under `mid-generation-disconnect-16`.
+- **Next qualification milestone — bounded unattended sequence.** Three isolated
+  VIDEO requests (`req_afd950817add516bb20c`, `req_778e24cd2c7158ebcc34`,
+  `req_21cc6284fc69eaae97f5`) reuse the already-proven exact reference and run in
+  one invocation. PASS requires one attempt/submission and a distinct valid
+  identity-bound MP4 for every request. Any unresolved attribution must stop the
+  sequence before the next provider boundary; recovery may inspect only the
+  preserved request and may not activate Generate again.
+- **Unattended sequence attempt — PARTIAL, not 3/3 PASS.** Shot 1
+  (`req_afd950817add516bb20c`) crossed Generate once and persisted its
+  provider-accepted checkpoint, then the dedicated Chrome/CDP process became
+  unavailable during the foreground wait. The coordinator stopped without
+  creating attempts for shots 2/3. The exact Chrome profile was reopened, and
+  submission-free reconciliation completed shot 1 from the same request and
+  attempt; its manifest records one provider submission. No Windows crash event
+  identifying the browser cause was found, so the process loss cause is unknown.
+  A separately bounded continuation for shots 2/3 was attempted; it is not
+  evidence of one uninterrupted three-shot invocation. Shot 2
+  (`req_778e24cd2c7158ebcc34`) stopped before provider entry with
+  `FLOW_REFERENCE_UPLOAD_FAILED`, canonical no-dispatch proof and zero provider
+  submissions. The session-preparation blocker prevented shot 3 from creating
+  any attempt. Current composer read-only inspection shows no attached image;
+  the exact reference postcondition was not met. Do not retry this session or
+  activate Generate until the attachment path is diagnosed and provider-free
+  acceptance is repeated. The pre-dispatch reason is known; why this instance
+  failed to commit the asset remains unverified. Compact evidence is under
+  `unattended-sequence-17/result.json` in the same evidence root.
+- **Independent review finding and fix.** Review found a P1 crash window after
+  exact VIDEO identity binding but before byte acquisition. Reconciliation now
+  prioritizes a persisted verified binding, reacquires only that same identity
+  and finalizes the same attempt without Generate. A canonical crash-window
+  fixture verifies one submission/attempt and exact binding preservation. The
+  reviewer also flagged P2: a temporarily empty prompt-editor projection and
+  another manual writer in the same Flow project are not ruled out by passive
+  response-set deltas. Keep Flow VIDEO experimental until that isolation gap is
+  addressed; do not promote the unattended result to production routing.
+- **External-effect safety.** Historical ambiguous Flow requests remain
+  preserved and must never be retried or replaced automatically. Any new live
+  probe must use an isolated request, persist intent first, activate Generate at
+  most once and stop if dispatch/result attribution is uncertain.
+- **Evidence.** The reference canary is under
+  `D:\Story Auto\evidence\transport_probe_20260919\source-attachment-smoke-07`;
+  the three-shot video run is under
+  `D:\Story Auto\evidence\transport_probe_20260919\video-sequence-05`; the
+  exact-lineage video and reload recovery are under `video-network-lineage-09`
+  and `video-reload-recovery-10`; the repeatable source-module diagnostic is
+  under `response-model-module-11`; the exact-tuple acquisition proof is under
+  `canonical-tuple-acquisition-12`; the exact Chrome restart/recovery proof is
+  under `chrome-restart-recovery-13`; and the canonical late-output/reload proof
+  is under `canonical-live-timeout-audit-14` and `canonical-live-recovery-15`;
+  the interrupted-client proof is under `mid-generation-disconnect-16` in the
+  same evidence root.
+
+Durable rationale and the unchanged production-routing boundary are recorded in
+Decisions `0009`/`0010` and `ARCHITECTURE.md`. These source changes and the Flow adapter
+changes are local working-tree changes; no commit, push, stable promotion or
+Owner production acceptance is claimed.
+
 ## Current delivery plan — 2026-09-18
 
 Active intent is Decision `0005`: **FORMAT + PIPELINE + CUJ SMOOTHNESS**, with

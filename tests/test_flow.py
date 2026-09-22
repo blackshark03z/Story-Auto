@@ -589,6 +589,15 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(caught.exception.failure_class, "FLOW_CDP_COMMAND_TIMEOUT")
         reopen.assert_not_called()
 
+    def test_project_media_read_rejects_urls_outside_flow_asset_hosts(self):
+        runtime = SimpleNamespace(
+            project_url="https://flow.google.com/project/test",
+            cdp_url="http://127.0.0.1:9222",
+        )
+        with self.assertRaises(FlowSessionError) as caught:
+            CdpPage(None, runtime).read_project_urls(["https://example.invalid/private.png"])
+        self.assertEqual(caught.exception.failure_class, "FLOW_UI_CHANGED")
+
     def test_flow_settings_scripts_do_not_require_animation_frames(self):
         class CapturingPage:
             def __init__(self): self.expressions = []

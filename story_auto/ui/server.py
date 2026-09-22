@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -37,6 +38,54 @@ class OperatorHandler(BaseHTTPRequestHandler):
         payload=target.read_bytes(); content=mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK); self.send_header("Content-Type",content); self.send_header("Content-Length",str(len(payload))); self.end_headers(); self.wfile.write(payload)
 
+    def _asset(self, target: Path) -> None:
+        """Stream one project asset and honor a browser's single byte range."""
+        size = target.stat().st_size
+        content = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        start, end = 0, size - 1
+        requested = self.headers.get("Range")
+        if requested is not None:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested.strip())
+            valid = bool(match and (match.group(1) or match.group(2)))
+            if valid:
+                first, last = match.groups()
+                if first:
+                    start = int(first)
+                    end = min(int(last), size - 1) if last else size - 1
+                    valid = start < size and end >= start
+                else:
+                    suffix = int(last)
+                    valid = suffix > 0 and size > 0
+                    start = max(0, size - suffix)
+                    end = size - 1
+            if not valid:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if requested is not None else HTTPStatus.OK)
+        self.send_header("Content-Type", content)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        if requested is not None:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        remaining = end - start + 1
+        try:
+            with target.open("rb") as stream:
+                stream.seek(start)
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
     def do_GET(self):
         try:
             parsed=urlparse(self.path); parts=[unquote(item) for item in parsed.path.split("/") if item]
@@ -60,8 +109,7 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 elif view=="diagnostics": result=self.service.diagnostics(project_id)
                 elif view=="asset":
                     relative=parse_qs(parsed.query).get("path",[""])[0]; paths,_=load_project(self.service.runtime,project_id); target=paths.artifact_path(relative)
-                    payload=target.read_bytes(); content=mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-                    self.send_response(HTTPStatus.OK); self.send_header("Content-Type",content); self.send_header("Content-Length",str(len(payload))); self.send_header("Cache-Control","no-store"); self.end_headers(); self.wfile.write(payload); return
+                    return self._asset(target)
                 else: raise ValueError("unknown view")
                 return self._json(result)
             self.send_error(HTTPStatus.NOT_FOUND)
@@ -104,6 +152,20 @@ class OperatorHandler(BaseHTTPRequestHandler):
                 return self._json(self.service.clear_external_llm_keys())
             if parts==["api","settings","brain","gemini"]:
                 return self._json(self.service.use_gemini_brain())
+            if parts==["api","settings","dola","preview"]:
+                return self._json(self.service.preview_dola_accounts(body.get("accounts", "")))
+            if parts==["api","settings","dola","save"]:
+                return self._json(self.service.save_dola_accounts(body.get("accounts", "")))
+            if parts==["api","settings","dola","remove"]:
+                return self._json(self.service.remove_dola_account(body.get("account_id", "")))
+            if parts==["api","settings","flow-cookie","preview"]:
+                return self._json(self.service.preview_flow_cookie_account(body.get('account_id',''),body.get('cookies','')))
+            if parts==["api","settings","flow-cookie","save"]:
+                return self._json(self.service.save_flow_cookie_account(body.get('account_id',''),body.get('cookies','')))
+            if parts==["api","settings","flow-cookie","test"]:
+                return self._json(self.service.test_flow_cookie_account(body.get('account_id',''),body.get('project_url','')))
+            if parts==["api","settings","flow-cookie","remove"]:
+                return self._json(self.service.remove_flow_cookie_account(body.get('account_id',''),body.get('expected_revision'),confirm_remove=body.get('confirm_remove') is True))
             if parts==["api","projects"]:
                 return self._json(self.service.create_project(project_id=body.get("project_id"),render_mode=body.get("render_mode","full_image"),ambient_style=body.get("ambient_style"),content=body.get("content"),settings=body.get("settings"),imported_audio=body.get("imported_audio"),imported_srt=body.get("imported_srt")),HTTPStatus.CREATED)
             if parts==["api","flow-connection","validate"]:
@@ -153,6 +215,9 @@ class OperatorHandler(BaseHTTPRequestHandler):
             elif action=="import_hybrid_body_image": result=self.service.import_hybrid_body_image(project_id,slot_id=body.get("slot_id",""),imported_image=body.get("imported_image"),as_stock_fallback=body.get("as_stock_fallback") is True)
             elif action=="render_hybrid_preview": result=self.service.render_hybrid_preview(project_id)
             elif action=="generate_opening_api": result=self.service.generate_opening_api(project_id,slot_id=body.get("slot_id",""))
+            elif action=="generate_dola_opening": result=self.service.generate_dola_opening(project_id,slot_id=body.get("slot_id",""),account_id=body.get("account_id",""))
+            elif action=="generate_flow_cookie_opening": result=self.service.generate_flow_cookie_opening(project_id,slot_id=body.get('slot_id',''),account_id=body.get('account_id',''),project_url=body.get('project_url',''),imported_reference=body.get('imported_reference'),confirm_generate=body.get('confirm_generate') is True,recovery_only=body.get('recovery_only') is True)
+            elif action=="reset_unused_flow_cookie_opening": result=self.service.reset_unused_flow_cookie_opening(project_id,slot_id=body.get('slot_id',''),confirm_reset=body.get('confirm_reset') is True)
             elif action=="preflight_elyum_opening": result=self.service.preflight_elyum_opening(project_id,slot_id=body.get("slot_id",""))
             elif action=="generate_elyum_opening": result=self.service.generate_elyum_opening(project_id,slot_id=body.get("slot_id",""),model_id=body.get("model_id",""))
             elif action=="accept_elyum_opening": result=self.service.review_elyum_opening(project_id,slot_id=body.get("slot_id",""),decision="ACCEPT")

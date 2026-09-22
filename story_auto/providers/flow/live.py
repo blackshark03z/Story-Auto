@@ -6,7 +6,9 @@ import copy
 import difflib
 import hashlib
 import io
+import itertools
 import json
+import math
 import secrets
 import shutil
 import tempfile
@@ -26,10 +28,13 @@ from .attribution import (
 )
 from .cdp import CdpPage
 from .page import FlowComposer
+from .response_model import FlowPassiveResponseObserver, FlowObservedIdentity
 from .service import FlowError
 from .session import FlowSessionError
 from .settings import ResolvedFlowGenerationSettings, resolve_settings
 from .validation import validate_image
+from .video_acquisition import FlowObservedVideoAcquirer
+from .video_identity import FlowAttemptVideoIdentity
 
 
 _VISIBLE = "e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled}"
@@ -143,6 +148,85 @@ def _asset_identity_projection(records: list[dict]) -> list[dict]:
         if record.get("asset_id") and provider_identity(record)
     }
     return [projected[key] for key in sorted(projected)]
+
+
+def exact_new_response_identity(
+    baseline: set[FlowObservedIdentity], current: set[FlowObservedIdentity],
+) -> FlowObservedIdentity | None:
+    """Return one new response identity or fail closed on multiple candidates."""
+    candidates = current - baseline
+    if len(candidates) > 1:
+        raise FlowError(
+            "OUTPUT_ATTRIBUTION_AMBIGUOUS",
+            "multiple new Flow response identities followed one Generate activation",
+        )
+    return next(iter(candidates)) if candidates else None
+
+
+def response_identity_set_fingerprint(identities: set[FlowObservedIdentity]) -> str:
+    """Hash a tuple set without persisting the provider tuple values."""
+    identity_hashes = sorted(
+        hashlib.sha256(item.identity.encode("utf-8")).hexdigest()
+        for item in identities
+    )
+    return hashlib.sha256(
+        json.dumps(identity_hashes, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def recoverable_new_response_identity(
+    *, baseline_fingerprint: str, baseline_count: int,
+    current: set[FlowObservedIdentity],
+) -> FlowObservedIdentity | None:
+    """Recover exactly one post-timeout tuple from a sealed pre-click set."""
+    if (
+        not isinstance(baseline_fingerprint, str)
+        or len(baseline_fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in baseline_fingerprint)
+        or isinstance(baseline_count, bool)
+        or not isinstance(baseline_count, int)
+        or baseline_count < 0
+        or len(current) != baseline_count + 1
+    ):
+        return None
+    candidates = [
+        identity for identity in current
+        if response_identity_set_fingerprint(current - {identity}) == baseline_fingerprint
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def recoverable_response_identity_delta(
+    *, baseline_fingerprint: str, baseline_count: int,
+    current: set[FlowObservedIdentity], maximum_additions: int = 4,
+) -> set[FlowObservedIdentity] | None:
+    """Return the unique bounded addition set that reconstructs the sealed baseline."""
+    if (
+        not isinstance(baseline_fingerprint, str)
+        or len(baseline_fingerprint) != 64
+        or any(character not in "0123456789abcdef" for character in baseline_fingerprint)
+        or isinstance(baseline_count, bool)
+        or not isinstance(baseline_count, int)
+        or baseline_count < 0
+    ):
+        return None
+    addition_count = len(current) - baseline_count
+    if addition_count < 1 or addition_count > maximum_additions:
+        return None
+    # Do not let a malformed/high-cardinality response set turn recovery into
+    # an unbounded combinatorial scan. The normal Flow surface is tiny; larger
+    # sets remain ambiguous and require operator inspection.
+    if math.comb(len(current), addition_count) > 50_000:
+        return None
+    matches = []
+    ordered = sorted(current, key=lambda item: item.identity)
+    for candidate_tuple in itertools.combinations(ordered, addition_count):
+        candidate = set(candidate_tuple)
+        if response_identity_set_fingerprint(current - candidate) == baseline_fingerprint:
+            matches.append(candidate)
+            if len(matches) > 1:
+                return None
+    return matches[0] if len(matches) == 1 else None
 
 
 def _provider_model_projection(surface: dict) -> list[dict] | None:
@@ -1079,6 +1163,22 @@ class FlowBrowserDom:
         if len(last) == 1 and not last[0].get("enabled"):
             raise FlowError("FLOW_GENERATE_DISABLED", "Flow did not enable composer Generate after reference upload")
         return [_Control(self, x) for x in last]
+    def _composer_reference_state(self, target_hash: str) -> dict:
+        """Verify the exact attached image; dialog closure is not attachment proof."""
+        observed = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'},composer=Array.from(document.querySelectorAll('flow-prompt-box,flow-base-prompt-box')).find(visible);if(!composer)return {visible_count:0,urls:[]};const images=Array.from(composer.querySelectorAll('img')).filter(visible);return {visible_count:images.length,urls:images.map(e=>e.currentSrc||e.src).filter(Boolean)}})()""") or {}
+        urls = observed.get("urls", []) if isinstance(observed, dict) else []
+        payloads = self.page.read_project_urls(urls) if isinstance(urls, list) and urls else []
+        matches = 0
+        for payload in payloads:
+            if not isinstance(payload, bytes): continue
+            try: candidate_hash = _dhash_bytes(payload)
+            except Exception: continue
+            if (int(candidate_hash, 16) ^ int(target_hash, 16)).bit_count() <= 4:
+                matches += 1
+        return {
+            "visible_count": int(observed.get("visible_count", 0)) if isinstance(observed, dict) else 0,
+            "match_count": matches,
+        }
     def add_references(self, files):
         # The only file input belongs to Flow's project media library.  Upload
         # there first, then explicitly select the library item in the active
@@ -1102,19 +1202,19 @@ class FlowBrowserDom:
             raise FlowError("FLOW_UI_CHANGED", f"expected at most one reference input, found {count}")
         names = [Path(item).name for item in local]
         name = names[0]
-        opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(visible);if(overlays.length===1)return true;const current=Array.from(document.querySelectorAll('flow-prompt-box button.add-menu-trigger')).filter(visible);if(current.length===1){current[0].click();return true}const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='add_2'));if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
+        opened = self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(visible);if(overlays.some(d=>d.querySelector('[role=listbox],button.detail-add-to-prompt-btn,button.sidebar-upload-btn')))return true;const current=Array.from(document.querySelectorAll('flow-prompt-box button.add-menu-trigger')).filter(visible);if(current.length===1){current[0].click();return true}const editor=Array.from(document.querySelectorAll('textarea,[contenteditable=\"true\"]')).find(visible);let p=editor;while(p&&p!==document.body){const xs=Array.from(p.querySelectorAll('button')).filter(e=>visible(e)&&Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='add_2'));if(xs.length===1){xs[0].click();return true}if(xs.length>1)return false;p=p.parentElement}return false})()""")
         if not opened: raise FlowError("FLOW_UI_CHANGED", "composer add-media control was ambiguous")
         target_hash=validate_image(Path(local[0]))["dhash256"]
         deadline=time.monotonic()+25; matched_url=None; matched_alt=None
         while time.monotonic()<deadline and matched_url is None:
-            records=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return [];const tab=Array.from(d.querySelectorAll('button[role=tab]')).find(e=>Array.from(e.querySelectorAll('i,mat-icon')).some(i=>i.textContent.trim()==='drive_folder_upload'));if(tab&&tab.getAttribute('aria-selected')!=='true')tab.click();return Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512).map(e=>({url:e.currentSrc||e.src,alt:e.alt||''})).filter(x=>x.url)})()""") or []
-            for record in records:
-                url=record.get("url")
-                payload=self.page.evaluate("""(async()=>{const r=await fetch(%s);if(!r.ok)return null;const b=await r.arrayBuffer();let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);return btoa(s)})()""" % __import__('json').dumps(url))
-                if isinstance(payload,str):
-                    try: candidate_hash=_dhash_bytes(base64.b64decode(payload,validate=True))
+            records=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};const overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(e=>visible(e)&&e.querySelector('[role=listbox],button.detail-add-to-prompt-btn,button.sidebar-upload-btn'));return overlays.flatMap(d=>Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512&&visible(e)).map(e=>({url:e.currentSrc||e.src,alt:e.alt||''}))).filter(x=>x.url)})()""") or []
+            urls = [record.get("url") for record in records if isinstance(record.get("url"), str)]
+            payloads = self.page.read_project_urls(urls) if urls else []
+            for record, payload in zip(records, payloads):
+                if isinstance(payload, bytes):
+                    try: candidate_hash=_dhash_bytes(payload)
                     except Exception: continue
-                    if (int(candidate_hash,16)^int(target_hash,16)).bit_count()<=4: matched_url=url; matched_alt=record.get("alt",""); break
+                    if (int(candidate_hash,16)^int(target_hash,16)).bit_count()<=4: matched_url=record.get("url"); matched_alt=record.get("alt",""); break
             if matched_url is None: time.sleep(.5)
         if matched_url is None: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "uploaded reference bytes were not identifiable in Flow")
         # Flow replaces its upload tile as it finishes decoding. Select the
@@ -1122,24 +1222,27 @@ class FlowBrowserDom:
         # option reports selected before exposing the Add control.
         deadline=time.monotonic()+10; selected=False
         while time.monotonic()<deadline:
-            state=self.page.evaluate("""(()=>{const url=%s,alt=%s,visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'},d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return {state:'DIALOG_MISSING'};const images=Array.from(d.querySelectorAll('img')).filter(e=>e.naturalWidth>=512);const image=images.find(e=>(e.currentSrc||e.src)===url)||images.find(e=>(e.alt||'')===alt);if(!image)return {state:'WAITING_FOR_OPTION'};const option=image.closest('[role=option],button.asset-item');if(!option)return {state:'WAITING_FOR_OPTION'};if(option.getAttribute('aria-selected')!=='true'&&!option.classList.contains('asset-item-active')){(%s)(option);return {state:'SELECTING'}};return {state:'SELECTED'}})()""" % (__import__('json').dumps(matched_url), __import__('json').dumps(matched_alt), _ACTIVATE))
+            state=self.page.evaluate("""(()=>{const url=%s,alt=%s,visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'},overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(e=>visible(e)&&e.querySelector('[role=listbox],button.detail-add-to-prompt-btn,button.sidebar-upload-btn'));if(!overlays.length)return {state:'DIALOG_MISSING'};const images=overlays.flatMap(d=>Array.from(d.querySelectorAll('img'))).filter(e=>e.naturalWidth>=512);const image=images.find(e=>(e.currentSrc||e.src)===url)||images.find(e=>(e.alt||'')===alt);if(!image)return {state:'WAITING_FOR_OPTION'};const option=image.closest('[role=option],button.asset-item');if(!option)return {state:'WAITING_FOR_OPTION'};if(option.getAttribute('aria-selected')!=='true'&&!option.classList.contains('asset-item-active')){(%s)(option);return {state:'SELECTING'}};return {state:'SELECTED'}})()""" % (__import__('json').dumps(matched_url), __import__('json').dumps(matched_alt), _ACTIVATE))
             if isinstance(state,dict) and state.get("state")=="SELECTED":
                 selected=True; break
             if isinstance(state,dict) and state.get("state")=="DIALOG_MISSING": break
             time.sleep(.2)
         if not selected: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference did not become selectable")
-        deadline=time.monotonic()+5; attached=False
+        # Activate Add at most once.  Flow may complete the attachment while a
+        # driver still considers that activation unresolved, so the only PASS
+        # oracle is the exact reference content appearing in the composer.
+        deadline=time.monotonic()+12; activation_attempted=False; last_composer_state={"visible_count":0,"match_count":0}
         while time.monotonic()<deadline:
-            attached=self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled},d=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).find(visible);if(!d)return null;const exact=Array.from(d.querySelectorAll('button.detail-add-to-prompt-btn')).filter(visible);if(exact.length===1){exact[0].click();return true}const add=Array.from(d.querySelectorAll('button')).filter(visible).reverse().find(e=>!e.querySelector('i,mat-icon')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
-            if attached is True: break
+            last_composer_state = self._composer_reference_state(target_hash)
+            if last_composer_state == {"visible_count":1,"match_count":1}:
+                return {"expected":1,"committed":True,"method":"library_hash_match_and_composer_content_verify"}
+            if not activation_attempted:
+                activation_attempted=True
+                self.page.evaluate("""(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'&&!e.disabled},overlays=Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).filter(visible);const exact=overlays.flatMap(d=>Array.from(d.querySelectorAll('button.detail-add-to-prompt-btn'))).filter(visible);if(exact.length===1){exact[0].click();return true}if(exact.length>1)return false;const buttons=overlays.flatMap(d=>Array.from(d.querySelectorAll('button'))).filter(visible);const add=buttons.reverse().find(e=>!e.querySelector('i,mat-icon')&&(e.innerText||'').trim());if(!add)return false;add.click();return true})()""")
             time.sleep(.25)
-        if not attached: raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference could not be attached")
-        deadline=time.monotonic()+6
-        while time.monotonic()<deadline:
-            if not self.page.evaluate("(()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'};return Array.from(document.querySelectorAll('[role=dialog],.cdk-overlay-pane')).some(visible)})()"):
-                return {"expected": 1, "committed": True, "method": "library_hash_match_and_composer_attach"}
-            time.sleep(.2)
-        raise FlowError("FLOW_UI_CHANGED", "selected Flow reference dialog did not close")
+        if last_composer_state.get("visible_count"):
+            raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "composer reference did not match the uploaded image")
+        raise FlowError("FLOW_REFERENCE_UPLOAD_FAILED", "matched reference was not committed to the composer")
     def media_candidates(self): return self.page.evaluate(_CANDIDATES_JS) or []
     def media_candidate_records(self): return self.page.evaluate(_CANDIDATE_RECORDS_JS) or []
     def provider_surface(self):
@@ -1190,9 +1293,11 @@ class FlowInspector:
 
 class LiveFlowGenerator:
     def __init__(self, runtime, *, timeout_seconds: int = 480,
-                 allow_empty_provider_model_baseline: bool = False):
+                 allow_empty_provider_model_baseline: bool = False,
+                 rpc_session_factory=None):
         self.runtime = runtime
         self.timeout_seconds = timeout_seconds
+        self._rpc_session_factory = rpc_session_factory
         self._allow_empty_provider_model_baseline = bool(allow_empty_provider_model_baseline)
         self.last_settings = None
         self.dispatch_confirmed = False
@@ -1200,6 +1305,8 @@ class LiveFlowGenerator:
         self._poll_timeline = ProviderPollEvidenceTimeline()
         self._pre_dispatch_asset_records: list[dict] = []
         self._before_provider_boundary: Callable[[], None] | None = None
+        self._after_provider_acceptance: Callable[[], None] | None = None
+        self._before_video_acquisition: Callable[[Any], Any] | None = None
         self._generation_count_evidence: dict[tuple[str, ...], dict] = {}
         self._active_request_settings_key: tuple[str, ...] | None = None
 
@@ -1288,6 +1395,14 @@ class LiveFlowGenerator:
     def set_before_provider_boundary(self, callback: Callable[[], None] | None) -> None:
         """Install the service-owned marker invoked immediately before Generate."""
         self._before_provider_boundary = callback
+
+    def set_before_video_acquisition(self, callback: Callable[[Any], Any] | None) -> None:
+        """Install the service-owned identity commit immediately before download."""
+        self._before_video_acquisition = callback
+
+    def set_after_provider_acceptance(self, callback: Callable[[], None] | None) -> None:
+        """Install the service-owned recovery checkpoint after provider acceptance."""
+        self._after_provider_acceptance = callback
 
     @staticmethod
     def _fetch_bytes(page, url: str) -> bytes:
@@ -1807,16 +1922,150 @@ class LiveFlowGenerator:
         return any((int(candidate_hash, 16) ^ int(reference_hash, 16)).bit_count() <= 4
                    for reference_hash in reference_hashes)
 
+    def _response_identity_baseline(
+        self, page: CdpPage, observer: FlowPassiveResponseObserver,
+    ) -> set[FlowObservedIdentity]:
+        """Reload and wait for a stable pre-dispatch response-identity set."""
+        page.command("Page.reload", {"ignoreCache": False})
+        return self._stable_response_identity_set(observer)
+
+    def _stable_response_identity_set(
+        self, observer: FlowPassiveResponseObserver, *, minimum_count: int = 0,
+        stable_seconds: float = 1.5,
+    ) -> set[FlowObservedIdentity]:
+        """Wait for the passive identity set to stop changing without reloading."""
+        deadline = time.monotonic() + 30
+        previous: set[FlowObservedIdentity] | None = None
+        stable_since: float | None = None
+        while time.monotonic() < deadline:
+            current = observer.identities()
+            if observer.observed_response_count and len(current) >= minimum_count:
+                if current == previous:
+                    stable_since = stable_since or time.monotonic()
+                    if time.monotonic() - stable_since >= stable_seconds:
+                        return current
+                else:
+                    previous = current
+                    stable_since = time.monotonic()
+            time.sleep(.25)
+        raise FlowError(
+            "OUTPUT_ATTRIBUTION_NOT_QUIESCENT",
+            "Flow response identity baseline did not stabilize before Generate",
+        )
+
+    def _try_response_identity_video(
+        self,
+        observer: FlowPassiveResponseObserver,
+        baseline: set[FlowObservedIdentity],
+        dispatch,
+        activation: dict,
+        prompt_transition: bool,
+        destination: Path,
+    ) -> Path | None:
+        """Persist one prompt-epoch identity, then and only then acquire bytes."""
+        response_identity = exact_new_response_identity(baseline, observer.identities())
+        if response_identity is None:
+            return None
+        causal_activation = (
+            bool(activation.get("input_dispatched"))
+            and bool(activation.get("trusted_click_seen"))
+            and bool(activation.get("activation_verified"))
+            and bool(activation.get("provider_acceptance_transition"))
+            and prompt_transition is True
+        )
+        if not causal_activation:
+            return None
+        if not callable(self._before_video_acquisition):
+            raise FlowError(
+                "FLOW_VIDEO_IDENTITY_BINDING_PRECONDITION_FAILED",
+                "canonical identity persistence callback is unavailable",
+            )
+        bound = self._before_video_acquisition(response_identity)
+        binding_sha256 = getattr(bound, "binding_sha256", None)
+        if not isinstance(binding_sha256, str) or not binding_sha256:
+            raise FlowError(
+                "FLOW_VIDEO_IDENTITY_BINDING_INVALID",
+                "canonical identity persistence did not return a binding",
+            )
+        binding_identity = f"response-binding:{binding_sha256}"
+        dispatch.observe(
+            input_dispatched=True,
+            trusted_click_seen=True,
+            activation_verified=True,
+            provider_acceptance_transition=True,
+            prompt_transition=True,
+            attributable_output=True,
+            durable_job_identity=binding_identity,
+            durable_evidence_serialized=True,
+        )
+        if dispatch.state != "CONFIRMED":
+            raise FlowError(
+                "FLOW_VIDEO_IDENTITY_BINDING_INVALID",
+                "durable response binding did not confirm dispatch",
+            )
+        self._sync_dispatch_state(dispatch)
+        self.last_settings.update({
+            "flow_observed_video_identity_binding_sha256": binding_sha256,
+            "candidate_observation_state": "DURABLE_OBSERVED",
+            "candidate_acquisition_state": "PENDING",
+            "attribution_state": "CONFIRMED",
+            "attribution_method": "passive_response_identity_binding",
+            "attribution_method_version": "flow-observed-video-binding/1.0.0",
+            "attributed_provider_identity": {"identity": binding_identity},
+            "candidate_delta_count": 1,
+            "candidate_identities": [{"identity": binding_identity}],
+            "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        acquired = FlowObservedVideoAcquirer(
+            self.runtime, observer,
+        ).acquire(response_identity, destination)
+        self.last_settings.update({
+            "candidate_acquisition_state": "RESOLVED",
+            "flow_video_acquisition_version": acquired["acquisition_version"],
+        })
+        return Path(acquired["path"])
+
     def __call__(self, request, references, destination: Path):
+        from .rpc_transport import FlowRpcGenerator, enabled as rpc_enabled
+        # An explicitly selected cookie session must never fall through to a
+        # different CDP account when the experimental gate/capability is absent.
+        if self._rpc_session_factory is not None:
+            if request.get("media_type") != "VIDEO":
+                raise FlowError("FLOW_COOKIE_CAPABILITY_UNSUPPORTED")
+            if not rpc_enabled(self.runtime):
+                raise FlowError("FLOW_RPC_DISABLED")
+        if request.get("media_type") == "VIDEO" and rpc_enabled(self.runtime):
+            options = {"session_factory": self._rpc_session_factory} if self._rpc_session_factory is not None else {}
+            rpc = FlowRpcGenerator(self.runtime, timeout_seconds=self.timeout_seconds, **options)
+            try:
+                return rpc.run(request, references, destination, before_boundary=self._before_provider_boundary)
+            finally:
+                self.last_settings = rpc.last_settings
+                self.dispatch_confirmed = rpc.dispatch_confirmed
+                self.dispatch_confirmation_state = rpc.dispatch_confirmation_state
         # The generator is reused across a batch. Dispatch and attribution
         # evidence are request-local and must never leak from a prior attempt.
         self.dispatch_confirmed = False
         self.dispatch_confirmation_state = "NOT_ATTEMPTED"
         self.last_settings = {}
         self._reset_poll_evidence(destination.parent / "provider_poll_evidence.json")
-        page = CdpPage.open(self.runtime)
-        page.enable_pre_dispatch_reconnect()
+        response_observer = None
+        page = None
         try:
+            if request["media_type"] == "VIDEO":
+                response_observer = FlowPassiveResponseObserver(self.runtime)
+                response_observer.start()
+            page = CdpPage.open(self.runtime)
+            page.enable_pre_dispatch_reconnect()
+            response_identity_baseline = (
+                self._response_identity_baseline(page, response_observer)
+                if response_observer is not None else set()
+            )
+            if response_observer is not None:
+                self.last_settings.update({
+                    "flow_response_identity_baseline_count": len(response_identity_baseline),
+                    "flow_response_identity_baseline_state": "STABLE",
+                })
             dom = FlowBrowserDom(page)
             identity_history = request.get("_flow_provider_identity_history", [])
             history_seed = identity_history if isinstance(identity_history, list) else []
@@ -1831,45 +2080,58 @@ class LiveFlowGenerator:
                     stable_polls=stable,
                 )
 
-            try:
-                historical_records, _ = _stable_surface(
-                    dom, request["media_type"],
-                    seed=history_seed,
-                    capacity_guard=self._ensure_poll_capacity,
-                    poll_observer=discovery_observer,
-                )
-                consecutive, empty_authority = _resolve_pre_dispatch_provider_model(
-                    provider_model_samples, historical_records=historical_records,
-                    history_seed=history_seed,
-                    allow_known_empty=self._allow_empty_provider_model_baseline,
-                )
-                self._pre_dispatch_provider_model_tiles = list(consecutive[-1])
+            if response_observer is not None:
+                # VIDEO attribution is owned by the complete passive response
+                # identity set. The current Flow editor does not expose a
+                # complete DOM card model, so that surface remains diagnostic
+                # and can never block or substitute for the exact tuple delta.
+                historical_records = []
+                self._pre_dispatch_provider_model_tiles = []
                 self.last_settings.update({
-                    "pre_dispatch_provider_model_identity_set": list(consecutive[-1]),
-                    "pre_dispatch_provider_model_stable_polls": 3,
-                    "causal_anchor": "COMPLETE_PROVIDER_MODEL_CARD_ID_DELTA",
+                    "pre_dispatch_provider_model_identity_set": [],
+                    "pre_dispatch_provider_model_stable_polls": 0,
+                    "causal_anchor": "PASSIVE_RESPONSE_IDENTITY_DELTA",
                 })
-                if empty_authority is not None:
-                    self.last_settings["pre_dispatch_empty_provider_model_authority"] = empty_authority
-                    # This authority is single-use for a generator instance.
-                    # Once the first request advances past the empty baseline,
-                    # every later request must observe the normal complete model.
-                    self._allow_empty_provider_model_baseline = False
-            except FlowError as error:
-                if error.failure_class == "OUTPUT_ATTRIBUTION_NOT_QUIESCENT":
-                    # The baseline gate runs before the composer/activation path.
-                    # Persist that positive no-dispatch proof; the error name alone
-                    # must never make a later retry safe.
-                    self.dispatch_confirmation_state = "PRE_DISPATCH_FAILURE"
+            else:
+                try:
+                    historical_records, _ = _stable_surface(
+                        dom, request["media_type"],
+                        seed=history_seed,
+                        capacity_guard=self._ensure_poll_capacity,
+                        poll_observer=discovery_observer,
+                    )
+                    consecutive, empty_authority = _resolve_pre_dispatch_provider_model(
+                        provider_model_samples, historical_records=historical_records,
+                        history_seed=history_seed,
+                        allow_known_empty=self._allow_empty_provider_model_baseline,
+                    )
+                    self._pre_dispatch_provider_model_tiles = list(consecutive[-1])
                     self.last_settings.update({
-                        "activation": {"input_dispatched": False,
-                                       "proof": "PRE_DISPATCH_BASELINE_NOT_QUIESCENT"},
-                        "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
-                        "dispatch_confirmation_signal": "pre_dispatch_baseline_not_quiescent",
-                        "provider_job_id": None,
-                        "attribution_state": "NOT_ATTEMPTED",
+                        "pre_dispatch_provider_model_identity_set": list(consecutive[-1]),
+                        "pre_dispatch_provider_model_stable_polls": 3,
+                        "causal_anchor": "COMPLETE_PROVIDER_MODEL_CARD_ID_DELTA",
                     })
-                raise
+                    if empty_authority is not None:
+                        self.last_settings["pre_dispatch_empty_provider_model_authority"] = empty_authority
+                        # This authority is single-use for a generator instance.
+                        # Once the first request advances past the empty baseline,
+                        # every later request must observe the normal complete model.
+                        self._allow_empty_provider_model_baseline = False
+                except FlowError as error:
+                    if error.failure_class == "OUTPUT_ATTRIBUTION_NOT_QUIESCENT":
+                        # The baseline gate runs before the composer/activation path.
+                        # Persist that positive no-dispatch proof; the error name alone
+                        # must never make a later retry safe.
+                        self.dispatch_confirmation_state = "PRE_DISPATCH_FAILURE"
+                        self.last_settings.update({
+                            "activation": {"input_dispatched": False,
+                                           "proof": "PRE_DISPATCH_BASELINE_NOT_QUIESCENT"},
+                            "dispatch_confirmation_state": "PRE_DISPATCH_FAILURE",
+                            "dispatch_confirmation_signal": "pre_dispatch_baseline_not_quiescent",
+                            "provider_job_id": None,
+                            "attribution_state": "NOT_ATTEMPTED",
+                        })
+                    raise
             dom.reset_composer()
             resolved = resolve_settings(request)
             generation_count = self.ensure_generation_count(dom, resolved)
@@ -1892,7 +2154,22 @@ class LiveFlowGenerator:
             baseline_records = list(historical_records)
 
             def baseline():
-                nonlocal baseline_records
+                nonlocal baseline_records, response_identity_baseline
+                if response_observer is not None:
+                    response_identity_baseline = self._stable_response_identity_set(
+                        response_observer,
+                    )
+                    self.last_settings.update({
+                        "flow_response_identity_baseline_count": len(response_identity_baseline),
+                        "flow_response_identity_baseline_state": "STABLE",
+                        "pre_dispatch_baseline_fingerprint": response_identity_set_fingerprint(
+                            response_identity_baseline,
+                        ),
+                        "baseline_provider_identities": [],
+                        "baseline_stable_polls": 1,
+                        "baseline_state": "QUIESCENT",
+                    })
+                    return
                 prior_baseline = list(baseline_records)
                 baseline_records, stable_polls = _stable_surface(
                     dom, request["media_type"], seed=baseline_records,
@@ -1998,6 +2275,7 @@ class LiveFlowGenerator:
             last_surface: dict = {}
             last_current: list[dict] = []
             last_causal_card_ids: set[str] = set()
+            provider_acceptance_checkpointed = False
             while time.monotonic() < deadline:
                 self._ensure_poll_capacity()
                 states = page.evaluate(_EDITOR_JS) or []
@@ -2014,6 +2292,25 @@ class LiveFlowGenerator:
                         provider_acceptance_transition=True,
                         prompt_transition=True,
                     )
+                    if (
+                        request["media_type"] == "VIDEO"
+                        and not provider_acceptance_checkpointed
+                        and self._after_provider_acceptance is not None
+                    ):
+                        self._sync_dispatch_state(dispatch)
+                        self._after_provider_acceptance()
+                        provider_acceptance_checkpointed = True
+                if response_observer is not None:
+                    acquired_path = self._try_response_identity_video(
+                        response_observer,
+                        response_identity_baseline,
+                        dispatch,
+                        activation,
+                        prompt_transition,
+                        destination,
+                    )
+                    if acquired_path is not None:
+                        return acquired_path
                 surface = dom.provider_surface()
                 current = surface.get("records", []) if isinstance(surface, dict) else []
                 provider_model = _provider_model_projection(surface)
@@ -2033,6 +2330,29 @@ class LiveFlowGenerator:
                     causal_card_ids=causal_card_ids,
                 )
                 quarantined: list[dict] = []
+                if (
+                    response_observer is not None
+                    and observation.state in {"AMBIGUOUS", "CONFIRMED"}
+                ):
+                    # VIDEO ownership is decided only by the prompt-epoch
+                    # response identity. DOM/card deltas remain diagnostics and
+                    # can never race ahead to byte acquisition.
+                    self._record_poll(
+                        phase="POST_DISPATCH", media_type=request["media_type"],
+                        baseline=baseline_records, current=current, surface=surface,
+                        stable_polls=observation.stable_polls, observation=observation,
+                        dispatch=dispatch, activation=activation,
+                        bind_authoritative_output=False,
+                    )
+                    self._record_observation(observation)
+                    self._sync_dispatch_state(dispatch)
+                    if self.last_settings.get("terminal_observations"):
+                        raise FlowError(
+                            "PROVIDER_VISIBLE_TERMINAL_FAILURE",
+                            "Flow exposed a structurally terminal provider tile",
+                        )
+                    time.sleep(.5)
+                    continue
                 if observation.state == "AMBIGUOUS":
                     echoes = self._reference_echoes(page, current, observation, reference_hashes)
                     if echoes:
@@ -2161,15 +2481,32 @@ class LiveFlowGenerator:
             raise FlowError("FLOW_DISPATCH_UNCERTAIN", "activation occurred but no attributable Flow job or output was proven")
         finally:
             try:
-                self.last_settings["cdp_transport"] = page.transport_diagnostics()
+                if page is not None:
+                    self.last_settings["cdp_transport"] = page.transport_diagnostics()
                 self._finish_poll_evidence(
                     str((self.last_settings or {}).get("attribution_state") or self.dispatch_confirmation_state)
                 )
             finally:
-                page.close()
+                if page is not None:
+                    page.close()
+                if response_observer is not None:
+                    response_observer.close()
 
     def reconcile(self, request, attempt: dict, destination: Path) -> dict:
         """Inspect a prior request baseline without another activation."""
+        from .rpc_transport import FlowRpcGenerator, JOURNAL_NAME, TRANSPORT
+        if (destination.parent / JOURNAL_NAME).is_file() or (attempt.get("provider_settings") or {}).get("transport") == TRANSPORT:
+            options = {"session_factory": self._rpc_session_factory} if self._rpc_session_factory is not None else {}
+            rpc = FlowRpcGenerator(self.runtime, timeout_seconds=min(self.timeout_seconds, 30), **options)
+            try:
+                acquired = rpc.run(request, request.get("_flow_reference_paths", []), destination, recovery_only=True)
+                self.last_settings = rpc.last_settings
+                self.dispatch_confirmed = rpc.dispatch_confirmed
+                self.dispatch_confirmation_state = rpc.dispatch_confirmation_state
+                return {"state": "CONFIRMED_OUTPUT", "path": str(acquired), "evidence": rpc.last_settings}
+            except FlowError:
+                self.last_settings = rpc.last_settings
+                return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_RPC_RECOVERY_REQUIRED"}}
         settings = attempt.get("provider_settings", {}) if isinstance(attempt, dict) else {}
         if not isinstance(settings, dict):
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": "FLOW_POLL_EVIDENCE_INVALID"}}
@@ -2179,6 +2516,198 @@ class LiveFlowGenerator:
             # Never reuse a baseline, durable dispatch identity, or attribution
             # detail from evidence that cannot verify exactly as persisted.
             return {"state": "REMAINS_AMBIGUOUS", "evidence": {"reason": error.failure_class}}
+        if request.get("media_type") == "VIDEO":
+            persisted_binding = attempt.get("flow_observed_video_identity")
+            if persisted_binding is not None and attempt.get("dispatch_confirmed") is True:
+                # A crash can occur after the exact tuple is atomically bound but
+                # before its bytes are acquired. Recover that *same* tuple; never
+                # infer another delta or activate Generate in this branch.
+                try:
+                    bound = FlowAttemptVideoIdentity.from_dict(persisted_binding)
+                    if (
+                        attempt.get("provider_execution_state") != "PROVIDER_BOUNDARY_ENTERED"
+                        or bound.request_id != request.get("request_id")
+                        or bound.attempt != attempt.get("attempt")
+                        or bound.observed_identity.project_identity
+                        != self.runtime.project_identity.lower()
+                        or not callable(self._before_video_acquisition)
+                    ):
+                        raise FlowSessionError("FLOW_VIDEO_IDENTITY_BINDING_INVALID")
+                    self.last_settings = copy.deepcopy(settings)
+                    observer = FlowPassiveResponseObserver(self.runtime)
+                    page = None
+                    try:
+                        observer.start()
+                        page = CdpPage.open(self.runtime)
+                        page.command("Page.reload", {"ignoreCache": False})
+                        current = self._stable_response_identity_set(
+                            observer, minimum_count=1, stable_seconds=3.0,
+                        )
+                        if bound.observed_identity not in current:
+                            raise FlowSessionError("FLOW_VIDEO_IDENTITY_NOT_RENDERED")
+                        verified_again = self._before_video_acquisition(
+                            bound.observed_identity,
+                        )
+                        if getattr(verified_again, "binding_sha256", None) != bound.binding_sha256:
+                            raise FlowSessionError("FLOW_VIDEO_IDENTITY_BINDING_INVALID")
+                        acquired = FlowObservedVideoAcquirer(
+                            self.runtime, observer,
+                        ).acquire(bound.observed_identity, destination)
+                    finally:
+                        if page is not None:
+                            page.close()
+                        observer.close()
+                    binding_identity = f"response-binding:{bound.binding_sha256}"
+                    evidence = {
+                        "dispatch_confirmed": True,
+                        "dispatch_confirmation_state": "CONFIRMED",
+                        "dispatch_confirmation_signal": "persisted_response_identity_recovered",
+                        "dispatch_signal_state": "DISPATCH_CONFIRMED",
+                        "durable_dispatch_identity": binding_identity,
+                        "flow_observed_video_identity_binding_sha256": bound.binding_sha256,
+                        "candidate_observation_state": "DURABLE_OBSERVED",
+                        "candidate_acquisition_state": "RESOLVED",
+                        "attribution_state": "CONFIRMED",
+                        "attribution_method": "persisted_response_identity_binding_recovery",
+                        "attribution_method_version": "flow-observed-video-binding/1.0.0",
+                        "attributed_provider_identity": {"identity": binding_identity},
+                        "candidate_delta_count": 1,
+                        "candidate_identities": [{"identity": binding_identity}],
+                        "attribution_confirmation_timestamp": datetime.now(timezone.utc).isoformat(),
+                        "flow_video_acquisition_version": acquired["acquisition_version"],
+                    }
+                    self.last_settings.update(evidence)
+                    return {
+                        "state": "CONFIRMED_OUTPUT",
+                        "path": acquired["path"],
+                        "evidence": evidence,
+                    }
+                except (FlowError, FlowSessionError) as error:
+                    return {
+                        "state": "REMAINS_AMBIGUOUS",
+                        "evidence": {"reason": error.failure_class},
+                    }
+            activation = settings.get("activation") if isinstance(settings.get("activation"), dict) else {}
+            eligible = (
+                attempt.get("provider_execution_state") == "PROVIDER_BOUNDARY_ENTERED"
+                and (
+                    (
+                        attempt.get("status") == "AMBIGUOUS"
+                        and attempt.get("failure_class") == "OUTPUT_ATTRIBUTION_AMBIGUOUS"
+                    )
+                    or (
+                        attempt.get("status") in {"SUBMITTED", "GENERATING", "AMBIGUOUS", "FAILED_RETRYABLE"}
+                        and isinstance(attempt.get("video_recovery_checkpoint"), dict)
+                        and attempt["video_recovery_checkpoint"].get("state")
+                        == "PROVIDER_ACCEPTED_AWAITING_OUTPUT"
+                        and attempt["video_recovery_checkpoint"].get("retry_authorized") is False
+                    )
+                )
+                and attempt.get("dispatch_confirmed") is False
+                and activation.get("input_dispatched") is True
+                and activation.get("trusted_click_seen") is True
+                and activation.get("activation_verified") is True
+                and activation.get("provider_acceptance_transition") is True
+                and settings.get("composer_transition_seen") is True
+                and isinstance(settings.get("pre_dispatch_baseline_fingerprint"), str)
+                and isinstance(settings.get("flow_response_identity_baseline_count"), int)
+            )
+            if eligible:
+                if not callable(self._before_video_acquisition):
+                    return {
+                        "state": "REMAINS_AMBIGUOUS",
+                        "evidence": {"reason": "FLOW_VIDEO_IDENTITY_BINDING_PRECONDITION_FAILED"},
+                    }
+                self.last_settings = copy.deepcopy(settings)
+                observer = FlowPassiveResponseObserver(self.runtime)
+                page = None
+                try:
+                    observer.start()
+                    page = CdpPage.open(self.runtime)
+                    page.command("Page.reload", {"ignoreCache": False})
+                    current = self._stable_response_identity_set(
+                        observer,
+                        minimum_count=settings["flow_response_identity_baseline_count"] + 1,
+                        stable_seconds=3.0,
+                    )
+                    delta = recoverable_response_identity_delta(
+                        baseline_fingerprint=settings["pre_dispatch_baseline_fingerprint"],
+                        baseline_count=settings["flow_response_identity_baseline_count"],
+                        current=current,
+                    )
+                    if delta is None:
+                        return {
+                            "state": "REMAINS_AMBIGUOUS",
+                            "evidence": {"reason": "FLOW_RESPONSE_IDENTITY_DELTA_UNPROVEN"},
+                        }
+                    identity = None
+                    deadline = time.monotonic() + 20
+                    while time.monotonic() < deadline:
+                        urls = page.evaluate(
+                            """(()=>Array.from(document.querySelectorAll(
+                            'flow-video-tile img.thumbnail')).filter(e=>e.naturalWidth>0)
+                            .map(e=>e.currentSrc||e.src).filter(Boolean))()"""
+                        ) or []
+                        video_identities = {
+                            item for item in observer.resolve_urls(urls) if item is not None
+                        }
+                        candidates = delta & video_identities
+                        if len(candidates) == 1:
+                            identity = next(iter(candidates))
+                            break
+                        if len(candidates) > 1:
+                            break
+                        time.sleep(.25)
+                    if identity is None:
+                        return {
+                            "state": "REMAINS_AMBIGUOUS",
+                            "evidence": {"reason": "FLOW_RESPONSE_VIDEO_IDENTITY_UNPROVEN"},
+                        }
+                    bound = self._before_video_acquisition(identity)
+                    binding_sha256 = getattr(bound, "binding_sha256", None)
+                    if not isinstance(binding_sha256, str) or not binding_sha256:
+                        return {
+                            "state": "REMAINS_AMBIGUOUS",
+                            "evidence": {"reason": "FLOW_VIDEO_IDENTITY_BINDING_INVALID"},
+                        }
+                    binding_identity = f"response-binding:{binding_sha256}"
+                    acquired = FlowObservedVideoAcquirer(
+                        self.runtime, observer,
+                    ).acquire(identity, destination)
+                    confirmed_at = datetime.now(timezone.utc).isoformat()
+                    evidence = {
+                        "dispatch_confirmed": True,
+                        "dispatch_confirmation_state": "CONFIRMED",
+                        "dispatch_confirmation_signal": "passive_response_identity_recovered",
+                        "dispatch_signal_state": "DISPATCH_CONFIRMED",
+                        "durable_dispatch_identity": binding_identity,
+                        "flow_observed_video_identity_binding_sha256": binding_sha256,
+                        "candidate_observation_state": "DURABLE_OBSERVED",
+                        "candidate_acquisition_state": "RESOLVED",
+                        "attribution_state": "CONFIRMED",
+                        "attribution_method": "passive_response_identity_binding_recovery",
+                        "attribution_method_version": "flow-observed-video-binding/1.0.0",
+                        "attributed_provider_identity": {"identity": binding_identity},
+                        "candidate_delta_count": 1,
+                        "candidate_identities": [{"identity": binding_identity}],
+                        "attribution_confirmation_timestamp": confirmed_at,
+                        "flow_video_acquisition_version": acquired["acquisition_version"],
+                    }
+                    self.last_settings.update(evidence)
+                    return {
+                        "state": "CONFIRMED_OUTPUT",
+                        "path": acquired["path"],
+                        "evidence": evidence,
+                    }
+                except (FlowError, FlowSessionError) as error:
+                    return {
+                        "state": "REMAINS_AMBIGUOUS",
+                        "evidence": {"reason": error.failure_class},
+                    }
+                finally:
+                    if page is not None:
+                        page.close()
+                    observer.close()
         migration_reconciliation = self._eligible_current_editor_migration_reconciliation(
             settings, attempt, verified_evidence,
         )

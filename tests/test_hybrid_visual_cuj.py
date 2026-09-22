@@ -216,7 +216,8 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
         thread.start()
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True, executable_path=str(chrome))
+                # Let Playwright select its supported headless binary.
+                browser = playwright.chromium.launch(headless=True)
                 page = browser.new_page()
                 page.goto(f"http://127.0.0.1:{server.server_address[1]}")
                 card = page.locator(".project-card", has_text=self.project_id).first
@@ -261,7 +262,7 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
         thread.start()
         try:
             with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=True, executable_path=str(chrome))
+                browser = playwright.chromium.launch(headless=True)
                 page = browser.new_page()
                 page.goto(f"http://127.0.0.1:{server.server_address[1]}")
                 page.locator("#newVideoTop").click()

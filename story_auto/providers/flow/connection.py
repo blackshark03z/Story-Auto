@@ -34,6 +34,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def normalize_cdp_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme != 'http' or parsed.hostname not in {'127.0.0.1', 'localhost', '::1'}
+                or parsed.username or parsed.password or parsed.query or parsed.fragment
+                or parsed.path not in {'', '/'} or not parsed.port):
+            raise ValueError()
+        return urlunsplit((parsed.scheme, parsed.netloc, '', '', ''))
+    except (TypeError, ValueError):
+        raise FlowConnectionError('FLOW_CDP_URL_INVALID') from None
+
+
 def normalize_project_url(value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise FlowConnectionError("FLOW_URL_INVALID")
@@ -77,8 +89,10 @@ class FlowConnection:
     validated_at: str | None
     capabilities: dict[str, bool]
     schema_version: str = CONNECTION_SCHEMA
+    cdp_url: str = 'http://127.0.0.1:9222'
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, 'cdp_url', normalize_cdp_url(self.cdp_url))
         if not self.connection_id.startswith("flow_") or self.revision < 1:
             raise FlowConnectionError("FLOW_CONNECTION_INVALID")
         if self.validation_status not in VALID_STATUSES - {"NOT_CONFIGURED"}:
@@ -94,11 +108,11 @@ class FlowConnection:
                 "project_url": self.project_url, "project_identity": self.project_identity,
                 "dedicated_profile_identity": self.dedicated_profile_identity,
                 "validation_status": self.validation_status, "validated_at": self.validated_at,
-                "capabilities": self.capabilities}
+                "capabilities": self.capabilities, "cdp_url": self.cdp_url}
 
     @classmethod
     def from_dict(cls, value: Any) -> "FlowConnection":
-        if not isinstance(value, dict) or set(value) != {"schema_version", "connection_id", "revision", "project_url", "project_identity", "dedicated_profile_identity", "validation_status", "validated_at", "capabilities"}:
+        if not isinstance(value, dict) or set(value) - {'cdp_url'} != {"schema_version", "connection_id", "revision", "project_url", "project_identity", "dedicated_profile_identity", "validation_status", "validated_at", "capabilities"}:
             raise FlowConnectionError("FLOW_CONNECTION_INVALID")
         if value.get("schema_version") != CONNECTION_SCHEMA or not isinstance(value.get("capabilities"), dict):
             raise FlowConnectionError("FLOW_CONNECTION_INVALID")
@@ -141,11 +155,14 @@ class FlowConnectionService:
                 "validated_at":connection.validated_at, "required_capabilities":required, "observed_capabilities":observed}
 
     def validate_candidate(self, project_url: str, *, project_identity: str | None = None,
-                           required_capabilities: Iterable[str] | None = None, inspector=None) -> dict[str, Any]:
+                           required_capabilities: Iterable[str] | None = None, inspector=None,
+                           cdp_url: str = 'http://127.0.0.1:9222', profile_path: Path | None = None) -> dict[str, Any]:
         normalized = normalize_project_url(project_url)
         identity = project_identity.strip() if isinstance(project_identity, str) and project_identity.strip() else stable_project_identity(normalized)
         required = _required(required_capabilities)
-        runtime = FlowRuntime(self.runtime.flow_profile, "http://127.0.0.1:9222", normalized, identity)
+        endpoint = normalize_cdp_url(cdp_url)
+        profile = Path(profile_path).resolve() if profile_path is not None else self.runtime.flow_profile
+        runtime = FlowRuntime(profile, endpoint, normalized, identity)
         try:
             capabilities = preflight(runtime, inspector) if inspector is not None else preflight(runtime, __import__("story_auto.providers.flow.live", fromlist=["FlowInspector"]).FlowInspector(runtime))
             if not capabilities.authenticated:
@@ -156,7 +173,9 @@ class FlowConnectionService:
             missing = [cap for cap in required if not observed.get(cap, False)]
             if missing:
                 return self._candidate_status("CAPABILITY_MISSING", "FLOW_CAPABILITY_UNAVAILABLE", "Required Flow capability is not available.", normalized, identity, required, observed)
-            return self._candidate_status("CONNECTED", "FLOW_CONNECTED", "Flow profile, project, and required capabilities are confirmed.", normalized, identity, required, observed)
+            result = self._candidate_status("CONNECTED", "FLOW_CONNECTED", "Flow profile, project, and required capabilities are confirmed.", normalized, identity, required, observed)
+            result.update(cdp_url=endpoint, dedicated_profile_identity=str(profile) if profile_path is not None else 'runtime/browser/flow-profile')
+            return result
         except FlowSessionError as error:
             code = error.failure_class
             status = "PROJECT_MISMATCH" if code == "FLOW_PROJECT_MISMATCH" else "AUTH_REQUIRED" if code == "FLOW_AUTH_REQUIRED" else "STALE"
@@ -177,7 +196,8 @@ class FlowConnectionService:
             connection_id=current.connection_id if current else "flow_" + uuid.uuid4().hex,
             revision=(current.revision + 1) if current else 1,
             project_url=str(validation["project_url"]), project_identity=str(validation["project_identity"]),
-            dedicated_profile_identity="runtime/browser/flow-profile", validation_status="CONNECTED",
+            dedicated_profile_identity=str(validation.get('dedicated_profile_identity', 'runtime/browser/flow-profile')), validation_status="CONNECTED",
+            cdp_url=validation.get('cdp_url', 'http://127.0.0.1:9222'),
             validated_at=_now(), capabilities=dict(validation.get("observed_capabilities", {})),
         )
         atomic_write_json(self.runtime.flow_connection_file, connection.to_dict())
@@ -282,10 +302,11 @@ class FlowConnectionService:
         return dict(settings["flow_binding"])
 
     def runtime_for_connection(self, connection: FlowConnection) -> FlowRuntime:
-        return FlowRuntime(self.runtime.flow_profile, "http://127.0.0.1:9222", connection.project_url, connection.project_identity)
+        profile = self.runtime.flow_profile if connection.dedicated_profile_identity == 'runtime/browser/flow-profile' else Path(connection.dedicated_profile_identity)
+        return FlowRuntime(profile, connection.cdp_url, connection.project_url, connection.project_identity)
 
     @staticmethod
     def provenance(connection: FlowConnection) -> dict[str, Any]:
         return {"flow_connection_id":connection.connection_id, "flow_connection_revision":connection.revision,
                 "flow_project_identity":connection.project_identity, "flow_project_url":connection.project_url,
-                "dedicated_profile_identity":connection.dedicated_profile_identity}
+                "dedicated_profile_identity":connection.dedicated_profile_identity, "cdp_url":connection.cdp_url}

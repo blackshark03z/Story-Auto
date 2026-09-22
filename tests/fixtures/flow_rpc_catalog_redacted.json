@@ -1,0 +1,178 @@
+{
+  "paths": [
+    {
+      "field": "OUTPUT",
+      "path": [
+        0
+      ]
+    },
+    {
+      "field": "PROJECT",
+      "path": [
+        1
+      ]
+    },
+    {
+      "field": "PROMPT",
+      "path": [
+        5,
+        1
+      ]
+    },
+    {
+      "field": "MODEL",
+      "path": [
+        5,
+        6,
+        1,
+        0,
+        0
+      ]
+    },
+    {
+      "field": "REFERENCE",
+      "path": [
+        5,
+        6,
+        1,
+        1,
+        0,
+        2
+      ]
+    },
+    {
+      "field": "PROMPT",
+      "path": [
+        5,
+        6,
+        2,
+        0,
+        2,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "field": "PROMPT",
+      "path": [
+        7,
+        0,
+        7
+      ]
+    },
+    {
+      "field": "MODEL",
+      "path": [
+        7,
+        0,
+        12
+      ]
+    },
+    {
+      "field": "OUTPUT",
+      "path": [
+        7,
+        2,
+        0
+      ]
+    }
+  ],
+  "record": [
+    "OUTPUT",
+    "PROJECT",
+    "OTHER",
+    "OTHER",
+    null,
+    [
+      [
+        1789922072,
+        931711000
+      ],
+      "PROMPT",
+      null,
+      null,
+      null,
+      "OTHER",
+      [
+        null,
+        [
+          [
+            "MODEL",
+            3,
+            [
+              5
+            ],
+            null,
+            2,
+            1
+          ],
+          [
+            [
+              null,
+              4,
+              "REFERENCE"
+            ]
+          ]
+        ],
+        [
+          [
+            null,
+            null,
+            [
+              [
+                [
+                  "PROMPT"
+                ]
+              ]
+            ]
+          ]
+        ],
+        null,
+        1
+      ],
+      null,
+      [
+        3
+      ],
+      1,
+      "OTHER",
+      null,
+      null,
+      938834
+    ],
+    null,
+    [
+      [
+        null,
+        969599,
+        null,
+        null,
+        null,
+        null,
+        null,
+        "PROMPT",
+        "OTHER",
+        null,
+        null,
+        null,
+        "MODEL",
+        "OTHER",
+        null,
+        false,
+        2
+      ],
+      [
+        null,
+        null,
+        [
+          8
+        ]
+      ],
+      [
+        "OUTPUT"
+      ]
+    ]
+  ],
+  "source": "completed canary 11 read-only catalog"
+}

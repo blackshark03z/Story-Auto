@@ -33,6 +33,22 @@ release-supported creation mode during this freeze.
 
 ## User behavior authority
 
+### Dola cookie video (experimental)
+
+Open **Settings → Dola accounts**. Paste a JSON list of named sessions such as
+`[{"account_id":"daily","cookie":"sessionid=...; ..."}]`, or one account per
+line separated from its full cookie header by a tab. Preview changes, then save.
+Update the same account name when refreshing its cookie; pending work stays
+bound to that account. The local store uses Windows DPAPI and never returns
+cookie values to the interface.
+
+In a Hybrid Opening slot under Auto provider policy, select a Dola account and
+**Generate with Dola**. The confirmation covers one text-to-video request.
+Use **Check / recover Dola video** to poll and import the same result. This
+candidate requests 5/10-second clips, reuses canonical normalization, and does
+not yet support Dola reference images or claim live stability. The provider's
+quota consequences are not established by local tests.
+
 The original manual-review V1 workflow below remains available. Current product
 flow uses Source -> Timing -> Plan -> Visuals -> Quality -> Render and a persisted
 project quality policy (automatic or manual review); see

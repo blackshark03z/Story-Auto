@@ -1,0 +1,39 @@
+{
+  "status": "EXPERIMENTAL_CANDIDATE",
+  "base_head": "5464cbb",
+  "working_tree": "dirty-preserved",
+  "files": [
+    {
+      "path": "story_auto/providers/flow/rpc_contract.py",
+      "sha256": "7564b2af44bae7136402f3374f3bb18d298928fd19f043925f3dd0c937cff698"
+    },
+    {
+      "path": "story_auto/providers/flow/rpc_transport.py",
+      "sha256": "45a4bc78990532dca06d19db061a6d9cec31088bd96662aac32db43436f2b016"
+    },
+    {
+      "path": "story_auto/providers/flow/live.py",
+      "sha256": "bf6aca34d002b247b969280506127ed55a4a939abd046ddd775ea9ad2a2d52f3"
+    },
+    {
+      "path": "story_auto/providers/flow/service.py",
+      "sha256": "8ad44f768f29ee4ae0a97af4b7456c3d465d810663a310b2de8d2b3487601433"
+    },
+    {
+      "path": "story_auto/providers/flow/cdp.py",
+      "sha256": "0e5babfc8a27b00add0a4536e52da29f826fcecbc3aa3e2b81e812c80fb89550"
+    },
+    {
+      "path": "story_auto/providers/flow/response_model.py",
+      "sha256": "382d7992c61af25b67fce75e580277da58096dd8a155ec7f5ed78c46888b50b4"
+    },
+    {
+      "path": "story_auto/providers/flow/video_identity.py",
+      "sha256": "03a5e36d6f9f5650776aa81173e2a2938418696d212a5a5dbaf2ae3f8b86f06b"
+    },
+    {
+      "path": "story_auto/providers/flow/video_acquisition.py",
+      "sha256": "1cc77c7cfc7b2cfccc9becaabc1d374891262c07df6297d7c733ecf14323bcb5"
+    }
+  ]
+}

@@ -177,6 +177,9 @@ textarea { resize: vertical; min-height: 210px; line-height: 1.55; }
 dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius-lg); box-shadow: 0 30px 90px rgba(0,0,0,.24); color: var(--ink); }
 dialog::backdrop { background: rgba(15,28,24,.55); }
 .dialog-shell { display: flex; min-height: min(670px, calc(100vh - 42px)); flex-direction: column; background: var(--surface); }
+#flowConfirmDialog { width: min(600px, calc(100vw - 32px)); }
+#flowConfirmDialog .dialog-shell { min-height: 0; }
+#flowConfirmMessage { overflow-wrap: anywhere; }
 .dialog-head { padding: 24px 28px 17px; display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
 .dialog-head h2 { margin: 0; font-size: 25px; letter-spacing: -.03em; }
 .stepper { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin: 0; padding: 0 28px 17px; list-style: none; }
@@ -193,6 +196,10 @@ dialog::backdrop { background: rgba(15,28,24,.55); }
 .choice { position: relative; display: block; padding: 16px; border: 1px solid var(--line); border-radius: 11px; cursor: pointer; }
 .choice:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); box-shadow: inset 0 0 0 1px var(--primary); }
 .choice input { position: absolute; top: 17px; right: 17px; }
+.opening-flow-options label { display: block; margin-top: 12px; }
+.opening-flow-options input { position: static; display: block; width: 100%; max-width: 100%; margin-top: 6px; }
+.opening-flow-options input[type="url"] { min-height: 42px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; color: var(--ink); padding: 10px 12px; }
+.opening-flow-options small { display: block; margin: 10px 0; }
 .choice strong, .choice small { display: block; padding-right: 28px; }
 .choice small { color: var(--muted); margin-top: 4px; }
 .error-summary { margin: 0 28px 4px; padding: 13px 15px; border-left: 4px solid var(--danger); background: #fff0ef; color: #7b2926; }

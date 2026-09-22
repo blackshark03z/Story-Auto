@@ -210,20 +210,26 @@ class CurrentFlowEditorContractTests(unittest.TestCase):
                 def __init__(self):
                     self.expressions = []
                     self.upload = None
+                    self.composer_checks = 0
 
                 def evaluate(self, expression):
                     self.expressions.append(expression)
                     if expression == "document.querySelectorAll('input[type=file]').length": return 0
-                    if "await fetch" in expression: return payload
+                    if "visible_count:0,urls" in expression:
+                        self.composer_checks += 1
+                        return ({"visible_count":0,"urls":[]} if self.composer_checks == 1
+                                else {"visible_count":1,"urls":["https://flow.google/composer/reference"]})
+                    if "alt:e.alt" in expression:
+                        return [{"url":"https://flow-content.google/image/reference", "alt":"reference"}]
                     if "WAITING_FOR_OPTION" in expression: return {"state":"SELECTED"}
                     if "detail-add-to-prompt-btn" in expression: return True
                     if "some(visible)" in expression: return False
-                    if "return Array.from(d.querySelectorAll('img'))" in expression:
-                        return [{"url":"https://flow-content.google/image/reference", "alt":"reference"}]
                     return True
 
                 def file_chooser_upload(self, selector, files):
                     self.upload = (selector, files)
+                def read_project_urls(self, urls):
+                    return [reference.read_bytes() for _ in urls]
 
             page = Page()
             result = FlowBrowserDom(page).add_references([reference])
@@ -233,6 +239,60 @@ class CurrentFlowEditorContractTests(unittest.TestCase):
             self.assertIn("button.add-menu-trigger", scripts)
             self.assertIn("button.asset-item", scripts)
             self.assertIn("button.detail-add-to-prompt-btn", scripts)
+            self.assertIn("flow-base-prompt-box", scripts)
+
+    def test_reference_dialog_closure_without_exact_composer_image_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            reference = Path(root) / "reference.png"
+            Image.new("RGB", (1280, 720), "navy").save(reference)
+            payload = base64.b64encode(reference.read_bytes()).decode("ascii")
+
+            class Page:
+                def evaluate(self, expression):
+                    if expression == "document.querySelectorAll('input[type=file]').length": return 0
+                    if "visible_count:0,urls" in expression: return {"visible_count":0,"urls":[]}
+                    if "alt:e.alt" in expression:
+                        return [{"url":"https://flow-content.google/image/reference", "alt":"reference"}]
+                    if "WAITING_FOR_OPTION" in expression: return {"state":"SELECTED"}
+                    if "detail-add-to-prompt-btn" in expression: return True
+                    return True
+                def file_chooser_upload(self, *_): pass
+                def read_project_urls(self, urls): return [reference.read_bytes() for _ in urls]
+
+            with patch("story_auto.providers.flow.live.time.monotonic", side_effect=[0,0,0,0,0,0,13]), \
+                 patch("story_auto.providers.flow.live.time.sleep"):
+                with self.assertRaises(FlowError) as caught:
+                    FlowBrowserDom(Page()).add_references([reference])
+            self.assertEqual(caught.exception.failure_class, "FLOW_REFERENCE_UPLOAD_FAILED")
+
+    def test_wrong_composer_reference_fails_closed(self):
+        with tempfile.TemporaryDirectory() as root:
+            reference = Path(root) / "reference.png"
+            wrong = Path(root) / "wrong.png"
+            Image.new("RGB", (1280, 720), "navy").save(reference)
+            Image.new("RGB", (1280, 720), "white").save(wrong)
+            reference_payload = base64.b64encode(reference.read_bytes()).decode("ascii")
+            wrong_payload = base64.b64encode(wrong.read_bytes()).decode("ascii")
+
+            class Page:
+                def evaluate(self, expression):
+                    if expression == "document.querySelectorAll('input[type=file]').length": return 0
+                    if "visible_count:0,urls" in expression:
+                        return {"visible_count":1,"urls":["https://flow.google/composer/wrong"]}
+                    if "alt:e.alt" in expression:
+                        return [{"url":"https://flow-content.google/image/reference", "alt":"reference"}]
+                    if "WAITING_FOR_OPTION" in expression: return {"state":"SELECTED"}
+                    if "detail-add-to-prompt-btn" in expression: return True
+                    return True
+                def file_chooser_upload(self, *_): pass
+                def read_project_urls(self, urls):
+                    return [wrong.read_bytes() if "wrong" in url else reference.read_bytes() for url in urls]
+
+            with patch("story_auto.providers.flow.live.time.monotonic", side_effect=[0,0,0,0,0,0,13]), \
+                 patch("story_auto.providers.flow.live.time.sleep"):
+                with self.assertRaises(FlowError) as caught:
+                    FlowBrowserDom(Page()).add_references([reference])
+            self.assertEqual(caught.exception.failure_class, "FLOW_REFERENCE_UPLOAD_FAILED")
 
     def test_old_extractor_migration_reconciliation_requires_full_trusted_evidence(self):
         settings = {

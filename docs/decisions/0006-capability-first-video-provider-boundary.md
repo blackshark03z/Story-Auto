@@ -3,6 +3,11 @@
 Date: 2026-09-16
 Status: ACCEPTED
 
+2026-09-20 amendment: item 7's official-only restriction is superseded for the
+owner-requested `dola_cookie` integration by Decision 0011. The separate
+`dola_official` placeholder remains unimplemented. Historical rationale below
+is preserved; it is not a prohibition on the newly authorized cookie adapter.
+
 ## Context
 
 Hybrid Opening now supports manual import and BytePlus API generation, while Goal 54 has already qualified substantial Elyum Seedance behavior. Additional provider access such as Dola may be useful, but provider-specific control flow must not leak into the canonical Story Auto pipeline or create parallel product paths.

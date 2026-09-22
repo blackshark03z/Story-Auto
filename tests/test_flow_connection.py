@@ -16,6 +16,34 @@ def validated(url="https://labs.google/fx/tools/flow/project-alpha"):
 
 
 class FlowConnectionTests(unittest.TestCase):
+    def test_custom_loopback_connection_survives_reload_and_provenance(self):
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            service = FlowConnectionService(root)
+            profile = str(Path(root).resolve() / 'owner-profile')
+            record = service.save_validated_candidate({**validated(),
+                'cdp_url':'http://127.0.0.1:9333', 'dedicated_profile_identity':profile})
+            loaded = service.get_current_connection()
+            runtime = service.runtime_for_connection(loaded)
+            self.assertEqual(runtime.cdp_url, 'http://127.0.0.1:9333')
+            self.assertEqual(runtime.profile, Path(profile))
+            self.assertEqual(service.provenance(record)['cdp_url'], runtime.cdp_url)
+
+    def test_legacy_record_defaults_to_9222(self):
+        from story_auto.providers.flow.connection import FlowConnection
+        with tempfile.TemporaryDirectory() as root:
+            service = FlowConnectionService(root)
+            raw = service.save_validated_candidate(validated()).to_dict()
+            raw.pop('cdp_url')
+            self.assertEqual(FlowConnection.from_dict(raw).cdp_url, 'http://127.0.0.1:9222')
+
+    def test_remote_or_credentialed_cdp_rejected(self):
+        from story_auto.providers.flow.connection import normalize_cdp_url
+        for value in ['http://remote.example:9333', 'http://user:pass@127.0.0.1:9333',
+                      'http://127.0.0.1:9333/path', 'http://127.0.0.1:99999']:
+            with self.subTest(value=value), self.assertRaises(FlowConnectionError):
+                normalize_cdp_url(value)
+
     def test_normalization_and_revision_are_canonical(self):
         with tempfile.TemporaryDirectory() as root:
             service=FlowConnectionService(root)

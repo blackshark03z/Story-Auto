@@ -73,6 +73,10 @@ from .postprocess import (
 from .validation import AssetValidationError, validate_image, validate_video
 from .session import FlowSessionError
 from .terminal_evidence import build_terminal_evidence
+from .video_identity import (
+    FlowAttemptVideoIdentity,
+    bind_confirmed_attempt_video_identity,
+)
 
 
 _transaction_read_cache: ContextVar[dict[object, Any] | None] = ContextVar(
@@ -137,6 +141,7 @@ UNRESOLVED_FLOW_FAILURES = {
     "FLOW_DISPATCH_UNCERTAIN",
     "FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED",
     "FLOW_POLL_EVIDENCE_INVALID",
+    "FLOW_VIDEO_RECOVERY_CHECKPOINT_INVALID",
     "OUTPUT_ATTRIBUTION_UNCERTAIN",
     "OUTPUT_ATTRIBUTION_AMBIGUOUS",
 }
@@ -316,6 +321,134 @@ def _record_attempt_provider_state(attempt: dict, generator: Any) -> None:
         "provider_poll_timeline_complete": settings.get("provider_poll_timeline_complete"),
         "provider_poll_terminal_state": settings.get("provider_poll_terminal_state"),
     })
+
+
+def _persist_observed_video_identity_before_acquisition(
+    *, paths, manifest: dict, request: dict, attempt: dict, generator: Any,
+    project_identity: str, identity,
+):
+    """Atomically confirm dispatch and bind its exact response identity.
+
+    The passive response tuple is the first durable provider-output signal.  A
+    trusted activation plus the provider/composer transition establishes its
+    causal epoch, but neither is sufficient on its own.  Stage the complete
+    attempt on a copy so a validation failure cannot leave an in-memory
+    confirmed attempt that a later error path might persist.
+    """
+    settings = getattr(generator, "last_settings", None)
+    activation = settings.get("activation") if isinstance(settings, dict) else None
+    causal_activation = (
+        isinstance(activation, dict)
+        and activation.get("input_dispatched") is True
+        and activation.get("trusted_click_seen") is True
+        and activation.get("activation_verified") is True
+        and activation.get("provider_acceptance_transition") is True
+        and settings.get("composer_transition_seen") is True
+    )
+    if (
+        request.get("media_type") != "VIDEO"
+        or not isinstance(settings, dict)
+        or not causal_activation
+    ):
+        raise FlowSessionError(
+            "FLOW_VIDEO_IDENTITY_BINDING_PRECONDITION_FAILED",
+            "response identity cannot be bound outside a verified activation epoch",
+        )
+    staged = copy.deepcopy(attempt)
+    _record_attempt_provider_state(staged, generator)
+    staged.update({
+        "dispatch_confirmed": True,
+        "dispatch_confirmation_state": "CONFIRMED",
+        "dispatch_confirmation_signal": "passive_response_identity_bound",
+        "dispatch_signal_state": "DISPATCH_CONFIRMED",
+    })
+    bound = bind_confirmed_attempt_video_identity(
+        staged,
+        project_id=manifest["project_id"],
+        request_id=request["request_id"],
+        attempt_number=staged["attempt"],
+        project_identity=project_identity,
+        identity=identity,
+    )
+    binding_identity = f"response-binding:{bound.binding_sha256}"
+    staged["durable_dispatch_identity"] = binding_identity
+    provider_settings = staged.get("provider_settings")
+    if isinstance(provider_settings, dict):
+        provider_settings.update({
+            "dispatch_confirmation_state": "CONFIRMED",
+            "dispatch_confirmation_signal": "passive_response_identity_bound",
+            "dispatch_signal_state": "DISPATCH_CONFIRMED",
+            "durable_dispatch_identity": binding_identity,
+        })
+    original = copy.deepcopy(attempt)
+    attempt.clear()
+    attempt.update(staged)
+    try:
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+    except Exception:
+        attempt.clear()
+        attempt.update(original)
+        raise
+    return bound
+
+
+def _persist_video_recovery_checkpoint_after_acceptance(
+    *, paths, manifest: dict, request: dict, attempt: dict, generator: Any,
+) -> None:
+    """Persist the sealed VIDEO activation epoch before waiting for output.
+
+    This checkpoint is deliberately weaker than dispatch confirmation: it
+    records one trusted Generate activation, the provider/composer acceptance
+    transition, and the exact passive-response baseline.  If the client dies
+    while Flow continues generating, reconciliation can inspect that same
+    epoch without another activation.  It never authorizes a retry.
+    """
+    settings = getattr(generator, "last_settings", None)
+    activation = settings.get("activation") if isinstance(settings, dict) else None
+    valid = (
+        request.get("media_type") == "VIDEO"
+        and isinstance(settings, dict)
+        and isinstance(activation, dict)
+        and activation.get("input_dispatched") is True
+        and activation.get("trusted_click_seen") is True
+        and activation.get("activation_verified") is True
+        and activation.get("provider_acceptance_transition") is True
+        and settings.get("composer_transition_seen") is True
+        and isinstance(settings.get("pre_dispatch_baseline_fingerprint"), str)
+        and len(settings["pre_dispatch_baseline_fingerprint"]) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in settings["pre_dispatch_baseline_fingerprint"]
+        )
+        and not isinstance(settings.get("flow_response_identity_baseline_count"), bool)
+        and isinstance(settings.get("flow_response_identity_baseline_count"), int)
+        and settings["flow_response_identity_baseline_count"] >= 0
+    )
+    if not valid:
+        raise FlowSessionError(
+            "FLOW_VIDEO_RECOVERY_CHECKPOINT_INVALID",
+            "video recovery checkpoint lacks a verified activation epoch",
+        )
+    staged = copy.deepcopy(attempt)
+    _record_attempt_provider_state(staged, generator)
+    checkpoint_at = _now()
+    staged["video_recovery_checkpoint"] = {
+        "state": "PROVIDER_ACCEPTED_AWAITING_OUTPUT",
+        "persisted_at": checkpoint_at,
+        "generate_activations": 1,
+        "retry_authorized": False,
+    }
+    previous = copy.deepcopy(attempt)
+    attempt.clear()
+    attempt.update(staged)
+    try:
+        atomic_write_json(paths.artifact_path("output/generation_manifest.json"), manifest)
+    except Exception:
+        attempt.clear()
+        attempt.update(previous)
+        raise
+
+
 def _manifest(paths, project_id):
     path = paths.artifact_path("output/generation_manifest.json")
     if not path.exists(): return path, {"schema_version": MANIFEST_VERSION, "project_id": project_id, "requests": []}
@@ -6308,6 +6441,52 @@ def _provider_identity_history(manifest: dict, *, exclude_request_id: str | None
 def _confirm_executor_attribution(attempt: dict, generator: Any) -> None:
     """Require explicit live provenance; fixture adapters get an exact-return seam."""
     settings = getattr(generator, "last_settings", None)
+    if isinstance(settings, dict) and settings.get("transport") == "flow-batchexecute/1.0.0":
+        from .rpc_transport import verify_attribution, RpcError
+        try:
+            verify_attribution(settings)
+        except RpcError:
+            raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN", "RPC receipt is invalid") from None
+        if attempt.get("dispatch_confirmed") is not True or not attempt.get("provider_boundary_entered_at"):
+            raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN", "RPC provider boundary is unproven")
+        return
+    response_binding_value = attempt.get("flow_observed_video_identity")
+    if response_binding_value is not None:
+        bound = FlowAttemptVideoIdentity.from_dict(response_binding_value)
+        if not isinstance(settings, dict):
+            raise FlowError(
+                "FLOW_VIDEO_IDENTITY_BINDING_INVALID",
+                "response identity settings are unavailable",
+            )
+        snapshot = settings.get("provider_poll_evidence")
+        if isinstance(snapshot, dict):
+            from .live import ProviderPollEvidenceTimeline
+            verified = ProviderPollEvidenceTimeline.verify_snapshot(snapshot)
+            if not verified.get("evidence_complete"):
+                raise FlowError("FLOW_POLL_EVIDENCE_LIMIT_EXCEEDED")
+        binding_identity = f"response-binding:{bound.binding_sha256}"
+        attributed = settings.get("attributed_provider_identity")
+        if (
+            attempt.get("dispatch_confirmed") is not True
+            or settings.get("dispatch_confirmation_state") != "CONFIRMED"
+            or settings.get("flow_observed_video_identity_binding_sha256")
+            != bound.binding_sha256
+            or settings.get("attribution_state") != "CONFIRMED"
+            or settings.get("attribution_method") != "passive_response_identity_binding"
+            or not isinstance(attributed, dict)
+            or attributed.get("identity") != binding_identity
+        ):
+            raise FlowError(
+                "FLOW_VIDEO_IDENTITY_BINDING_INVALID",
+                "response identity attribution does not match the canonical binding",
+            )
+        attempt.setdefault("attribution_events", []).append({
+            "at": attempt.get("attribution_confirmation_timestamp") or _now(),
+            "state": "CONFIRMED",
+            "method": attempt.get("attribution_method"),
+            "provider_identity": attributed,
+        })
+        return
     if isinstance(settings, dict) and isinstance(settings.get("provider_poll_evidence"), dict):
         # Import lazily to avoid the module-level service/live dependency cycle.
         from .live import ProviderPollEvidenceTimeline
@@ -6359,6 +6538,19 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
         raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN")
     if not source.is_file():
         raise FlowError("ASSET_ACQUISITION_FAILED")
+    rpc_settings = attempt.get("provider_settings") or {}
+    if rpc_settings.get("transport") == "flow-batchexecute/1.0.0":
+        from .rpc_transport import verify_attribution, digest, RpcError
+        try:
+            receipt = verify_attribution(rpc_settings)
+            bound = receipt["identity"]
+            if (receipt["output_sha256"] != sha256_file(source)
+                    or bound.get("attempt_directory") != str(temporary.parent.resolve())
+                    or bound["request_id"] != request["request_id"]
+                    or bound["request_sha256"] != digest({k: v for k, v in request.items() if not k.startswith("_")})):
+                raise RpcError("FLOW_RPC_RESULT_MISMATCH")
+        except (RpcError, KeyError, TypeError):
+            raise FlowError("OUTPUT_ATTRIBUTION_UNCERTAIN", "RPC bytes/request binding is invalid") from None
     if source.resolve() != temporary.resolve():
         shutil.copy2(source, temporary)
     production = request.get("execution_tier") == "STANDARD_PRODUCTION"
@@ -6413,7 +6605,8 @@ def _finalize_attributed_result(paths, manifest: dict, entry: dict, request: dic
 
 
 def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list[dict], entries: dict[str, dict],
-                          executor: "FlowExecutor") -> tuple[bool, str | None, int]:
+                          executor: "FlowExecutor", *, flow_project_identity: str | None = None,
+                          ) -> tuple[bool, str | None, int]:
     blocker = _first_unresolved(paths, project_id, requests, entries)
     if blocker is None:
         return True, None, 0
@@ -6492,7 +6685,28 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
     reconciliation_attempt = _hydrate_attempt_external_poll_evidence(
         paths, request["request_id"], attempt
     )
-    result = executor.reconcile_attempt(request_context, reconciliation_attempt, temporary)
+    def persist_reconciled_video_identity(identity):
+        if not isinstance(flow_project_identity, str) or not flow_project_identity:
+            raise FlowSessionError(
+                "FLOW_PROJECT_MISMATCH", "canonical Flow project binding is unavailable",
+            )
+        return _persist_observed_video_identity_before_acquisition(
+            paths=paths,
+            manifest=manifest,
+            request=request,
+            attempt=attempt,
+            generator=executor.generate,
+            project_identity=flow_project_identity,
+            identity=identity,
+        )
+    result = executor.reconcile_attempt(
+        request_context,
+        reconciliation_attempt,
+        temporary,
+        before_video_acquisition=(
+            persist_reconciled_video_identity if request.get("media_type") == "VIDEO" else None
+        ),
+    )
     if not isinstance(result, dict):
         return False, request["request_id"], 0
     state = result.get("state")
@@ -6533,6 +6747,8 @@ def _reconcile_unresolved(paths, project_id: str, manifest: dict, requests: list
                       "updated_at": event["at"]})
         return True, None, 1
     if state == "CONFIRMED_OUTPUT" and evidence.get("attribution_state") == "CONFIRMED":
+        if evidence.get("transport") == "flow-batchexecute/1.0.0":
+            attempt["provider_settings"] = _persisted_provider_settings(evidence)
         attempt.update(evidence)
         attempt["dispatch_confirmed"] = True
         attempt.setdefault("attribution_events", []).append({
@@ -6597,22 +6813,42 @@ class FlowExecutor:
     capabilities: Any
     generate: Any
 
-    def run(self, request, refs, temporary: Path, *, before_provider_boundary=None):
+    def run(self, request, refs, temporary: Path, *, before_provider_boundary=None,
+            before_video_acquisition=None, after_provider_acceptance=None):
         self.capabilities.require(request["media_type"], bool(refs))
         setter = getattr(self.generate, "set_before_provider_boundary", None)
+        acquisition_setter = getattr(self.generate, "set_before_video_acquisition", None)
+        acceptance_setter = getattr(self.generate, "set_after_provider_acceptance", None)
         if not callable(setter):
             if before_provider_boundary is not None:
                 before_provider_boundary()
             return self.generate(request, refs, temporary)
         setter(before_provider_boundary)
+        if callable(acquisition_setter):
+            acquisition_setter(before_video_acquisition)
+        if callable(acceptance_setter):
+            acceptance_setter(after_provider_acceptance)
         try:
             return self.generate(request, refs, temporary)
         finally:
+            if callable(acceptance_setter):
+                acceptance_setter(None)
+            if callable(acquisition_setter):
+                acquisition_setter(None)
             setter(None)
 
-    def reconcile_attempt(self, request, attempt, temporary: Path):
+    def reconcile_attempt(self, request, attempt, temporary: Path, *, before_video_acquisition=None):
         reconcile = getattr(self.generate, "reconcile", None)
-        return reconcile(request, attempt, temporary) if callable(reconcile) else None
+        acquisition_setter = getattr(self.generate, "set_before_video_acquisition", None)
+        if not callable(reconcile):
+            return None
+        if callable(acquisition_setter):
+            acquisition_setter(before_video_acquisition)
+        try:
+            return reconcile(request, attempt, temporary)
+        finally:
+            if callable(acquisition_setter):
+                acquisition_setter(None)
 
 
 def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
@@ -6623,7 +6859,7 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
     still receive an append-only REMAINS_AMBIGUOUS observation so preserved
     production evidence can be audited without changing queue order.
     """
-    paths, _ = load_project(RuntimeLayout.from_root(runtime_root), project_id)
+    paths, config = load_project(RuntimeLayout.from_root(runtime_root), project_id)
     with ProjectLock(paths.runtime, project_id):
         path, manifest = _manifest(paths, project_id)
         requests = read_json(paths.artifact_path("output/generation_requests.json"))["requests"]
@@ -6635,7 +6871,11 @@ def reconcile_unresolved_flow_attempt(runtime_root: Path | str, project_id: str,
         earliest = _first_unresolved(paths, project_id, requests, entries)
         if earliest and earliest[0]["request_id"] == request_id:
             released, blocked_request_id, count = _reconcile_unresolved(
-                paths, project_id, manifest, requests, entries, executor
+                paths, project_id, manifest, requests, entries, executor,
+                flow_project_identity=(
+                    config.settings.get("provider_binding", {}).get("flow", {}).get("project_identity")
+                    if isinstance(config.settings, dict) else None
+                ),
             )
             if count:
                 atomic_write_json(path, manifest)
@@ -6748,7 +6988,11 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
             atomic_write_json(path, manifest)
             entries[initial_blocker[0]["request_id"]] = initial_blocker[1]
         released, blocked_request_id, reconciled = _reconcile_unresolved(
-            paths, project_id, manifest, requests, entries, executor
+            paths, project_id, manifest, requests, entries, executor,
+            flow_project_identity=(
+                config.settings.get("provider_binding", {}).get("flow", {}).get("project_identity")
+                if isinstance(config.settings, dict) else None
+            ),
         )
         reconciliation_count += reconciled
         if reconciled:
@@ -6896,9 +7140,41 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                     attempt["provider_submission_recorded"] = True
                     entry["provider_submissions"] = int(entry.get("provider_submissions", 0)) + 1
                     atomic_write_json(path, manifest)
+                def persist_observed_video_identity(identity):
+                    flow = config.settings.get("provider_binding", {}).get("flow", {})
+                    project_identity = flow.get("project_identity") if isinstance(flow, dict) else None
+                    if not isinstance(project_identity, str) or not project_identity:
+                        raise FlowSessionError(
+                            "FLOW_PROJECT_MISMATCH", "canonical Flow project binding is unavailable",
+                        )
+                    return _persist_observed_video_identity_before_acquisition(
+                        paths=paths,
+                        manifest=manifest,
+                        request=request,
+                        attempt=attempt,
+                        generator=executor.generate,
+                        project_identity=project_identity,
+                        identity=identity,
+                    )
+                def persist_video_recovery_checkpoint() -> None:
+                    _persist_video_recovery_checkpoint_after_acceptance(
+                        paths=paths,
+                        manifest=manifest,
+                        request=request,
+                        attempt=attempt,
+                        generator=executor.generate,
+                    )
                 execution["result"] = executor.run(
                     request_context, refs, temp,
                     before_provider_boundary=mark_provider_boundary,
+                    after_provider_acceptance=(
+                        persist_video_recovery_checkpoint
+                        if request["media_type"] == "VIDEO" else None
+                    ),
+                    before_video_acquisition=(
+                        persist_observed_video_identity
+                        if request["media_type"] == "VIDEO" else None
+                    ),
                 )
                 execution["temporary"] = temp
 
@@ -6937,6 +7213,13 @@ def execute_generation(runtime_root: Path | str, project_id: str, *, executor: F
                 }
                 if canonical_no_dispatch_proof(attempt):
                     state = "NOT_DISPATCHED"
+                elif (request.get("media_type") == "VIDEO"
+                        and isinstance(attempt.get("video_recovery_checkpoint"), dict)
+                        and attempt["video_recovery_checkpoint"].get("state")
+                        == "PROVIDER_ACCEPTED_AWAITING_OUTPUT"):
+                    # A post-acceptance transport failure is never permission
+                    # to retry this provider effect, regardless of error label.
+                    state = "AMBIGUOUS"
                 elif safe_pre_dispatch_candidate or error.failure_class in UNRESOLVED_FLOW_FAILURES:
                     # Error labels and a missing job ID are not dispatch proof.
                     # Preserve a serial barrier until persisted evidence resolves it.

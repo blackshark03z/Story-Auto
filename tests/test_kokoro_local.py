@@ -146,7 +146,11 @@ class KokoroLocalTests(unittest.TestCase):
             })
             paths=create_project(runtime,config,"## Narration\n\nA short local check.\n")
             app=OperatorService(runtime.root)
-            voice_row=app.settings_overview()["providers"][0]
+            # Settings is the global new-project surface; bind the same Kokoro
+            # configuration there explicitly before comparing it with the
+            # project-local production preflight below.
+            overview=app.update_runtime_defaults({"project_settings":{"tts":config.settings["tts"]}})
+            voice_row=overview["providers"][0]
             self.assertEqual((voice_row["status"],voice_row["detail"],voice_row["technical_code"]),
                              ("Needs attention","Kokoro model files are missing","KOKORO_MODEL_NOT_FOUND"))
             runner_calls=[]

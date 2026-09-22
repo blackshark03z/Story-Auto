@@ -147,6 +147,17 @@ class ProductionQueries:
             except Exception:
                 # Legacy/stale projects are reconciled only when opened/commanded; cards remain cheap.
                 state = {"pipeline_status": "RECONCILE_REQUIRED", "active_stage": "SOURCE", "next_action": {"action": "run_to_final", "label": "Continue production"}, "final_output": {"present": (paths.root / "output" / "final.mp4").is_file()}}
+            # Hybrid's composed state is derived from its Opening, body and final
+            # manifests. The generic checkpoint may still say PLAN after a valid
+            # Hybrid render, so it cannot authoritatively label the Home card.
+            from story_auto.application.hybrid_production import hybrid_cuj_enabled
+            if hybrid_cuj_enabled(config):
+                from story_auto.application.hybrid_production import hybrid_production_query
+                from story_auto.application.flow_product import product_flow_status
+                flow = (product_flow_status(self.flow_connections, project_id, config,
+                                            request_media_types=['IMAGE'])
+                        if self.flow_connections is not None else None)
+                state = hybrid_production_query(paths, config, flow=flow)
         content = paths.content_file.read_text(encoding="utf-8") if paths.content_file.is_file() else ""
         title = next((line[2:].strip() for line in content.splitlines() if line.startswith("# ") and line[2:].strip()), project_id)
         updated = max((path.stat().st_mtime for path in (paths.project_file, paths.content_file, state_path) if path.is_file()), default=paths.root.stat().st_mtime)

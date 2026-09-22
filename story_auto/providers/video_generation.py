@@ -69,6 +69,13 @@ _DESCRIPTORS: dict[str, dict[str, Any]] = {
         "production_routed": True,
         "experimental": False,
     },
+    "dola_cookie": {
+        "provider_id": "dola_cookie", "display_name": "Dola (cookie session)",
+        "tier": "B", "transport": "PRIVATE_HTTP_COOKIE",
+        "model_family": "seedance", "models": ["seedance_v2.0"], "modes": ["T2V"],
+        "lifecycle": "CONVERSATION_RECEIPT", "consequence_model": "ACCOUNT_QUOTA_UNVERIFIED",
+        "production_routed": False, "experimental": True,
+    },
 }
 
 
@@ -85,6 +92,14 @@ def provider_descriptor(provider_id: str) -> dict[str, Any]:
 
 
 def _runtime_readiness(provider_id: str) -> dict[str, Any]:
+    if provider_id == "dola_cookie":
+        from story_auto.providers.dola_cookie.accounts import DolaAccountStore
+        try:
+            configured = bool(DolaAccountStore().list_accounts())
+        except Exception:
+            return {"status": "ERROR", "reason_code": "DOLA_ACCOUNT_STORE_UNAVAILABLE"}
+        return {"status": "CONFIGURED" if configured else "NOT_CONFIGURED",
+                "reason_code": "LIVE_CONTRACT_NOT_QUALIFIED" if configured else "CREDENTIAL_MISSING"}
     if provider_id == "byteplus_seedance":
         from story_auto.providers.byteplus_seedance import BytePlusSeedanceClient
         return dict(BytePlusSeedanceClient().readiness())
@@ -101,7 +116,7 @@ def _runtime_readiness(provider_id: str) -> dict[str, Any]:
 def video_provider_catalog() -> list[dict[str, Any]]:
     """Return a secret-free capability/readiness catalog for product surfaces."""
     rows: list[dict[str, Any]] = []
-    for provider_id in ("byteplus_seedance", "elyum_seedance", "dola_official", "manual_external"):
+    for provider_id in ("byteplus_seedance", "elyum_seedance", "dola_official", "dola_cookie", "manual_external"):
         row = provider_descriptor(provider_id)
         readiness = _runtime_readiness(provider_id)
         row["status"] = readiness.get("status", "UNKNOWN")

@@ -406,10 +406,42 @@ def import_opening_clip(runtime_root: Path | str, project_id: str, slot_id: str,
             safe_manual = status in {"FAILED_PRE_DISPATCH", "COST_BLOCKED", "CREDIT_BLOCKED", "FAILED_TERMINAL", "KILLED", "SUCCEEDED"}
             matched_provider = bool(_provider_identity) and all(
                 generation.get(key) == value for key, value in _provider_identity.items())
+            flow_acquisition = False
+            if matched_provider and generation.get("provider") == "flow_cookie":
+                from story_auto.providers.flow.rpc_transport import verify_attribution, digest
+                try:
+                    receipt = verify_attribution(generation.get("rpc_settings", {}))
+                    bound = receipt["identity"]
+                    expected_identity = {
+                        "provider": "flow_cookie", "provider_task_id": receipt["output_id"],
+                        "account_id": generation["account_id"], "revision": generation["revision"],
+                        "project_identity": generation["project_identity"],
+                    }
+                    flow_acquisition = (
+                        _provider_identity == expected_identity
+                        and generation.get("provider_task_status") == "succeeded"
+                        and receipt["output_sha256"] == source_meta["sha256"]
+                        and bound["project"] == generation["project_identity"]
+                        and bound["project_url"] == generation["project_url"]
+                        and bound["session_binding"] == {
+                            "mode":"cookie_owned", "account_id":generation["account_id"],
+                            "revision":generation["revision"]}
+                        and bound["request_sha256"] == digest(generation["request"])
+                        and bound["references"] == [generation["reference_sha256"]]
+                        and bound["attempt_directory"] == str(paths.artifact_path(
+                            f'assets/opening/flow/{generation["attempt_id"]}').resolve())
+                    )
+                except (KeyError, ValueError, TypeError, RuntimeError):
+                    flow_acquisition = False
             provider_acquisition = matched_provider and (
+                flow_acquisition or
                 (generation.get("provider") == "byteplus_seedance"
                  and bool(_provider_identity.get("provider_task_id"))
                  and generation.get("provider_task_status") == "succeeded")
+                or (generation.get("provider") == "dola_cookie"
+                    and bool(_provider_identity.get("provider_task_id"))
+                    and bool(_provider_identity.get("account_id"))
+                    and generation.get("provider_task_status") == "succeeded")
                 or (generation.get("provider") == "elyum_seedance"
                     and bool(_provider_identity.get("gen_id")) and generation.get("keep_confirmed") is True))
             if (_provider_identity is not None and not provider_acquisition) or (not safe_manual and not provider_acquisition):
@@ -466,6 +498,7 @@ def import_opening_clip(runtime_root: Path | str, project_id: str, slot_id: str,
             slot["source_asset"].update({
                 "provider": generation["provider"], "provider_model": generation.get("provider_model"),
                 "provider_task_id": generation.get("provider_task_id"),
+                "provider_account_id": generation.get("account_id"),
                 "provider_job_id": generation.get("provider_job_id"), "provider_gen_id": generation.get("gen_id"),
                 "source_preview_sha256": generation.get("preview_asset", {}).get("sha256"),
             })

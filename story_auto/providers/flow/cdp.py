@@ -6,6 +6,7 @@ import json
 import time
 import threading
 from collections import deque
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 from .session import FlowSessionError
@@ -36,14 +37,32 @@ class CdpPage:
             # a human-facing discovery response and is not consistently a list.
             with opener(runtime.cdp_url.rstrip("/") + "/json/list", timeout=4) as response:
                 pages = json.loads(response.read().decode("utf-8"))
-            matches = [p for p in pages if p.get("type") == "page" and str(p.get("url", "")).startswith(runtime.project_url)]
+            project_url = urlsplit(runtime.project_url)
+            matches = []
+            for page in pages:
+                target = urlsplit(str(page.get("url", "")))
+                if (page.get("type") == "page" and target.scheme == project_url.scheme
+                        and target.netloc == project_url.netloc
+                        and target.path.rstrip('/') == project_url.path.rstrip('/')):
+                    matches.append(page)
             if len(matches) != 1: raise FlowSessionError("FLOW_PROJECT_MISMATCH", f"expected one Flow project tab, found {len(matches)}")
             address = matches[0].get("webSocketDebuggerUrl")
             if not isinstance(address, str): raise ValueError("missing debugger endpoint")
             if ws_connect is None:
                 import websocket
                 ws_connect = websocket.create_connection
-            return cls(ws_connect(address, timeout=30), runtime, opener=opener,
+            # Native loopback CDP clients have no web-page Origin. Avoid the
+            # synthetic Origin added by websocket-client; Chrome's Origin
+            # validation and launch flags remain unchanged.
+            options = {"timeout": 30}
+            endpoint, debugger = urlsplit(runtime.cdp_url), urlsplit(address)
+            if (endpoint.hostname in {"127.0.0.1", "localhost", "::1"}
+                    and debugger.hostname == endpoint.hostname
+                    and (endpoint.scheme, debugger.scheme) in {('http', 'ws'), ('https', 'wss')}
+                    and (endpoint.port or (443 if endpoint.scheme == 'https' else 80))
+                    == (debugger.port or (443 if debugger.scheme == 'wss' else 80))):
+                options["suppress_origin"] = True
+            return cls(ws_connect(address, **options), runtime, opener=opener,
                        ws_connect=ws_connect, target_id=str(matches[0].get("id", "")))
         except FlowSessionError: raise
         except Exception as error: raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "cannot attach to dedicated Story Auto Chrome") from error
@@ -254,6 +273,49 @@ class CdpPage:
             # A CDP-attached browser is owned by Story Auto's dedicated Chrome,
             # not this short Playwright client.  Let Playwright disconnect with
             # its context instead of closing the remote browser.
+            del browser
+
+    def read_project_urls(self, urls: list[str], *, timeout_ms: int = 8000,
+                          max_bytes: int = 10 * 1024 * 1024) -> list[bytes | None]:
+        """Read browser-authorized project media without exporting session secrets."""
+        self.assert_locator_activation_available()
+        if self.runtime is None:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "project media read requires a Flow runtime")
+        project_host = urlsplit(self.runtime.project_url).hostname
+        allowed_hosts = {project_host, "lh3.googleusercontent.com", "flow-content.google"}
+        if (not isinstance(urls, list) or len(urls) > 100
+                or any(not isinstance(url, str) or urlsplit(url).hostname not in allowed_hosts for url in urls)):
+            raise FlowSessionError("FLOW_UI_CHANGED", "project media URL scope was invalid")
+        browser = None
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.connect_over_cdp(self.runtime.cdp_url)
+                pages = [
+                    page for context in browser.contexts for page in context.pages
+                    if str(page.url).startswith(self.runtime.project_url)
+                ]
+                if len(pages) != 1:
+                    raise FlowSessionError(
+                        "FLOW_PROJECT_MISMATCH",
+                        f"expected one Flow project page for media read, found {len(pages)}",
+                    )
+                result: list[bytes | None] = []
+                for url in urls:
+                    response = pages[0].request.get(url, timeout=timeout_ms)
+                    if not response.ok or urlsplit(response.url).hostname not in allowed_hosts:
+                        result.append(None)
+                        continue
+                    payload = response.body()
+                    if len(payload) > max_bytes:
+                        raise FlowSessionError("FLOW_UI_CHANGED", "project media exceeded the bounded read size")
+                    result.append(payload)
+                return result
+        except FlowSessionError:
+            raise
+        except Exception as error:
+            raise FlowSessionError("FLOW_CDP_UNAVAILABLE", "Playwright project media read failed") from error
+        finally:
             del browser
 
     def file_chooser_upload(self, selector: str, files: list[str], *, timeout_ms: int = 5000) -> None:

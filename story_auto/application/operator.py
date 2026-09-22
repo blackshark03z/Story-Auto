@@ -8,6 +8,7 @@ import re
 import shutil
 import uuid
 import base64
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,7 @@ from story_auto.providers.elyum_seedance import (ElyumSeedanceClient, ElyumSeeda
 from story_auto.providers.pexels.client import PexelsClient, PexelsError
 from story_auto.providers.pexels.service import resolve_pexels_stock_slot
 from story_auto.providers.credentials import append_provider_keys, clear_provider_keys, provider_key_status, provider_keys
+from story_auto.providers.dola_cookie import DolaAccountStore
 from story_auto.providers.llm import AnthropicCompatibleProvider, ExternalLLMError, normalize_base_url
 from story_auto.providers.video_generation import video_provider_catalog
 from story_auto.providers.flow.project_binding import (FLOW_MIGRATED_HOME_URL, FlowProjectBindingError, FlowProjectBindingService,
@@ -387,7 +389,7 @@ class OperatorService:
             "hybrid_body":hybrid_body_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "hybrid_preview":hybrid_preview_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "opening_api_provider":seedance_readiness() if config.render_mode=="hybrid_hook" else None,
-            "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status()} if config.render_mode=="hybrid_hook" else None),
+            "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status(), "dola": self.dola_connection_status(), "flow_cookie": self.flow_cookie_connection_status()} if config.render_mode=="hybrid_hook" else None),
             "opening_provider_policy":(str(config.settings.get("hybrid_visual",{}).get("opening_provider_policy","AUTO")).upper() if config.render_mode=="hybrid_hook" and isinstance(config.settings,dict) else None),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
@@ -457,6 +459,37 @@ class OperatorService:
 
     def generate_opening_api(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return generate_opening_slot_api(self.runtime.root, project_id, slot_id)
+
+    def generate_dola_opening(self, project_id: str, *, slot_id: str, account_id: str = "") -> dict[str, Any]:
+        from story_auto.providers.dola_cookie.opening import generate_dola_opening
+        return generate_dola_opening(self.runtime.root, project_id, slot_id, account_id=account_id)
+
+    def generate_flow_cookie_opening(self, project_id: str, *, slot_id: str, account_id: str = "",
+                                     project_url: str = "", imported_reference=None,
+                                     confirm_generate: bool = False, recovery_only: bool = False) -> dict[str, Any]:
+        from story_auto.providers.flow.opening import generate_flow_cookie_opening
+        if recovery_only:
+            # A recovery action must not create an attempt on an empty slot.
+            view = self.opening_builder(project_id) or {}
+            slot = next((item for item in view.get('slots', []) if item.get('slot_id') == slot_id), {})
+            if (slot.get('api_generation') or {}).get('provider') != 'flow_cookie':
+                raise OperatorServiceError('FLOW_COOKIE_RECOVERY_NOT_AVAILABLE')
+            return generate_flow_cookie_opening(self.runtime.root, project_id, slot_id)
+        if confirm_generate is not True:
+            raise OperatorServiceError('FLOW_COOKIE_CONFIRMATION_REQUIRED')
+        _, payload = self._decoded_import(imported_reference, fallback_name='reference.png', limit=28_000_000)
+        with tempfile.TemporaryDirectory(dir=self.runtime.temp) as temporary:
+            source = Path(temporary) / 'reference.png'
+            source.write_bytes(payload)
+            return generate_flow_cookie_opening(self.runtime.root, project_id, slot_id,
+                                                account_id=account_id, project_url=project_url,
+                                                reference_path=source)
+
+    def reset_unused_flow_cookie_opening(self, project_id: str, *, slot_id: str, confirm_reset: bool = False):
+        if confirm_reset is not True:
+            raise OperatorServiceError('FLOW_COOKIE_RESET_CONFIRMATION_REQUIRED')
+        from story_auto.providers.flow.opening import reset_unused_flow_cookie_opening
+        return reset_unused_flow_cookie_opening(self.runtime.root, project_id, slot_id)
 
     def preflight_elyum_opening(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return preflight_elyum_opening_slot(self.runtime.root, project_id, slot_id)
@@ -533,7 +566,7 @@ class OperatorService:
             if not isinstance(hybrid_settings, dict):
                 raise OperatorServiceError("HYBRID_VISUAL_SETTINGS_INVALID")
             opening_provider_policy = str(hybrid_settings.get("opening_provider_policy", "AUTO")).strip().upper()
-            if opening_provider_policy not in {"AUTO", "BYTEPLUS", "ELYUM", "MANUAL"}:
+            if opening_provider_policy not in {"AUTO", "BYTEPLUS", "ELYUM", "DOLA", "MANUAL"}:
                 raise OperatorServiceError("HYBRID_OPENING_PROVIDER_POLICY_INVALID")
             hybrid_settings["opening_provider_policy"] = opening_provider_policy
         availability = render_mode_availability(effective_render_mode, resolved_settings)
@@ -610,7 +643,7 @@ class OperatorService:
         if flow_required and self.auto_flow_projects and mode!="RENDER_ONLY":
             try:
                 self.flow_project_bindings.ensure(ident,self.flow_projects)
-            except (FlowProjectBindingError, FlowSessionError):
+            except (FlowProjectBindingError, FlowSessionError, ConnectionError, TimeoutError):
                 # Local creation succeeded. The binding service durably records
                 # the exact setup failure; snapshot returns that status with the
                 # saved project ID so clients cannot mistake this for BOUND.
@@ -1304,6 +1337,10 @@ class OperatorService:
         elyum_status=self.elyum_connection_status()
         pexels_status=self.pexels_connection_status()
         external_llm_status=self.external_llm_connection_status()
+        brain_configured = (external_llm_status.get("configured", False)
+                            if llm.get("provider") == "external_anthropic"
+                            else provider_key_status("gemini")["configured"])
+        dola_status = self.dola_connection_status()
         video_providers=video_provider_catalog()
         historical_capabilities=dict(flow_status.get("observed_capabilities") or {})
         flow_status={**flow_status,
@@ -1341,7 +1378,7 @@ class OperatorService:
                 {"name":"Full Video visuals","detail":f"BytePlus ModelArk · {seedance_status['model']} · API task transport","status":"Ready" if seedance_status["status"]=="READY" else "Not configured"},
                 {"name":"Opening API video","detail":f"BytePlus ModelArk · {seedance_status['model']} · optional Hybrid opening slots","status":"Ready" if byteplus_status["configured"] else "Not configured"},
                 {"name":"Hybrid stock video","detail":"Pexels API - semantic stock - image fallback when unavailable","status":"Ready" if pexels_status["configured"] else "Not configured"},
-                {"name":"AI brain","detail":("External Anthropic-compatible gateway" if llm.get("provider") == "external_anthropic" else "Gemini 3.8 planning and quality checks"),"status":"Ready" if llm else "Not configured"},
+                {"name":"AI brain","detail":("External Anthropic-compatible gateway" if llm.get("provider") == "external_anthropic" else "Gemini 3.8 planning and quality checks"),"status":"Configured" if brain_configured else "Not configured", "live_verified":False},
             ],
             "storage":{"project_location":str(self.runtime.projects),"free_gb":round(usage.free/(1024**3),1)},
             "flow_connection":flow_status,
@@ -1350,10 +1387,99 @@ class OperatorService:
             "elyum":elyum_status,
             "pexels":pexels_status,
             "external_llm":external_llm_status,
+            "dola":dola_status,
+            "flow_cookie":self.flow_cookie_connection_status(),
             "video_providers":video_providers,
             "advanced":{"runtime_root":str(self.runtime.root),"gemini_model":llm.get("model","gemini-3.8-flash"),"llm_provider":llm.get("provider","gemini"),"flow_project":flow_status.get("project_identity") or "Not configured","seedance_model":seedance_status["model"],"tts_provider":provider or "Not configured",
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
+
+    def dola_connection_status(self) -> dict[str, Any]:
+        accounts = DolaAccountStore().list_accounts()
+        return {"status":"CONFIGURED" if accounts else "NOT_CONFIGURED",
+                "configured":bool(accounts), "live_verified":False, "accounts":accounts,
+                "account_count":len(accounts),
+                "reason_code":None if accounts else "DOLA_COOKIE_MISSING"}
+
+    def flow_cookie_connection_status(self) -> dict[str, Any]:
+        from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
+        try:
+            accounts = FlowCookieAccountStore().list_accounts()
+        except Exception:
+            return {'status':'NEEDS_ATTENTION','configured':False,'accounts':[],
+                    'live_verified':False,'reason_code':'FLOW_COOKIE_STORE_UNAVAILABLE'}
+        from story_auto.providers.flow.opening import _runtime
+        from story_auto.providers.flow.rpc_transport import enabled
+        gate_project_url = 'https://flow.google.com/project/' + os.getenv('STORY_AUTO_FLOW_RPC_PROJECT', '')
+        try:
+            generation_enabled = enabled(_runtime(self.runtime, gate_project_url))
+        except Exception:
+            generation_enabled = False
+        return {'status':'CONFIGURED' if accounts else 'NOT_CONFIGURED',
+                'configured':bool(accounts),'accounts':accounts,'live_verified':False,
+                'generation_enabled':generation_enabled,
+                'generation_project_url':gate_project_url if generation_enabled else None}
+
+    def preview_flow_cookie_account(self, account_id: str, raw: Any) -> dict[str, Any]:
+        from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
+        return FlowCookieAccountStore().preview_account(account_id,raw)
+
+    def save_flow_cookie_account(self, account_id: str, raw: Any) -> dict[str, Any]:
+        from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
+        result = FlowCookieAccountStore().save_account(account_id,raw)
+        return {**self.flow_cookie_connection_status(),**result}
+
+    def remove_flow_cookie_account(self, account_id: str, expected_revision: int, *, confirm_remove: bool = False):
+        if confirm_remove is not True:
+            raise OperatorServiceError('FLOW_COOKIE_REMOVE_CONFIRMATION_REQUIRED')
+        from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
+        result = FlowCookieAccountStore().remove_account(account_id, expected_revision=expected_revision)
+        return {**self.flow_cookie_connection_status(), **result}
+
+    def test_flow_cookie_account(self, account_id: str, project_url: str) -> dict[str, Any]:
+        from urllib.parse import urlsplit
+        from uuid import UUID
+        from datetime import datetime, timezone
+        from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
+        from story_auto.providers.flow.cookie_session import NamedCookieSessionFactory
+        try:
+            parsed = urlsplit(project_url)
+            project = str(UUID(parsed.path.removeprefix('/project/').rstrip('/')))
+            if (parsed.scheme!='https' or parsed.netloc!='flow.google.com' or parsed.query or parsed.fragment
+                    or parsed.path.rstrip('/')!='/project/'+project):
+                raise ValueError()
+        except Exception:
+            raise OperatorServiceError('Use the exact https://flow.google.com/project/... URL.') from None
+        store = FlowCookieAccountStore()
+        account = store.get_account(account_id)
+        factory = NamedCookieSessionFactory(account_id,account['revision'],store=store)
+        runtime = FlowRuntime(self.runtime.flow_profile,'cookie-owned://named',
+                              'https://flow.google.com/project/'+project,project)
+        try:
+            with factory(runtime) as session:
+                records = session.catalog()
+        except Exception as error:
+            from story_auto.providers.flow.rpc_transport import RpcError
+            from story_auto.providers.flow.rpc_contract import ContractError
+            code = error.code if isinstance(error,(RpcError,ContractError)) else 'FLOW_COOKIE_CHECK_FAILED'
+            return {'status':'NEEDS_ATTENTION','live_verified':False,'reason_code':code,
+                    'message':'Could not verify this session. Confirm Flow sign-in and import a fresh export.',
+                    'generations':0}
+        return {'status':'READ_VERIFIED','live_verified':True,'account_id':account_id,
+                'revision':account['revision'],'project_identity':project,'media_count':len(records),
+                'checked_at':datetime.now(timezone.utc).isoformat(),'generations':0,
+                'message':'Access verified for this project. No video was generated; production routing is unchanged.'}
+
+    def preview_dola_accounts(self, raw: Any) -> dict[str, Any]:
+        return DolaAccountStore().preview_accounts(raw)
+
+    def save_dola_accounts(self, raw: Any) -> dict[str, Any]:
+        result = DolaAccountStore().save_accounts(raw)
+        return {**self.dola_connection_status(), **result}
+
+    def remove_dola_account(self, account_id: str) -> dict[str, Any]:
+        result = DolaAccountStore().remove_account(account_id)
+        return {**self.dola_connection_status(), **result}
 
     def update_runtime_defaults(self, value: dict[str, Any]) -> dict[str, Any]:
         """Update defaults for future projects; historical projects are untouched."""

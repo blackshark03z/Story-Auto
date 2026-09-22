@@ -4,6 +4,37 @@ Status: **CURRENT DURABLE ARCHITECTURE**. This document describes the architectu
 
 ## Core principle
 
+Experimental Flow VIDEO transport now exists in `providers/flow/rpc_transport.py`:
+default-OFF, exact-project environment gate, existing authenticated Chrome session,
+batchexecute contract with mandatory baseline and structural lineage checks,
+durable per-attempt write journal, no automatic generation retry and read-only
+reconciliation after uncertain submit. Supported scope is one PNG reference,
+8-second 16:9 `abra_r2v_8s` output. Existing IMAGE routing and Dola are unchanged.
+This is an installed candidate, not default production or owner-accepted stable.
+See `docs/FLOW_RPC_INTEGRATION_STATUS.md` for exact evidence and outstanding gates.
+
+Cookie-owned variant now has a named Windows-DPAPI session store and an explicit
+Hybrid Opening reference-video action (`providers/flow/opening.py`). It reuses
+the RPC transport with an owned headless browser instead of an external CDP
+attachment. Per-slot account revision/project/reference/request binding and the
+sealed RPC receipt guard canonical import; unresolved effects stay recovery-only.
+This is a non-default, exact-project-gated candidate, not cookie qualification
+for IMAGE or whole-product acceptance. See
+`docs/FLOW_COOKIE_OPENING_DELIVERY_20260921.md` for evidence and remaining gates.
+
+### Dola cookie adapter (2026-09-20 candidate)
+
+Owner-directed `dola_cookie` is an experimental direct HTTP text-to-video
+adapter for Hybrid Opening. Settings manages named cookie accounts in a
+separate Windows DPAPI store. An explicit per-slot action binds account and
+attempt before submit, commits the SSE conversation receipt immediately, and
+resumes polling/acquisition on that same account. Downloaded video reuses the
+canonical opening import, normalization, hash binding and composition path.
+Five- or ten-second source clips are requested and trimmed to the opening slot;
+reference images and observed upstream model identity remain unqualified.
+This is distinct from the unimplemented `dola_official` placeholder. See
+Decision 0011 for the Owner's change to the earlier official-only restriction.
+
 One modular production pipeline with mode-specific media policy and provider boundaries. Never build a separate Full Image, Full Video, or legacy-mode pipeline.
 
 ## Architecture drivers
@@ -201,6 +232,88 @@ invariants.
 - diagnostics.
 
 It does **not** decide story beats, media policy, continuity, or final editorial timing.
+
+Flow reference attachment is accepted only from a content-bound composer
+postcondition. The adapter may read media bytes through the already-authorized
+browser session from the narrow Flow/Google asset-host allowlist, but it does not
+export or persist browser cookies. A selected-looking library tile, a closed
+picker, or an Add-control exception is not success or failure by itself: the
+adapter reconciles the composer, requires exactly one attached image whose
+perceptual content matches the requested local reference, and fails closed before
+Generate on zero, wrong, or multiple attachments. It never retries Add merely
+because the activation reported an exception when the exact postcondition is
+already true.
+
+This attachment invariant is engineering-qualified for the current Flow surface.
+The 2026-09-19/20 live evidence contains a bounded three-shot Flow VIDEO smoke
+run with one exact reference and three valid eight-second MP4 downloads. A later
+single canary passively observed one unique response-model identity triple whose
+three UUIDs were present in the prompt-bound response chain, selected the exact
+mapped tile, acquired a valid MP4, then recovered the same identity and exact
+MP4 bytes after reload. The thumbnail bytes changed after reload, so thumbnail
+URLs, hashes and gallery order are explicitly non-durable identity signals.
+
+The observed response tuple is strong canary lineage evidence, not a documented
+provider job contract. The canonical Flow VIDEO adapter now uses the bounded
+passive decoder for attempt attribution while retaining its experimental
+provider-contract classification. The module decodes only the response shape
+already observed, requires
+the tuple's middle UUID to equal the bound Flow project identity, assigns no
+undocumented job/asset semantics to the outer UUIDs, and fails closed on token
+collisions or resource limits. It never constructs/replays an RPC and retains no
+raw response body, cookie or token. Two independent read-only reloads resolved
+all six rendered video tiles identically through this module. An experimental
+acquirer now accepts only one exact observed tuple, refuses missing or duplicate
+matches and existing destinations, and selects the tile structurally rather
+than by gallery order. A live reload recovery resolved 6/6 tiles, downloaded the
+exact canary at 720p and reproduced the previously proven MP4 SHA-256 byte for
+byte with zero Generate activations and zero RPC replays. The exact dedicated
+Chrome process was then closed and reopened through Story Auto. Five identities
+visible immediately before restart were a subset of the six visible after
+restart; the canary remained unique and another 720p download reproduced the
+same MP4 SHA-256 byte for byte, again without Generate or RPC replay.
+
+Canonical attempt support persists the exact tuple only on an existing VIDEO
+attempt whose project binding, request fingerprint, provider-boundary entry,
+trusted activation epoch and attributable output all verify. The binding is hash-sealed,
+idempotent for the same tuple and immutable against a conflicting tuple. The
+canonical recovery entry point re-reads this binding from the generation
+manifest before any provider observation, then re-reads it again immediately
+before acquisition; operators do not supply tuple values to that path. This
+ledger/acquirer composition is now also live-qualified by one isolated canonical
+reference-to-video request. One trusted Generate produced a late result after the
+480-second foreground wait, so the attempt first stopped `AMBIGUOUS`. Recovery
+used the sealed pre-click response-set fingerprint, proved one unique bounded
+delta, required exactly one member of that delta to map to a rendered video tile,
+persisted its exact tuple before acquisition, and completed the same attempt with
+zero further Generate activations. The selected 1280x720 H.264/AAC, 8.000-second
+MP4 is SHA-bound in the manifest; reload recovery reproduced the same bytes.
+
+Automatic binding on an in-time response and fail-closed late-output recovery are
+therefore engineering-qualified for this isolated case. For VIDEO, the adapter
+also persists a weaker recovery checkpoint immediately after one trusted Generate
+activation and the provider/composer acceptance transition: it contains the
+sealed pre-click response-identity set but does not confirm dispatch, own an
+output, or authorize a retry. A restarted client may use it only to reconcile the
+same attempt through an exact unique response delta. This path is live-qualified:
+an isolated reference-video canary persisted a 16-identity checkpoint, the client
+was interrupted during provider generation, and a later fresh client recovered
+the unique 17th identity with one provider submission and no second Generate or
+RPC replay. A subsequent binding-only reload reproduced the 8-second MP4 byte for
+byte. Unattended multi-request operation and broader schema stability remain
+unverified. This evidence does not change Full Video production routing:
+Flow VIDEO remains a research/acceptance surface while the API-first BytePlus path
+remains the production baseline.
+
+If a VIDEO attempt has already persisted its exact response binding but crashes
+before acquisition, reconciliation first verifies that saved binding and downloads
+only the same tuple into the same canonical attempt; it never infers a new delta
+or activates Generate. This closes the post-binding/pre-download local crash
+window. A separate risk remains: passive same-project response deltas do not by
+themselves exclude a concurrent manual Flow writer, and an empty prompt-editor
+projection is weaker than an exact before/after prompt transition. Production
+routing remains fenced pending a verified exclusive project epoch or equivalent
+request-bound provider evidence.
 
 Flow Generate activation and provider dispatch acknowledgement are separate
 contracts. The adapter resolves the unique enabled Generate control immediately
