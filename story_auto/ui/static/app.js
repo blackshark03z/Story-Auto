@@ -986,7 +986,7 @@ async function showSettings() {
   const dolaRows = dolaAccounts.length
     ? dolaAccounts.map(account => `<div class="provider-row"><div><strong>${esc(account.account_id)}</strong><small>Cookie saved on this Windows user account.</small></div><button class="button-quiet" type="button" data-remove-dola-account="${esc(account.account_id)}">Remove</button></div>`).join('')
     : '<p class="hint">No Dola accounts are saved.</p>';
-  const dolaDetails = `<section class="settings-section"><p class="eyebrow">EXPERIMENTAL VIDEO PROVIDER</p><h2>Dola accounts</h2><p>Paste a fresh browser cookie when an account needs renewal. Account names stay the same when you update their cookie.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(dola.configured ? 'Configured' : 'Not configured')}</dd></div><div class="summary-row"><dt>Saved accounts</dt><dd>${esc(dola.account_count || 0)}</dd></div><div class="summary-row"><dt>Connection check</dt><dd>Not checked</dd></div></dl><div class="provider-list" style="margin-top:14px">${dolaRows}</div><div class="field" style="margin-top:16px"><label for="dolaAccountsInput">Named Dola cookie accounts</label><textarea id="dolaAccountsInput" rows="5" autocomplete="off" spellcheck="false" placeholder="account-name[TAB]full cookie header"></textarea><small>One account per line. You can also paste JSON: [{"account_id":"name","cookie":"full cookie"}]. Cookies are encrypted for this Windows user and never shown again.</small></div><div id="dolaPreview" class="hint" aria-live="polite"></div><div class="button-row" style="margin-top:14px"><button id="previewDolaAccounts" type="button">Preview changes</button><button id="saveDolaAccounts" class="button-primary" type="button">Save accounts</button></div></section>`;
+  const dolaDetails = `<section class="settings-section"><p class="eyebrow">EXPERIMENTAL VIDEO PROVIDER</p><h2>Dola accounts</h2><p>Paste a fresh browser export when an account needs renewal. Saving the same account name refreshes only that account.</p><dl class="summary-list"><div class="summary-row"><dt>Status</dt><dd>${esc(dola.configured ? 'Configured' : 'Not configured')}</dd></div><div class="summary-row"><dt>Saved accounts</dt><dd>${esc(dola.account_count || 0)}</dd></div><div class="summary-row"><dt>Connection check</dt><dd>Not checked</dd></div></dl><div class="provider-list" style="margin-top:14px">${dolaRows}</div><div class="field" style="margin-top:16px"><label for="dolaAccountName">Account name for Cookie-Editor export</label><input id="dolaAccountName" type="text" value="dola-main" autocomplete="off" autocapitalize="off" spellcheck="false"><small>Used when you paste the raw JSON export below. Preview shows whether this name is new or will be updated.</small></div><div class="field" style="margin-top:16px"><label for="dolaAccountsInput">Dola cookies</label><textarea id="dolaAccountsInput" rows="5" autocomplete="off" spellcheck="false" placeholder="Paste Cookie-Editor JSON from www.dola.com"></textarea><small>Paste the full Cookie-Editor JSON array directly. Advanced: named headers as account-name[TAB]cookie header, one per line, or JSON [{"account_id":"name","cookie":"full cookie"}]. Cookies are encrypted for this Windows user and never shown again.</small></div><div id="dolaPreview" class="hint" aria-live="polite"></div><div class="button-row" style="margin-top:14px"><button id="previewDolaAccounts" type="button">Preview changes</button><button id="saveDolaAccounts" class="button-primary" type="button">Save accounts</button></div></section>`;
   const projectOptions = state.projects.map(project => `<option value="${esc(project.project_id)}">${esc(project.title)}</option>`).join('');
   $('#view').innerHTML = `<div class="settings-layout">
     <section class="settings-section"><p class="eyebrow">DEFAULT FOR NEW PROJECTS</p><h2>General defaults</h2><p>These durable defaults apply only when you create a new video. Existing projects keep their saved settings.</p><div class="settings-grid"><div class="field"><label for="defaultMode">Default output style</label><select id="defaultMode"><option value="full_image" selected>Full Image</option><option value="hybrid_hook" disabled>Hybrid Visual — choose per video</option><option value="full_video_ai" disabled>Full Video — choose per video</option></select><small>Full Image is the only global default. Hybrid Visual and Full Video remain available when creating an individual video.</small></div><div class="field"><label for="defaultVoice">Default narrator</label><select id="defaultVoice" ${installedVoices().length ? '' : 'disabled'}>${voiceOptions(selectedDefaultVoice)}</select>${narratorMessage ? `<small class="field-error">${esc(narratorMessage)}</small>` : ''}</div><div class="field"><label for="defaultQuality">Default Quality Review</label><select id="defaultQuality"><option value="AUTO_ACCEPT" ${state.settings.creation_defaults.qc_policy === 'AUTO_ACCEPT' ? 'selected' : ''}>Automatic</option><option value="MANUAL_REVIEW" ${state.settings.creation_defaults.qc_policy === 'MANUAL_REVIEW' ? 'selected' : ''}>Manual</option></select></div><label class="choice"><input id="defaultWaveform" type="checkbox" ${state.settings.creation_defaults.full_image?.audio_visualizer !== false ? 'checked' : ''}><strong>Waveform</strong><small>Show by default for Full Image projects.</small></label></div><div class="button-row" style="margin-top:18px"><button class="button-primary" id="saveDefaults" type="button" ${installedVoices().length ? '' : 'disabled'}>Save defaults</button></div></section>
@@ -1158,25 +1158,43 @@ async function showSettings() {
     toast('Saved session removed locally. Google sign-in is unchanged.');
     await showSettings();
   }));
+  function dolaAccountDraft() {
+    const text = $('#dolaAccountsInput').value.trim();
+    if (text.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(text);
+        if (Array.isArray(parsed) && parsed.some(item => item && typeof item === 'object' && Object.hasOwn(item, 'domain'))) {
+          return {account_id: $('#dolaAccountName').value.trim(), cookie_export: parsed};
+        }
+      } catch (_) { /* The server returns a sanitized format error. */ }
+    }
+    return text;
+  }
   async function previewDolaAccounts() {
-    const accounts = $('#dolaAccountsInput').value;
-    if (!accounts.trim()) { toast('Paste at least one named Dola cookie account.', true); $('#dolaAccountsInput').focus(); return null; }
+    const accounts = dolaAccountDraft();
+    if (!$('#dolaAccountsInput').value.trim()) { toast('Paste a Dola Cookie-Editor export or named cookie account.', true); $('#dolaAccountsInput').focus(); return null; }
     const result = await api('/api/settings/dola/preview',{method:'POST',body:JSON.stringify({accounts})});
     const target = $('#dolaPreview');
     if (target) target.textContent = `${result.incoming_count} account(s): ${result.new_count} new, ${result.updated_count} updated. Names: ${(result.account_ids || []).join(', ')}.`;
     return result;
   }
+  function showDolaInputError(error) {
+    const message = error?.payload?.failure_class === 'DOLA_ACCOUNT_INPUT_INVALID'
+      ? error.payload.error : friendlyError(error).message;
+    const target = $('#dolaPreview'); if (target) target.textContent = message;
+    toast(message, true);
+  }
   $('#previewDolaAccounts')?.addEventListener('click', async () => {
-    try { await previewDolaAccounts(); } catch (error) { toast(friendlyError(error).message, true); }
+    try { await previewDolaAccounts(); } catch (error) { showDolaInputError(error); }
   });
   $('#saveDolaAccounts')?.addEventListener('click', async () => {
     try {
       const preview = await previewDolaAccounts(); if (!preview) return;
       if (!window.confirm(`Save ${preview.new_count} new and update ${preview.updated_count} Dola account(s)? Names: ${(preview.account_ids || []).join(', ')}`)) return;
-      const result = await api('/api/settings/dola/save',{method:'POST',body:JSON.stringify({accounts:$('#dolaAccountsInput').value})});
+      const result = await api('/api/settings/dola/save',{method:'POST',body:JSON.stringify({accounts:dolaAccountDraft()})});
       $('#dolaAccountsInput').value=''; const target=$('#dolaPreview'); if (target) target.textContent='';
       toast(`${result.new_count || 0} new and ${result.updated_count || 0} updated Dola account(s) saved.`); await showSettings();
-    } catch (error) { toast(friendlyError(error).message, true); }
+    } catch (error) { showDolaInputError(error); }
   });
   document.querySelectorAll('[data-remove-dola-account]').forEach(button => button.addEventListener('click', async () => {
     const accountId=button.dataset.removeDolaAccount;

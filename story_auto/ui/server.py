@@ -238,6 +238,9 @@ class OperatorHandler(BaseHTTPRequestHandler):
             else: raise ValueError("unknown action")
             self._json(result)
         except Exception as error:
+            from story_auto.providers.dola_cookie.accounts import DolaAccountError
+            if isinstance(error, DolaAccountError):
+                return self._json({"error":str(error),"failure_class":"DOLA_ACCOUNT_INPUT_INVALID"},HTTPStatus.BAD_REQUEST)
             payload={"error":str(error)[-500:],"failure_class":getattr(error,"failure_class",type(error).__name__)}
             if hasattr(error,"readiness"): payload["readiness"]=error.readiness
             self._json(payload,HTTPStatus.BAD_REQUEST)

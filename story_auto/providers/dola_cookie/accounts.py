@@ -21,11 +21,55 @@ from story_auto.providers.credentials import _OWN_ENTROPY, _protect, _unprotect
 _SCHEMA = "story-auto-dola-cookie-accounts"
 _ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 _SESSION = re.compile(r"(?:^|;)\s*sessionid=([^;\s]+)", re.IGNORECASE)
+_COOKIE_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _LOCK_GUARD = threading.RLock()
 
 
 class DolaAccountError(ValueError):
     """A safe, non-secret configuration error."""
+
+
+def _header_from_cookie_editor(rows: Any) -> str:
+    """Convert one www.dola.com Cookie-Editor export without persisting raw JSON."""
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
+        raise DolaAccountError("Paste a Cookie-Editor JSON array from www.dola.com.")
+    values: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise DolaAccountError("Cookie-Editor export contains an invalid cookie entry.")
+        domain = row.get("domain")
+        path = row.get("path", "/")
+        host_only = row.get("hostOnly", False)
+        if not isinstance(domain, str) or not isinstance(path, str) or not isinstance(host_only, bool):
+            raise DolaAccountError("Cookie-Editor export contains an invalid cookie entry.")
+        domain = domain.lower().lstrip(".")
+        applies_to_www = (domain == "www.dola.com" or
+                          (domain == "dola.com" and not host_only))
+        # A single header must work for both /chat and /im requests.
+        if not applies_to_www or path != "/":
+            continue
+        expiry = row.get("expirationDate", row.get("expires"))
+        if expiry is not None:
+            if isinstance(expiry, bool) or not isinstance(expiry, (int, float)):
+                raise DolaAccountError("Cookie-Editor export has an invalid expiry.")
+            import math
+            if not math.isfinite(expiry):
+                raise DolaAccountError("Cookie-Editor export has an invalid expiry.")
+            if expiry > 0 and expiry <= time.time():
+                continue
+        name, value = row.get("name"), row.get("value")
+        if (not isinstance(name, str) or not _COOKIE_NAME.fullmatch(name)
+                or not isinstance(value, str) or any(ord(char) < 32 or ord(char) == 127 or char == ";" for char in value)):
+            raise DolaAccountError("Cookie-Editor export contains an invalid cookie entry.")
+        if name in values and values[name] != value:
+            raise DolaAccountError("Cookie-Editor export has conflicting cookie names for www.dola.com.")
+        values[name] = value
+    header = "; ".join(f"{name}={value}" for name, value in values.items())
+    if not _SESSION.search(header):
+        raise DolaAccountError("Export a signed-in www.dola.com session containing an unexpired sessionid cookie.")
+    if len(header.encode("utf-8")) > 65536:
+        raise DolaAccountError("Cookie-Editor export is too large for one Dola account.")
+    return header
 
 
 def _default_path() -> Path:
@@ -74,8 +118,13 @@ class DolaAccountStore:
 
     @staticmethod
     def _parse(raw: Any) -> list[dict[str, str]]:
+        if isinstance(raw, dict) and "cookie_export" in raw:
+            raw = [{"account_id": raw.get("account_id", ""),
+                    "cookie": _header_from_cookie_editor(raw["cookie_export"])}]
         if isinstance(raw, str):
             text = raw.strip()
+            if len(text.encode("utf-8")) > 1024 * 1024:
+                raise DolaAccountError("Dola account input is too large.")
             if text.startswith("["):
                 try:
                     raw = json.loads(text)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -55,6 +56,44 @@ class DolaAccountStoreTest(unittest.TestCase):
             store.save_accounts("main\tx=1")
         with self.assertRaisesRegex(DolaAccountError, "one line"):
             store.save_accounts([["main", "sessionid=one\ntwo"]])
+
+    def test_cookie_editor_export_preview_and_save_as_named_account(self):
+        store = DolaAccountStore(self.path)
+        draft = {"account_id": "dola-main", "cookie_export": [
+            {"domain": ".dola.com", "hostOnly": False, "path": "/", "name": "sessionid",
+             "value": "fixture-session", "expirationDate": time.time() + 3600},
+            {"domain": ".dola.com", "hostOnly": False, "path": "/", "name": "msToken",
+             "value": "fixture-token"},
+            {"domain": ".google.com", "hostOnly": False, "path": "/", "name": "other",
+             "value": "must-not-save"},
+        ]}
+        self.assertEqual(store.preview_accounts(draft), {
+            "incoming_count": 1, "new_count": 1, "updated_count": 0,
+            "account_ids": ["dola-main"],
+        })
+        self.assertEqual(store.save_accounts(draft)["saved_count"], 1)
+        self.assertEqual(store.get_cookie("dola-main"), "sessionid=fixture-session; msToken=fixture-token")
+        persisted = self.path.read_text(encoding="utf-8")
+        self.assertNotIn("fixture-session", persisted)
+        self.assertNotIn("must-not-save", persisted)
+
+    def test_cookie_editor_export_fails_closed_on_missing_or_conflicting_session(self):
+        store = DolaAccountStore(self.path)
+        base = {"domain": ".dola.com", "hostOnly": False, "path": "/",
+                "name": "sessionid", "value": "fixture-session"}
+        with self.assertRaisesRegex(DolaAccountError, "unexpired sessionid"):
+            store.preview_accounts({"account_id": "dola-main", "cookie_export": [
+                {**base, "expirationDate": time.time() - 60}]})
+        with self.assertRaisesRegex(DolaAccountError, "unexpired sessionid"):
+            store.preview_accounts({"account_id": "dola-main", "cookie_export": [
+                {**base, "domain": ".google.com"}]})
+        with self.assertRaisesRegex(DolaAccountError, "conflicting cookie names"):
+            store.preview_accounts({"account_id": "dola-main", "cookie_export": [
+                base, {**base, "value": "different"}]})
+        with self.assertRaisesRegex(DolaAccountError, "invalid cookie entry"):
+            store.preview_accounts({"account_id": "dola-main", "cookie_export": [
+                {**base, "value": "fixture\r\nInjected: yes"}]})
+        self.assertFalse(self.path.exists())
 
     def test_remove_is_alias_scoped(self):
         store = DolaAccountStore(self.path)

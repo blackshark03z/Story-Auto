@@ -1,5 +1,83 @@
 # Dola cookie account settings
 
+## Cookie-Editor export repair, 2026-09-23 — pre-implementation contract
+
+UX_CONTRACT
+PRIMARY_USER=Owner who exported Dola cookies from Cookie-Editor and needs to save one named account without hand-building a Cookie header.
+PRIMARY_JOURNEY=Settings Dola -> name the account -> paste the raw JSON export -> preview account scope -> save -> see only the saved name.
+PRIMARY_SURFACE=Existing Dola accounts section in Settings.
+INFORMATION_HIERARCHY=Name, import field, Preview changes, and Save accounts remain the short primary path; legacy named-header syntax stays available.
+SCOPE_MODEL=One raw browser export updates exactly the entered alias; other aliases remain unchanged.
+PRIMARY_CONTROLS=Account name, paste field, Preview changes, Save accounts.
+ADVANCED_CONTROLS=Existing named-header and named-JSON bulk formats stay documented as alternatives.
+STATES=Empty explains accepted formats; invalid/expired/wrong-domain exports get sanitized remedies; preview names additions/updates; save clears raw input.
+BULK_DESTRUCTIVE=Preview and confirmation identify the alias that will be created or refreshed; no account is removed.
+DISCOVERABILITY=Raw Cookie-Editor JSON is explicitly named at the current Dola paste field.
+ACCESSIBILITY=Visible label for account name; existing labeled textarea and live preview status; keyboard order name -> paste -> preview -> save.
+OWNER_PREFERENCE=NONE; the screenshot establishes the intended raw-export import path.
+
+CREATE_FLOW_CONTRACT
+TASK_GOAL=Save one Dola browser export as a reusable named account.
+LINEAR_OR_NONLINEAR=Linear short form within existing Settings.
+STEPS=Enter/keep account name -> paste export -> preview account change -> save.
+STEP_DEPENDENCIES=Valid Dola-domain, unexpired export containing sessionid before preview/save.
+BACK_BEHAVIOR=Cancel save confirmation preserves input and saved accounts.
+NEXT_VALIDATION=Preview validates and reports a sanitized format/domain/session error.
+FINAL_REVIEW_STEP=Existing confirmation shows new/updated count and account name.
+PRIMARY_COMMIT_ACTION=Save accounts; encrypts only the named account's cookie header.
+CANCEL_EXIT_BEHAVIOR=Leaving Settings without saving makes no change.
+DRAFT_PERSISTENCE=Raw export stays only in the unsaved field; no localStorage or logs.
+POST_SUBMIT_DESTINATION=Existing Settings account list and configured count.
+
+## Cookie-Editor import candidate review, 2026-09-23
+
+The Owner's 576px screenshot showed a raw Cookie-Editor JSON array pasted into
+the legacy named-header field, followed by a generic error. The candidate now
+offers an explicit account-name field, accepts the raw JSON without manually
+joining values, previews create/update scope, and preserves the legacy named
+formats. A Dola-domain, unexpired `sessionid` is required; other-domain
+cookies are excluded and raw values do not appear in preview, storage JSON,
+or sanitized errors. Rendered source candidate on port 8777 was inspected at
+1440px, 760px, and 576px; no horizontal overflow at owner width. Synthetic
+valid preview showed one new `dola-main` account; synthetic invalid preview
+showed the specific sign-in/session remedy. Neither preview saved an account.
+Evidence: `D:\Story Auto\evidence\dola-live-qualification-20260923\dola-cookie-editor-preview-{desktop,narrow,owner-width}.png`.
+
+UX_IMPLEMENTATION_REVIEW
+PRIMARY_SURFACE_DISCOVERABILITY=PASS: existing Settings Dola section names Cookie-Editor export at the input.
+SCOPE_CLARITY=PASS: alias field and preview identify one new or updated account.
+APPLY_REAPPLY_RESET_EXPLICITNESS=PASS: same alias refreshes only that account; confirmation names it.
+ADVANCED_WITHOUT_DOMINATING=PASS: legacy named format remains supporting text below the primary import field.
+DISABLED_STATE_EXPLANATION=NOT_APPLICABLE: no disabled control was added.
+BULK_DESTRUCTIVE_SAFETY=PASS: import does not remove accounts; preview precedes save.
+VISIBLE_HIERARCHY=PASS: name, paste, preview, save appear in that order at 576px.
+CONTROL_DENSITY=PASS: one added field in the existing section; no extra workspace.
+COHERENT_APPLICATION_COMPOSITION=PASS: Settings remains the credential owner.
+DESTRUCTIVE_DIFFERENTIATION=NOT_APPLICABLE: no destructive action added.
+EXISTING_WORKFLOW_PRESERVATION=PASS: existing named-header/JSON paths remain tested.
+INFORMATION_ARCHITECTURE=PASS: account configuration remains separate from generation.
+NAVIGATION=PASS: unchanged Settings entry.
+WORKSPACE_LAYOUT=PASS: form reflows at 576px without horizontal overflow.
+VIEWPORT_BUDGET=PASS: import controls are legible in the owner's narrow pane.
+PERSISTENT_CONTEXTUAL_CONTROLS=PASS: existing Settings-only placement.
+LAYOUT_ARCHETYPE_FIT=PASS: short stacked configuration form.
+RESPONSIVE_WORKSPACE_BEHAVIOR=PASS: rendered 1440px/760px/576px inspections.
+VERTICAL_SPRAWL_REDUCED=NOT_APPLICABLE: no sprawl goal.
+WORKSPACE_LAYOUT_SOLUTION=NOT_APPLICABLE: no layout redesign.
+TASK_FLOW_ARCHITECTURE=PASS: name -> paste -> preview -> save.
+LINEAR_MULTISTEP_REASONING=PASS: short form does not need a stepper.
+REVIEW_BEFORE_COMMIT=PASS: alias/new/update confirmation before encryption.
+EXECUTION_STATE_SEPARATION=NOT_APPLICABLE: this saves configuration, not generation.
+RESOURCE_MANAGEMENT_SEPARATION=PASS: saved aliases list remains in Settings.
+POST_COMPLETION_DESTINATION=PASS: saved account list and count refresh in Settings.
+
+technical_validation=25 focused Dola tests and JS syntax PASS; full suite pending.
+candidate_preview=PASS at desktop, narrow and owner-width using synthetic data.
+Five levels: function=PASS; discoverable=PASS; understandable=PASS;
+hierarchy=PASS; Owner UX accepted=UNVERIFIED.
+owner_ux_gate=NOT_REQUIRED for this import-format repair; whole-product
+acceptance remains PENDING until real account save and live qualification.
+
 UX_CONTRACT
 PRIMARY_USER=Owner who occasionally refreshes a Dola browser session before creating video.
 PRIMARY_JOURNEY=Settings -> paste named cookie accounts -> preview additions and updates -> save -> see configured account names.
