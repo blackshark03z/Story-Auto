@@ -1398,7 +1398,7 @@ class OperatorService:
         accounts = DolaAccountStore().list_accounts()
         return {"status":"CONFIGURED" if accounts else "NOT_CONFIGURED",
                 "configured":bool(accounts), "live_verified":False, "accounts":accounts,
-                "account_count":len(accounts),
+                "account_count":len(accounts), "cookie_editor_import_supported":True,
                 "reason_code":None if accounts else "DOLA_COOKIE_MISSING"}
 
     def flow_cookie_connection_status(self) -> dict[str, Any]:

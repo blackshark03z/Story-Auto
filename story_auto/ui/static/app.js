@@ -1004,6 +1004,13 @@ async function showSettings() {
       <details class="disclosure"><summary>Diagnostics</summary><div class="field"><label for="diagnosticProject">Project</label><select id="diagnosticProject">${projectOptions || '<option value="">No projects available</option>'}</select><small>Diagnostics may include internal IDs, exact paths, manifests, provider attempts, and raw status codes.</small></div><button id="openDiagnostics" type="button" style="margin-top:14px" ${projectOptions ? '' : 'disabled'}>Open diagnostics</button></details>
     </section>
   </div>`;
+  if (dola.cookie_editor_import_supported !== true) {
+    for (const selector of ['#dolaAccountName', '#dolaAccountsInput', '#previewDolaAccounts', '#saveDolaAccounts']) {
+      const control = $(selector); if (control) control.disabled = true;
+    }
+    const target = $('#dolaPreview');
+    if (target) target.textContent = 'This Story Auto window is running an older server. Open the updated window before importing Dola cookies. Nothing has been saved here.';
+  }
   $('#saveDefaults').addEventListener('click', async () => { const voiceId=$('#defaultVoice').value; if (!hasInstalledVoice(voiceId)) { toast('Choose an installed narrator before saving defaults.',true); return; } try { state.settings=await api('/api/settings/defaults',{method:'POST',body:JSON.stringify({defaults:{render_mode:$('#defaultMode').value,ambient_style:$('#defaultAmbientStyle').value,narrator:{voice_id:voiceId},project_settings:{qc_policy:$('#defaultQuality').value,full_image:{audio_visualizer:$('#defaultWaveform').checked}}}})}); state.creationDefaults=null; toast('Defaults saved for new projects.'); await showSettings(); } catch (error) { toast(friendlyError(error).message,true); } });
   $('#saveByteplusKey')?.addEventListener('click', async () => {
     const keys=$('#byteplusApiKey').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
