@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 - 2026-09-23
+
+- Make the Windows launcher recognize an already running instance of the same
+  installation and report a clear port conflict with another server.
+- Keep the accepted v1.1.0 production scope and final media unchanged.
+
 ## 1.1.0 - 2026-09-23
 
 - Release the Owner-accepted local Flow final journey and the separate opt-in

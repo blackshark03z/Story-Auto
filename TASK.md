@@ -1,5 +1,17 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 v1.1.1 operations patch
+
+The Owner chose to stabilize release operation after v1.1.0. The v1.1.0 GitHub
+release/tag and package remain immutable. Post-release inspection found that a
+server owned by the prior tool session had ended; its runtime and accepted final
+were intact. An independent process restored the local UI on port 8765 with no
+provider call. The v1.1.1 patch makes the Windows launcher recognize its own
+running instance and fail clearly when another server owns the port. It keeps
+the previously accepted product scope and media unchanged. Release-specific
+startup/restart, package, and runtime-migration evidence is recorded under
+`D:\Story Auto\releases\story-auto-v1.1.1`.
+
 ## 2026-09-23 scoped product acceptance and final viewer recovery
 
 The Owner accepted the isolated candidate scope with “Được, nghiệm thu”, then

@@ -1,19 +1,23 @@
 # Story Auto
 
-Current local operator release: **Story Auto v1.1.0**. See
-[`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) for the accepted scope,
+Current local operator release: **Story Auto v1.1.1**. See
+[`docs/releases/v1.1.1.md`](docs/releases/v1.1.1.md) for the accepted scope,
 Windows startup, evidence, and limits. The earlier
 [`v1.0.0 Stable`](docs/releases/v1.0.0.md) baseline remains available.
 
 Current delivery scope and acceptance boundaries are recorded at the top of
 [`TASK.md`](TASK.md). Historical Goal checkpoints and trials remain evidence,
-not instructions to resume provider requests. The v1.1.0 release is scoped to
+not instructions to resume provider requests. The v1.1.0 acceptance scope carried into v1.1.1 is
 the accepted Flow final journey and the separate opt-in Dola O1 creation path.
 
 On Windows, install Python 3.11 and `pip install -r requirements.txt`, then
 double-click `Start Story Auto.cmd` from the extracted release folder. Open
-`http://127.0.0.1:8765/` in a browser. The launcher keeps user data under its
-adjacent `runtime` folder. The public source package contains no projects,
+`http://127.0.0.1:8765/` in a browser. The launcher recognizes the same
+installation already running and reports a conflict if another server owns
+port 8765. Keep the server window open while using Story Auto. User data is
+kept under the installation's adjacent `runtime` folder. When upgrading from
+v1.1.0, stop its server and copy its `runtime` folder into the new installation
+before starting v1.1.1. The public source package contains no projects,
 videos, browser profiles, or saved provider sessions.
 For opt-in Dola browser generation, also install
 `requirements-dola-browser.txt` and use the session setup in
@@ -24,7 +28,7 @@ Story Auto is a local, artifact-first production tool that turns a valid `conten
 ## Production modes on current main
 
 The `v1.0.0` tag remains the historical stable baseline. The statuses below
-describe capability boundaries; consult the v1.1.0 release notes for the
+describe capability boundaries; consult the v1.1.1 release notes for the
 accepted release scope.
 
 - **Full Image (`full_image`)** — stable/default path: images only, deterministic local motion, and optional waveform presentation.

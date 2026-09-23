@@ -207,10 +207,15 @@ failed replace preserves the prior selected output and removes partial candidate
 
 V1 is a local operator tool. There is no cloud deployment or YouTube publication pipeline. A release is an accepted Git baseline plus a locally runnable package/environment and verified representative runtime evidence.
 
-For v1.1.0 on Windows, extract the source package, install `requirements.txt`
+For v1.1.1 on Windows, extract the source package, install `requirements.txt`
 with Python 3.11, and run `Start Story Auto.cmd`. The launcher binds
 only `127.0.0.1:8765` and keeps writable data under its adjacent `runtime`
-folder. Open that URL in the browser and leave the command window running.
+folder. It recognizes an instance already running from that exact installation;
+if another server owns port 8765, it stops with a conflict message. Open that
+URL in the browser and leave the command window running. To upgrade from
+v1.1.0, stop its server, copy the local `runtime` folder into the new
+installation, and then start v1.1.1. Never copy that runtime into the public
+release ZIP.
 The public package excludes runtime data, generated media, browser profiles,
 and session credentials. The local release qualification uses a separate copy
 of the accepted Flow project and checks that the same final survives a server

@@ -13,11 +13,14 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Story Auto: http://127.0.0.1:8765/
-echo Keep this window open while using Story Auto. Press Ctrl+C to stop it.
-python -m story_auto --runtime-root "%~dp0runtime" ui --host 127.0.0.1 --port 8765
-if errorlevel 1 (
-  echo Story Auto did not start. Check that Python dependencies are installed and port 8765 is free.
+python tools\launch_story_auto.py
+set "story_auto_exit=%errorlevel%"
+if "%story_auto_exit%"=="2" (
+  pause
+  exit /b 0
+)
+if not "%story_auto_exit%"=="0" (
+  echo Story Auto did not start. Check Python dependencies and the port message above.
   pause
   exit /b 1
 )
