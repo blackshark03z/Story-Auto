@@ -91,6 +91,37 @@ UI authentication** is now qualified for this new alias. This still does not
 prove private video API acceptance, a charge-free submit, or correct result
 identity; it does not authorize replay of either ambiguous Dola attempt.
 
+Authenticated read-only API qualification then distinguished 10 recent
+conversations from the saved alias versus one unauthenticated control cell,
+without recording IDs or content. A pre-existing video conversation showed a
+video creation block and a `bot_reply_message_id` pointing to its text input.
+The candidate adapter's old read request returned HTTP 200 but **zero**
+messages for that same conversation. A/B requests isolated the cause to
+`Content-Type: application/json; charset=utf-8`; Dola's current read path
+returns the messages with `application/json; encoding=utf-8`. The adapter now
+uses the observed nested `uplink_body` read envelope and accepts the observed
+reply linkage, while still requiring the exact input ID. With the corrected
+header it read that existing video as `COMPLETED` with one URL and verified
+linkage (`conversation-shape-14.json`). This is poll/read qualification only:
+it says nothing about a new generation submit.
+
+Independent review caught a shared-header regression: the qualified
+`encoding=utf-8` form had also changed the unqualified generation request.
+The candidate now uses it only for reads and preserves the prior submit
+header. The review also led to top-level-only input matching, fail-closed
+handling of mixed valid/unsafe media URLs, and an exact-host/default-port
+media-probe boundary. Offline regressions cover these paths. A post-fix
+read-only replay (`conversation-shape-15.json`) still identified the same
+existing video. None of these checks prove a new submit is accepted.
+
+The existing Dola video URL used `http://v16-dola.dola.com`, outside the old
+HTTPS allowlist. A cookie-free HTTPS HEAD to the *same signed path* returned
+HTTP 200 video; a bounded GET returned HTTP 206 with `Content-Range` and an
+MP4 `ftyp` header (`conversation-shape-13.json`). The adapter therefore
+upgrades only this exact Dola host to HTTPS and allows it in the cookie-free
+download boundary. It does not permit arbitrary HTTP URLs or lookalike hosts.
+Full video download/validation remains untested for this existing artifact.
+
 The next candidate is a separate feature-gated UI transport. It
 must retain Story Auto's durable one-attempt journal, account lock, exact
 conversation/output identity, no automatic POST retry or account rotation,

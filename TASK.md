@@ -25,6 +25,36 @@ not private video API acceptance, result identity or whole-product acceptance.
 Next: feature-gated UI transport with offline exact-once/identity tests;
 fresh bounded authorization is required before another live generation.
 
+Authenticated read-only API qualification with the fresh alias found 10 recent
+conversations against one blank-control cell. One pre-existing video had an
+input-to-video `bot_reply_message_id` link. The candidate poll adapter's old
+`Content-Type: charset=utf-8` returned HTTP 200/0 messages; `encoding=utf-8`
+returned three. The current nested read envelope, reply link and exact-host
+HTTPS media upgrade now let the adapter classify that existing video as
+`COMPLETED` with one linked URL. A cookie-free HTTPS HEAD was 200 video and a
+bounded 1024-byte GET was 206 with `ftyp`. Evidence:
+`D:\Story Auto\evidence\dola-profile-read-20260923\conversation-shape-14.json`.
+No new generation, full video download, or production promotion occurred.
+
+Independent review closed pre-submit safety gaps: the qualified read header
+no longer changes the unqualified submit wire; result matching uses only
+top-level chain messages; invalid video URLs fail closed even alongside a
+valid one; and the media probe enforces exact host/default port. Offline
+regressions cover these boundaries. A post-fix read-only replay still found
+the same existing video with exact input linkage (`conversation-shape-15.json`).
+This is not authorization for another generation.
+
+The Owner subsequently authorized **one** new Dola generation request using
+the freshly qualified cookie session, with no automatic retry if ambiguous.
+The previous `9a849c09...` attempt was re-read: still AMBIGUOUS, HTTP 200,
+one submit attempt, no provider receipt or asset. It remains untouched.
+The new request must use only the isolated
+`D:\Story Auto\evidence\dola-profile-canary-20260923` project and
+`dola-profile-20260923` alias. `tools/dola_cookie_profile_canary.py` has
+local preparation, an explicitly acknowledged single-use dispatch, and
+receipt-only recovery. Do not turn on the main UI's Dola generation gate from
+pre-submit checks or from an ambiguous response.
+
 ## 2026-09-23 Dola generation safety gate UX contract
 
 UX_CONTRACT

@@ -11,7 +11,7 @@ import re
 import time
 from typing import Any, Callable, Iterable, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode, urlparse, urlunparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import uuid4
 
@@ -22,6 +22,7 @@ ORIGIN = "https://www.dola.com"
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 _DOWNLOAD_HOST_SUFFIXES = (".byteimg.com", ".volces.com", ".ibytedtos.com", ".bytecdn.cn")
+_DOLA_MEDIA_HOST = "v16-dola.dola.com"
 _CREDIT_FAILURE = re.compile(
     r"unable to (generate|create)|failed to (generate|create)|insufficient|"
     r"余额不足|餘額不足|额度不足|額度不足|额度耗尽|額度耗盡|"
@@ -94,7 +95,29 @@ def _cookie_value(cookie: str, name: str) -> str:
 def _safe_host(url: str) -> bool:
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    return parsed.scheme == "https" and any(host.endswith(suffix) for suffix in _DOWNLOAD_HOST_SUFFIXES)
+    try:
+        port_allowed = parsed.port in {None, 443}
+    except ValueError:
+        return False
+    return (parsed.scheme == "https" and port_allowed and not parsed.username
+            and not parsed.password and not parsed.fragment
+            and (host == _DOLA_MEDIA_HOST
+                 or any(host.endswith(suffix) for suffix in _DOWNLOAD_HOST_SUFFIXES)))
+
+
+def _canonical_media_url(url: str) -> str:
+    """Upgrade only the Dola host proven to serve this signed path over TLS."""
+    parsed = urlparse(url)
+    if parsed.scheme == "http" and parsed.hostname == _DOLA_MEDIA_HOST:
+        try:
+            if parsed.port is not None:
+                return ""
+        except ValueError:
+            return ""
+        if parsed.username or parsed.password or parsed.fragment:
+            return ""
+        return urlunparse(parsed._replace(scheme="https", netloc=_DOLA_MEDIA_HOST))
+    return url if parsed.scheme == "https" else ""
 
 
 def _bounded_read(response: _Response, limit: int = _MAX_RESPONSE_BYTES) -> bytes:
@@ -151,8 +174,11 @@ def _video_urls(payload: dict[str, Any]) -> list[str]:
                 if not isinstance(creation, dict) or creation.get("type") != 2:
                     continue
                 candidate = ((creation.get("video") or {}).get("download_url"))
-                if isinstance(candidate, str) and candidate.startswith("https://"):
-                    urls.append(candidate)
+                if isinstance(candidate, str) and candidate:
+                    canonical = _canonical_media_url(candidate)
+                    if not canonical or not _safe_host(canonical):
+                        raise DolaCookieError("PROVIDER_RESULT_URL_REJECTED", "DISPATCH_CONFIRMED")
+                    urls.append(canonical)
     return list(dict.fromkeys(urls))
 
 
@@ -187,7 +213,10 @@ class DolaCookieClient:
     def _headers(self, *, conversation_id: str = "", sse: bool = False) -> dict[str, str]:
         return {
             "Accept": "text/event-stream" if sse else "application/json",
-            "Content-Type": "application/json; charset=utf-8",
+            # Dola's current read path returns an empty chain with charset;
+            # live A/B requires encoding. Keep the unqualified submit form.
+            "Content-Type": ("application/json; charset=utf-8" if sse
+                             else "application/json; encoding=utf-8"),
             "Cookie": self._cookie,
             "Origin": ORIGIN,
             "Referer": ORIGIN + ("/chat/" + conversation_id if conversation_id else "/chat/"),
@@ -302,7 +331,23 @@ class DolaCookieClient:
     def poll(self, conversation_id: str, *, client_request_id: str | None = None) -> dict[str, str]:
         if (not isinstance(conversation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", conversation_id)):
             raise DolaCookieError("PROVIDER_JOB_ID_INVALID", "DISPATCH_CONFIRMED")
-        body = json.dumps({"cmd": 3100, "conversation_id": conversation_id, "anchor_index": 0, "direction": 1, "limit": 20}).encode("utf-8")
+        # Read-only shape verified against a signed-in Dola conversation. The
+        # older top-level conversation_id form is not the current web uplink.
+        body = json.dumps({
+            "cmd": 3100,
+            "uplink_body": {"pull_singe_chain_uplink_body": {
+                "conversation_id": conversation_id,
+                "anchor_index": 9007199254740991,
+                "conversation_type": 3,
+                "direction": 1,
+                "limit": 20,
+                "ext": {},
+                "filter": {"index_list": []},
+                "evaluate_ab_params": "",
+                "evaluate_common_params": "",
+            }},
+            "sequence_id": str(uuid4()), "channel": 2, "version": "1",
+        }, separators=(",", ":")).encode("utf-8")
         request = Request(ORIGIN + "/im/chain/single?" + self._params(), data=body, method="POST", headers=self._headers(conversation_id=conversation_id))
         try:
             with self._opener(request, self._timeout) as response:
@@ -327,11 +372,15 @@ class DolaCookieClient:
                 # The private contract's echo must be observed, not assumed.
                 # A missing echo remains recoverable but cannot authorize import.
                 messages = ((payload.get("downlink_body") or {}).get("pull_singe_chain_downlink_body") or {}).get("messages", [])
-                nodes = list(_walk(messages))
-                matched_inputs = [n for n in nodes if n.get("local_message_id") == client_request_id]
+                chain_messages = [n for n in messages if isinstance(n, dict)]
+                matched_inputs = [n for n in chain_messages
+                                  if n.get("local_message_id") == client_request_id
+                                  and not _video_urls({"downlink_body": {
+                                      "pull_singe_chain_downlink_body": {"messages": [n]}}})]
                 if not matched_inputs:
                     raise DolaCookieError("DOLA_RESULT_IDENTITY_UNVERIFIED", "DISPATCH_CONFIRMED")
-                if any(n.get("conversation_id") not in {None, "", conversation_id} for n in nodes):
+                if any(n.get("conversation_id") not in {None, "", conversation_id}
+                       for n in chain_messages):
                     raise DolaCookieError("DOLA_RESULT_IDENTITY_MISMATCH", "DISPATCH_CONFIRMED")
                 input_ids = {n.get("message_id") for n in matched_inputs if isinstance(n.get("message_id"), str)}
                 linked = False
@@ -342,7 +391,9 @@ class DolaCookieClient:
                     if not _video_urls(single):
                         continue
                     linked = (message.get("local_message_id") == client_request_id
-                              or bool(input_ids.intersection({message.get("reply_to_message_id"), message.get("parent_message_id")})))
+                              or bool(input_ids.intersection({message.get("reply_to_message_id"),
+                                                              message.get("parent_message_id"),
+                                                              message.get("bot_reply_message_id")})))
                     if not linked:
                         raise DolaCookieError("DOLA_RESULT_IDENTITY_UNVERIFIED", "DISPATCH_CONFIRMED")
                 if not linked:

@@ -71,6 +71,18 @@ class DolaCookieClientTests(unittest.TestCase):
         self.assertEqual(client.submit("a river", "16:9", 5, receipts.append), "conv-1")
         self.assertEqual(receipts, ["conv-1"])
 
+    def test_read_header_change_does_not_alter_unqualified_submit_wire(self):
+        captured = []
+        stream = b'event: SSE_ACK\ndata: {"ack_client_meta":{"conversation_id":"conv-1"}}\n\n'
+        def capture(request, timeout):
+            captured.append(request)
+            return _Response(stream, content_type="text/event-stream")
+        client = DolaCookieClient(COOKIE, opener=capture)
+        self.assertEqual(client._headers()["Content-Type"], "application/json; encoding=utf-8")
+        client.submit("a river", "16:9", 5, lambda _: None)
+        self.assertEqual(captured[0].get_header("Content-type"),
+                         "application/json; charset=utf-8")
+
     def test_submit_uses_incremental_read1_and_accepts_crlf_split_ack_only(self):
         response = _Read1OnlyResponse([
             b"event: SSE_ACK\r", b'\ndata: {"ack_client_meta":{"conversation_id":"conv-2"}}\r\n\r\n',
@@ -158,9 +170,31 @@ class DolaCookieClientTests(unittest.TestCase):
             client.poll("conv-1")
         self.assertEqual(caught.exception.failure_class, "PROVIDER_RESULT_AMBIGUOUS")
 
+    def test_poll_rejects_unsafe_video_url_even_beside_valid_output(self):
+        for urls in (("http://other.invalid/video.mp4",),
+                     ("https://media.byteimg.com/one.mp4", "http://other.invalid/two.mp4")):
+            with self.subTest(urls=urls):
+                client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(_chain(*urls))))
+                with self.assertRaises(DolaCookieError) as caught:
+                    client.poll("conv-1")
+                self.assertEqual(caught.exception.failure_class, "PROVIDER_RESULT_URL_REJECTED")
+
     def test_poll_missing_output_is_pending(self):
         client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(_chain())))
         self.assertEqual(client.poll("conv-1"), {"status": "PENDING"})
+
+    def test_poll_uses_observed_nested_read_only_uplink(self):
+        bodies = []
+        def capture(request, timeout):
+            bodies.append(json.loads(request.data))
+            return _Response(_chain())
+        self.assertEqual(DolaCookieClient(COOKIE, opener=capture).poll("conv-1"),
+                         {"status": "PENDING"})
+        self.assertEqual(bodies[0]["cmd"], 3100)
+        pull = bodies[0]["uplink_body"]["pull_singe_chain_uplink_body"]
+        self.assertEqual((pull["conversation_id"], pull["conversation_type"], pull["limit"]),
+                         ("conv-1", 3, 20))
+        self.assertNotIn("conversation_id", bodies[0])
 
     def test_poll_auth_failure_retains_confirmed_dispatch(self):
         from urllib.error import HTTPError
@@ -195,6 +229,47 @@ class DolaCookieClientTests(unittest.TestCase):
         result = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode()))).poll("conv-1", client_request_id="request-1")
         self.assertEqual(result["status"], "COMPLETED")
 
+    def test_observed_bot_reply_link_qualifies_only_matching_input(self):
+        payload = json.loads(_chain("https://media.byteimg.com/one.mp4"))
+        messages = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"]
+        messages[0]["bot_reply_message_id"] = "unrelated"
+        messages.append({"local_message_id": "request-1", "message_id": "input-1",
+                         "conversation_id": "conv-1"})
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        with self.assertRaisesRegex(DolaCookieError, "IDENTITY_UNVERIFIED"):
+            client.poll("conv-1", client_request_id="request-1")
+        messages[0]["bot_reply_message_id"] = "input-1"
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="request-1")["status"],
+                         "COMPLETED")
+
+    def test_nested_fake_input_id_cannot_qualify_video_result(self):
+        payload = json.loads(_chain("https://media.byteimg.com/one.mp4"))
+        output = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"][0]
+        output["bot_reply_message_id"] = "input-1"
+        output["metadata"] = {"local_message_id": "request-1", "message_id": "input-1"}
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        with self.assertRaisesRegex(DolaCookieError, "IDENTITY_UNVERIFIED"):
+            client.poll("conv-1", client_request_id="request-1")
+
+    def test_observed_dola_http_media_url_is_upgraded_only_for_exact_tls_host(self):
+        payload = json.loads(_chain("http://v16-dola.dola.com/one.mp4?token=opaque"))
+        messages = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"]
+        messages[0]["bot_reply_message_id"] = "input-1"
+        messages.append({"local_message_id": "request-1", "message_id": "input-1",
+                         "conversation_id": "conv-1"})
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="request-1"), {
+            "status": "COMPLETED",
+            "video_url": "https://v16-dola.dola.com/one.mp4?token=opaque",
+        })
+        for unsafe in ("http://v16-dola.dola.com.evil.invalid/one.mp4",
+                       "http://user@v16-dola.dola.com/one.mp4",
+                       "http://v16-dola.dola.com:8080/one.mp4"):
+            with self.subTest(url=unsafe):
+                with self.assertRaisesRegex(DolaCookieError, "DOWNLOAD_HOST_REJECTED"):
+                    DolaCookieClient(COOKIE).download(unsafe, Path("ignored.mp4"))
+
     def test_download_rejects_untrusted_host_and_sends_no_cookie(self):
         client = DolaCookieClient(COOKIE, opener=lambda *_: self.fail("must not open untrusted URL"))
         with self.assertRaises(DolaCookieError) as caught:
@@ -208,6 +283,13 @@ class DolaCookieClientTests(unittest.TestCase):
         with TemporaryDirectory() as directory, patch("story_auto.providers.dola_cookie.client.validate_video", return_value={"width": 1}):
             metadata = DolaCookieClient(COOKIE, opener=capture).download("https://media.byteimg.com/video.mp4", Path(directory) / "out.mp4")
         self.assertEqual(metadata, {"width": 1})
+        self.assertNotIn("Cookie", requests[0].headers)
+
+        requests.clear()
+        with TemporaryDirectory() as directory, patch("story_auto.providers.dola_cookie.client.validate_video", return_value={"width": 1}):
+            DolaCookieClient(COOKIE, opener=capture).download(
+                "https://v16-dola.dola.com/video.mp4", Path(directory) / "out.mp4")
+        self.assertEqual(requests[0].full_url, "https://v16-dola.dola.com/video.mp4")
         self.assertNotIn("Cookie", requests[0].headers)
 
     def test_download_refuses_existing_destination_and_cleans_partial_candidate(self):
