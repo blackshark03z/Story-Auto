@@ -18,6 +18,10 @@ Follow-up HEAD/GET/OPTIONS requests to the completion path were read-only and
 returned 404 on www; the apex HEAD redirected to www. These do not reveal the
 original POST response. An authenticated fresh browser read showed no matching
 prompt in visible chat text, but absence there also cannot prove no dispatch.
+The signed-in account's read-only recent-conversation, conversation-batch, and
+AI-creations homepage responses were HTTP200 but contained neither the exact
+prompt nor the attempt ID. These list views are not a dispatch ledger; absence
+there is still insufficient to authorize another generation.
 The transport did not capture a sanitized HTTP status/body class for this
 failed POST. Before any new attempt, reconcile provider-side activity for this
 timestamp/account or obtain an explicit new one-attempt authorization after
