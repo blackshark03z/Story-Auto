@@ -35,12 +35,33 @@ def _safe_http_status(value: Any) -> int | None:
             and 100 <= value <= 599 else None)
 
 
+def _safe_response_kind(headers: Any) -> str:
+    """Record only a fixed media-type class, never provider text or headers."""
+    try:
+        content_type = headers.get("Content-Type", "")
+    except (AttributeError, TypeError, ValueError):
+        return "UNKNOWN"
+    if not isinstance(content_type, str):
+        return "UNKNOWN"
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type == "text/event-stream":
+        return "SSE"
+    if media_type == "application/json" or media_type.endswith("+json"):
+        return "JSON"
+    if media_type == "text/html":
+        return "HTML"
+    return "OTHER" if media_type else "UNKNOWN"
+
+
 class DolaCookieError(RuntimeError):
     def __init__(self, failure_class: str, dispatch_state: str = "NOT_DISPATCHED",
-                 *, http_status: int | None = None) -> None:
+                 *, http_status: int | None = None, response_kind: str | None = None,
+                 receipt_state: str | None = None) -> None:
         self.failure_class = failure_class
         self.dispatch_state = dispatch_state
         self.http_status = _safe_http_status(http_status)
+        self.response_kind = response_kind if response_kind in {"SSE", "JSON", "HTML", "OTHER", "UNKNOWN"} else None
+        self.receipt_state = receipt_state if receipt_state in {"EMPTY_BODY", "NO_ACK", "ACK_INVALID"} else None
         super().__init__(failure_class)
 
 
@@ -230,6 +251,8 @@ class DolaCookieClient:
                 except DolaCookieError as error:
                     if error.http_status is None:
                         error.http_status = _safe_http_status(observed_status)
+                    if error.response_kind is None:
+                        error.response_kind = _safe_response_kind(getattr(response, "headers", None))
                     raise
         except DolaCookieError:
             raise
@@ -239,6 +262,7 @@ class DolaCookieClient:
     def _receipt_from_sse(self, response: _Response, on_receipt: Callable[[str], None]) -> str:
         buffered = b""
         seen = 0
+        ack_seen = False
         read_available = getattr(response, "read1", None)
         while True:
             # read1 returns currently available bytes from buffered HTTP streams.
@@ -257,7 +281,10 @@ class DolaCookieClient:
                     if line.startswith(b"event:"):
                         event_name = line[6:].strip()
                 data = b"\n".join(line[5:].strip() for line in raw.splitlines() if line.startswith(b"data:"))
-                if event_name != b"SSE_ACK" or not data:
+                if event_name != b"SSE_ACK":
+                    continue
+                ack_seen = True
+                if not data:
                     continue
                 try:
                     event = json.loads(data.decode("utf-8"))
@@ -269,7 +296,8 @@ class DolaCookieClient:
                 if isinstance(receipt, str) and receipt and len(receipt) <= 160:
                     on_receipt(receipt)
                     return receipt
-        raise DolaCookieError("RECEIPT_MISSING", "AMBIGUOUS")
+        state = "EMPTY_BODY" if seen == 0 else "ACK_INVALID" if ack_seen else "NO_ACK"
+        raise DolaCookieError("RECEIPT_MISSING", "AMBIGUOUS", receipt_state=state)
 
     def poll(self, conversation_id: str, *, client_request_id: str | None = None) -> dict[str, str]:
         if (not isinstance(conversation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", conversation_id)):

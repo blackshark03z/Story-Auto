@@ -106,6 +106,27 @@ class DolaOpeningTests(unittest.TestCase):
         raw = self.paths.artifact_path("output/opening_manifest.json").read_text()
         self.assertNotIn("private", raw)
 
+    def test_missing_receipt_persists_only_safe_response_diagnostics(self):
+        from io import BytesIO
+        class Response:
+            status = 200
+            headers = {"Content-Type": "application/json; charset=utf-8"}
+            def __init__(self): self.body = BytesIO(b'{"error":"private-secret"}')
+            def read(self, amount=-1): return self.body.read(amount)
+            def __enter__(self): return self
+            def __exit__(self, *args): return None
+        requests = []
+        def respond(request, timeout):
+            requests.append(request.get_method())
+            return Response()
+        client = DolaCookieClient("sessionid_ss=fixture", opener=respond)
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual((first["submission_http_status"], first["submission_response_kind"],
+                          first["submission_receipt_state"]), (200, "JSON", "NO_ACK"))
+        self.run_slot(client)
+        self.assertEqual(requests, ["POST"])
+        self.assertNotIn("private-secret", self.paths.artifact_path("output/opening_manifest.json").read_text())
+
     def test_receipt_survives_client_crash_and_fresh_client_resumes(self):
         client = FakeDola(crash="after_receipt")
         first = self.run_slot(client)

@@ -115,6 +115,10 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                                       updated_at=_now())
                         if isinstance(error, DolaCookieError) and error.http_status is not None:
                             record["submission_http_status"] = error.http_status
+                        if isinstance(error, DolaCookieError) and error.response_kind is not None:
+                            record["submission_response_kind"] = error.response_kind
+                        if isinstance(error, DolaCookieError) and error.receipt_state is not None:
+                            record["submission_receipt_state"] = error.receipt_state
                         _persist(paths, current)
                 return _safe_view(runtime.root, project_id)
             with ProjectLock(runtime, project_id):

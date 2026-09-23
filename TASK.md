@@ -10,8 +10,16 @@ observed, but no parseable SSE receipt; journal records status/dispatch
 AMBIGUOUS, submit_attempts=1, provider_submissions=0, no task ID/asset. Chat
 and AI works read-only views did not show an exact match; absence is not proof
 of no external effect. A delayed read-only check over five minutes later also
-found no exact match or receipt. No retry, rotation, or replacement. Evidence:
+found no exact match or receipt. A fresh positive/negative browser control
+subsequently showed the same login-required UI with and without the saved
+seven-cookie header; the earlier HTTP-200-based auth claim is withdrawn.
+Owner reports no job or credit deduction. No retry, rotation, or replacement. Evidence:
 `D:\Story Auto\evidence\dola-cookie-approved-canary-20260923\POST_DISPATCH.md`.
+Gateway comparison: `docs/DOLA_GATEWAY_COMPARISON_20260923.md`. Its active
+path uses a logged-in persistent browser profile and UI submit, not cookie-only
+HTTP submit. Next safe gate is a dedicated profile with Owner login, then
+read-only auth/restart proof. Safe response-class diagnostics and 36 focused
+Dola tests passed offline; no new provider request was sent for this work.
 The earlier ambiguous attempt remains separate and unchanged. Dola and
 whole-product acceptance are still unproven.
 

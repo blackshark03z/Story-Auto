@@ -89,6 +89,29 @@ class DolaCookieClientTests(unittest.TestCase):
             client.submit("a river", "16:9", 5, lambda _: None)
         self.assertEqual((caught.exception.failure_class, caught.exception.dispatch_state), ("RECEIPT_MISSING", "AMBIGUOUS"))
         self.assertEqual(caught.exception.http_status, 200)
+        self.assertEqual(caught.exception.response_kind, "SSE")
+        self.assertEqual(caught.exception.receipt_state, "NO_ACK")
+
+    def test_missing_receipt_diagnostics_are_fixed_classes_not_provider_text(self):
+        cases = (
+            (b"", "text/event-stream", "SSE", "EMPTY_BODY"),
+            (b'{"error":"private-secret"}', "application/json; charset=utf-8", "JSON", "NO_ACK"),
+            (b'<html>private-secret</html>', "text/html", "HTML", "NO_ACK"),
+            (b'event: SSE_ACK\ndata: {private-secret}\n\n', "text/event-stream", "SSE", "ACK_INVALID"),
+        )
+        for body, content_type, kind, state in cases:
+            with self.subTest(kind=kind, state=state):
+                client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(body, content_type=content_type)))
+                with self.assertRaises(DolaCookieError) as caught:
+                    client.submit("a river", "16:9", 5, lambda _: None)
+                self.assertEqual((caught.exception.response_kind, caught.exception.receipt_state), (kind, state))
+                self.assertNotIn("private-secret", str(caught.exception))
+
+    def test_diagnostic_fields_reject_unbounded_values(self):
+        error = DolaCookieError("RECEIPT_MISSING", "AMBIGUOUS", response_kind="private-secret",
+                                receipt_state="private-secret")
+        self.assertIsNone(error.response_kind)
+        self.assertIsNone(error.receipt_state)
 
     def test_submit_http_error_records_status_without_claiming_no_dispatch(self):
         from urllib.error import HTTPError
