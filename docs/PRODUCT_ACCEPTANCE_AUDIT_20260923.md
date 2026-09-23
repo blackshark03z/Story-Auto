@@ -48,6 +48,8 @@ Flow ambiguous journals. The Owner needs to decide whether Dola is manual-only
 for this release or provide a vendor-authorized integration path, and separately
 approve the exact release/promotion scope. Until then keep production promotion
 on HOLD. The scoped 8778 candidate can be reviewed without altering source main.
+An unsent, secret-free vendor inquiry is prepared in
+`docs/DOLA_INTEGRATION_AUTHORIZATION_REQUEST.md`; it is not evidence of approval.
 
 Flow credential refresh is **not required** to accept or view the completed
 Flow final. It is relevant only to a future generation or a separately scoped
