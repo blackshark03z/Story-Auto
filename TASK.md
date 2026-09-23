@@ -1,6 +1,22 @@
 # Story Auto — current delivery and historical checkpoints
 
-## 2026-09-23 release target and acceptance boundary
+## 2026-09-23 scoped product acceptance and final viewer recovery
+
+The Owner accepted the isolated candidate scope with “Được, nghiệm thu”, then
+reported that the embedded final-video player showed black while audio played.
+Decoded frames at 2s, 20s, and 29s prove the final file has visible video;
+its SHA256 remains
+`de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132`.
+The Owner confirmed the video is visible after clicking **Open final video**.
+The result and completed-review pages now use that working action and omit the
+failing embedded player. The final viewer recovery and Owner acceptance records
+are in `D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923`.
+Product acceptance applies to the isolated Flow final journey and the separate
+opt-in Dola Create O1 journey. It does not establish a Dola-containing final,
+unattended Dola repeatability, or promotion into the dirty source `main`.
+No provider request was sent during final-viewer recovery.
+
+## 2026-09-23 release target and earlier acceptance boundary
 
 After reviewing the 16 differing source/candidate files, the Owner asked for
 the optimal, clean, lean option. The selected release target is the clean
@@ -11,9 +27,8 @@ UI shows the accepted Flow final as Complete/100% and the separate Dola
 project's OPENING_O1 as READY. Latest quality/security gates pass. Release
 status and reviewed boundaries are recorded in
 `D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\RELEASE_CANDIDATE_STATUS.json`.
-The scoped candidate is ready for explicit Owner product acceptance; that
-acceptance has not yet been given. No new Dola generation is part of release
-preparation.
+The scoped candidate was subsequently accepted by the Owner as recorded above.
+No new Dola generation was part of release preparation.
 
 ## 2026-09-23 exact-candidate final composition
 
@@ -27,12 +42,11 @@ The original accepted project was not changed. Evidence:
 This closes the exact-candidate composition proof for the Flow full journey;
 the separate Dola product-button O1 is not part of that video.
 
-Current remaining gates: reconcile promotion from the clean candidate branch
-into the source checkout without overwriting its 86 pre-existing dirty paths;
-obtain explicit Owner acceptance of the scoped product. If the Owner requires
-a Dola-containing final, the separate Dola project still needs O2/O3 and body
-inputs, and no further provider send is authorized. In-app browser inline Play
-still crashes, while system Chrome playback of the accepted final passed.
+The selected isolated-branch release does not merge into the source checkout
+with its 86 pre-existing dirty paths. If the Owner later requires a
+Dola-containing final, the separate Dola project still needs O2/O3 and body
+inputs, and no further provider send is authorized. The completed-result UI
+uses Open final video after the inline player failure described above.
 The current candidate UI also displayed Complete/100% and the final result
 from a local server at port 8785. Read-only promotion comparison found 86
 overlapping paths between source dirty work and candidate changes: 70 have

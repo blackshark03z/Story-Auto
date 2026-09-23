@@ -1,5 +1,21 @@
 # Cookie Flow product acceptance delivery
 
+## Accepted scope and viewer correction — 2026-09-23
+
+The Owner said “Được, nghiệm thu” for the isolated candidate: the complete
+Owner-accepted Flow final and the separate opt-in Dola button journey that
+produced one READY five-second O1 master. The Owner then reported a black
+embedded player with audible voice and confirmed that **Open final video**
+shows the picture. FFmpeg decoded visible frames at 2s, 20s and 29s from the
+unchanged final SHA256
+`de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132`.
+The completed-result and completed-review pages now use the working direct
+viewer action without the failing embedded player. See
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\FINAL_VIEWER_RECOVERY.json`
+and `PRODUCT_ACCEPTANCE_20260923.json` in the same directory. This acceptance
+does not include a Dola-containing final, repeated unattended Dola success, or
+a merge into the dirty source `main`. Recovery sent no provider request.
+
 ## Release selection — 2026-09-23
 
 The Owner delegated selection of the optimal, clean, lean route after seeing
@@ -9,11 +25,10 @@ clean `codex/product-acceptance-candidate` branch was selected. The source
 no merge, stash or overwrite occurred. The release UI exposes the accepted
 Flow final and the separate successful Dola O1. Exact evidence and limitations:
 `D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\RELEASE_CANDIDATE_STATUS.json`.
-Status is `OWNER_ACCEPTANCE_PENDING`: the Owner has selected the release
-route but has not yet explicitly accepted the scoped product. Dola O2/O3 and
-a Dola-containing final are outside this scoped release, and no further Dola
-send is authorized. In-app browser inline Play remains a known limitation;
-Chrome playback of the accepted final passed.
+The earlier `OWNER_ACCEPTANCE_PENDING` status was closed by the Owner's
+subsequent acceptance and direct-viewer confirmation recorded above. Dola
+O2/O3 and a Dola-containing final remain outside this scoped release; no
+further Dola send is authorized.
 
 ## Exact-candidate completion update — 2026-09-23
 

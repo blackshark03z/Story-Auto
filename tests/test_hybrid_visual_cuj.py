@@ -228,10 +228,15 @@ class HybridVisualCanonicalCUJTests(unittest.TestCase):
                     page.locator(f'input[data-opening-import="OPENING_O{index}"]').set_input_files(str(source))
                     page.get_by_text("READY", exact=True).nth(index - 1).wait_for(timeout=10000)
                 page.get_by_role("button", name="Continue production", exact=True).click()
-                page.get_by_role("link", name="Open final video", exact=True).wait_for(timeout=30000)
+                final_link = page.get_by_role("link", name="Open final video", exact=True)
+                final_link.wait_for(timeout=30000)
                 self.assertIn("COMPLETE", page.locator("body").inner_text().upper())
-                page.wait_for_function("document.querySelector('video.video-frame')?.readyState >= 2")
-                media = page.locator("video.video-frame").evaluate("v => ({duration:v.duration,width:v.videoWidth,height:v.videoHeight})")
+                self.assertEqual(page.locator("video.video-frame").count(), 0)
+                with page.expect_popup() as opened:
+                    final_link.click()
+                player = opened.value
+                player.wait_for_function("document.querySelector('video')?.readyState >= 2")
+                media = player.locator("video").evaluate("v => ({duration:v.duration,width:v.videoWidth,height:v.videoHeight})")
                 self.assertAlmostEqual(media["duration"], 36, delta=.12)
                 self.assertEqual((media["width"], media["height"]), (320,180))
                 destination = os.environ.get("STORY_AUTO_CUJ_EVIDENCE_DIR")
