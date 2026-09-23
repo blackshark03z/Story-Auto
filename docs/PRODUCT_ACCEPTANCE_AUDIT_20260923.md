@@ -14,8 +14,10 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 - Source `main` remains HEAD `5464cbb1d1c11a550b5e096647b9f94587de5bfe`.
   A fresh release preflight found 92 dirty/untracked entries, including six
   untracked temporary directories; 86 of 87 candidate-changed paths overlap
-  source dirt. These are current-state counts, not proof that the contents
-  match. Do not merge, reset, clean, or stage source without an exact
+  source dirt. Byte comparison found 78 identical files, 8 files differing
+  between source and candidate, and this audit file absent from source.
+  These are current-state observations, not permission to overwrite any path.
+  Do not merge, reset, clean, or stage source without an exact
   Owner-authorized promotion scope and file-by-file reconciliation.
 - The earlier UI snapshot on `127.0.0.1:8778` ran in process 19580. A fresh
   2026-09-23 check found that listener stopped; the candidate UI was restarted
