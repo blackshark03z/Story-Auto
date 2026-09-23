@@ -27,6 +27,15 @@ _VIDEO_ENTRIES = ("Create Videos", "Tạo video", "Create video", "動画生成"
 _LOCAL_ID = re.compile(r"[A-Za-z0-9_-]{1,160}")
 _CONVERSATION_URL = re.compile(r"^https://(?:www\.)?dola\.com/chat/([0-9]{3,40})(?:[/?#].*)?$")
 _DOLA_HOSTS = {"dola.com", "www.dola.com"}
+_OBSERVATION_SECONDS = 180
+_OBSERVATION_INTERVAL_MS = 5000
+_READ_ERROR_CODES = {
+    "CLIENT_REQUEST_ID_INVALID", "CREDENTIAL_OR_ACCESS_DENIED",
+    "DOLA_RESULT_IDENTITY_MISMATCH", "DOLA_RESULT_IDENTITY_UNVERIFIED",
+    "PROVIDER_JOB_ID_INVALID", "PROVIDER_RESPONSE_INVALID",
+    "PROVIDER_RESPONSE_TOO_LARGE", "PROVIDER_RESULT_AMBIGUOUS",
+    "PROVIDER_RESULT_URL_REJECTED", "PROVIDER_TRANSIENT",
+}
 
 
 def _cookies_for_browser(header: str) -> list[dict[str, str]]:
@@ -67,7 +76,11 @@ def _native_request_id(request, prompt: str, ratio: str, duration: int,
         blocks = message.get("content_block")
         texts = [((block.get("content") or {}).get("text_block") or {}).get("text")
                  for block in blocks if isinstance(block, dict) and block.get("block_type") == 10000] if isinstance(blocks, list) else []
-        if len(texts) != 1 or not isinstance(texts[0], str) or texts[0].strip() != prompt.strip():
+        # Dola wraps the filled composer text before sending the native video
+        # request. Keep the wrapper exact so a changed prompt or ratio fails
+        # closed, while the settings below independently verify the wire fields.
+        expected_text = f"Generated video: {prompt}, {ratio}"
+        if len(texts) != 1 or not isinstance(texts[0], str) or texts[0] != expected_text:
             raise ValueError("PROMPT")
         ability = body.get("chat_ability") or {}
         params = json.loads(ability.get("ability_param", "{}"))
@@ -77,6 +90,29 @@ def _native_request_id(request, prompt: str, ratio: str, duration: int,
         return identifier
     except (AttributeError, TypeError, ValueError, KeyError, json.JSONDecodeError) as error:
         raise DolaCookieError("DOLA_NATIVE_REQUEST_UNVERIFIED", "AMBIGUOUS") from error
+
+
+def _ui_conversation_ids(page) -> set[str]:
+    """Read numeric chat links; each still needs exact native-input readback."""
+    try:
+        hrefs = page.locator('a[href*="/chat/"]').evaluate_all(
+            "elements => elements.map(element => element.href)"
+        )
+    except Exception:
+        return set()
+    if not isinstance(hrefs, list):
+        return set()
+    return {match.group(1) for href in hrefs if isinstance(href, str)
+            if (match := _CONVERSATION_URL.fullmatch(href))}
+
+
+def _ui_media_count(page) -> int:
+    """Diagnostic only: an unlinked card or media URL is never a receipt."""
+    try:
+        count = page.locator("video, video source, a[download], a[href*='.mp4']").count()
+        return count if isinstance(count, int) and count >= 0 else 0
+    except Exception:
+        return 0
 
 
 @contextmanager
@@ -252,8 +288,11 @@ class PatchrightDolaRunner:
                     if _one_visible(page.get_by_text(re.compile(r"captcha|verify|xác minh|滑块", re.I))):
                         raise DolaCookieError("DOLA_NEEDS_OPERATOR", "NOT_DISPATCHED")
 
+                    baseline_conversations = _ui_conversation_ids(page)
+                    baseline_media_count = _ui_media_count(page)
                     native_ids: list[str] = []
                     problems: list[str] = []
+                    response_statuses: list[int] = []
                     def observe(request):
                         parsed = urlsplit(request.url)
                         if (request.method != "POST" or parsed.scheme != "https"
@@ -270,30 +309,112 @@ class PatchrightDolaRunner:
                             problems.append(error.failure_class)
                         except Exception:
                             problems.append("DOLA_NATIVE_REQUEST_PERSIST_FAILED")
+
+                    def observe_response(response):
+                        try:
+                            parsed = urlsplit(response.url)
+                            if (parsed.scheme == "https" and parsed.hostname in _DOLA_HOSTS
+                                    and parsed.path == "/chat/completion"
+                                    and isinstance(response.status, int)):
+                                response_statuses.append(response.status)
+                        except Exception:
+                            pass
+
                     page.on("request", observe)
-                    _send_once(page, composer)
-                    deadline = time.monotonic() + 45
+                    page.on("response", observe_response)
+                    send_error = False
+                    deadline = time.monotonic() + _OBSERVATION_SECONDS
+                    try:
+                        _send_once(page, composer)
+                    except Exception:
+                        # A timed-out click may already have sent. Keep its
+                        # browser/SSE alive while looking for exact readback.
+                        send_error = True
                     conversation_id = None
                     verified = False
+                    candidate_seen = False
+                    receipt_attempted = False
+                    receipt_persisted = False
+                    media_seen = False
+                    read_errors: list[str] = []
+
+                    def note_read_error(error):
+                        code = (error.failure_class if isinstance(error, DolaCookieError)
+                                else "DOLA_UI_READ_EXCEPTION")
+                        if code not in _READ_ERROR_CODES:
+                            code = "DOLA_UI_READ_EXCEPTION"
+                        if not read_errors:
+                            read_errors.append(code)
+                        elif len(read_errors) == 1:
+                            read_errors.append(code)
+                        else:
+                            read_errors[1] = code
+
                     while time.monotonic() < deadline:
-                        if problems:
-                            raise DolaCookieError(problems[0], "AMBIGUOUS")
-                        matched = _CONVERSATION_URL.fullmatch(page.url)
-                        if matched and len(native_ids) == 1:
-                            conversation_id = matched.group(1)
+                        try:
+                            media_seen |= _ui_media_count(page) > baseline_media_count
+                            candidate_ids = _ui_conversation_ids(page) - baseline_conversations
+                            matched = _CONVERSATION_URL.fullmatch(page.url)
+                            if matched:
+                                candidate_ids.add(matched.group(1))
+                            candidate_seen |= bool(candidate_ids)
+                        except Exception as error:
+                            raise DolaCookieError("DOLA_UI_OBSERVATION_LOST", "AMBIGUOUS") from error
+                        if len(native_ids) == 1 and not problems:
+                            for candidate_id in sorted(candidate_ids):
+                                try:
+                                    if reader.verify_input(candidate_id, native_ids[0]):
+                                        conversation_id = candidate_id
+                                        verified = True
+                                        break
+                                except Exception as error:
+                                    note_read_error(error)
+                                    if (isinstance(error, DolaCookieError)
+                                            and error.failure_class == "DOLA_RESULT_IDENTITY_MISMATCH"):
+                                        problems.append("DOLA_RESULT_IDENTITY_MISMATCH")
+                                        break
+                        if verified and not receipt_attempted:
+                            receipt_attempted = True
                             try:
-                                if reader.verify_input(conversation_id, native_ids[0]):
-                                    verified = True
-                                    break
-                            except DolaCookieError:
-                                pass
-                        page.wait_for_timeout(1500)
-                    if not conversation_id or len(native_ids) != 1:
-                        raise DolaCookieError("DOLA_UI_RECEIPT_MISSING", "AMBIGUOUS")
+                                on_receipt(conversation_id)
+                                receipt_persisted = True
+                            except Exception:
+                                problems.append("DOLA_RECEIPT_PERSIST_FAILED")
+                        if receipt_persisted:
+                            try:
+                                result = reader.poll(conversation_id, client_request_id=native_ids[0])
+                                if result.get("status") in {"COMPLETED", "FAILED"}:
+                                    return conversation_id
+                            except Exception as error:
+                                note_read_error(error)
+                        try:
+                            page.wait_for_timeout(_OBSERVATION_INTERVAL_MS)
+                        except Exception as error:
+                            raise DolaCookieError("DOLA_UI_OBSERVATION_LOST", "AMBIGUOUS") from error
+                    if receipt_persisted:
+                        return conversation_id
+                    response_status = response_statuses[-1] if response_statuses else None
+                    read_diagnostic = "|".join(read_errors) or None
+                    if problems:
+                        raise DolaCookieError(problems[0], "AMBIGUOUS", http_status=response_status,
+                                              read_diagnostic=read_diagnostic)
+                    if send_error:
+                        raise DolaCookieError("DOLA_UI_SEND_UNCERTAIN", "AMBIGUOUS",
+                                              http_status=response_status,
+                                              read_diagnostic=read_diagnostic)
+                    if not candidate_seen or len(native_ids) != 1:
+                        failure_class = ("DOLA_UI_MEDIA_UNATTRIBUTED" if media_seen
+                                         else "DOLA_UI_RECEIPT_MISSING")
+                        raise DolaCookieError(failure_class, "AMBIGUOUS",
+                                              http_status=response_status,
+                                              read_diagnostic=read_diagnostic)
                     if not verified:
-                        raise DolaCookieError("DOLA_UI_RESULT_IDENTITY_UNVERIFIED", "AMBIGUOUS")
-                    on_receipt(conversation_id)
-                    return conversation_id
+                        raise DolaCookieError("DOLA_UI_RESULT_IDENTITY_UNVERIFIED", "AMBIGUOUS",
+                                              http_status=response_status,
+                                              read_diagnostic=read_diagnostic)
+                    raise DolaCookieError("DOLA_RECEIPT_PERSIST_FAILED", "AMBIGUOUS",
+                                          http_status=response_status,
+                                          read_diagnostic=read_diagnostic)
                 finally:
                     context.close()
 

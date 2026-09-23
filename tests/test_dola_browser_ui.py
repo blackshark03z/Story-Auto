@@ -18,10 +18,13 @@ from story_auto.providers.dola_cookie.client import DolaCookieError
 COOKIE = "sessionid=fixture-session; msToken=fixture-ms; store-idc=fixture-idc"
 
 
-def _native_request(*, prompt="a river", ratio="16:9", duration=5, model="seedance_v2.0"):
+def _native_request(*, prompt="a river", ratio="16:9", duration=5, model="seedance_v2.0",
+                    text=None):
+    if text is None:
+        text = f"Generated video: {prompt}, {ratio}"
     return Mock(post_data_json={
         "messages": [{"local_message_id": "native-1", "content_block": [{
-            "block_type": 10000, "content": {"text_block": {"text": prompt}},
+            "block_type": 10000, "content": {"text_block": {"text": text}},
         }]}],
         "chat_ability": {"ability_type": 17, "ability_param": json.dumps({
             "ratio": ratio, "duration": duration, "model": model,
@@ -46,13 +49,17 @@ class DolaBrowserUITests(unittest.TestCase):
                 with self.assertRaises(DolaCookieError):
                     _cookies_for_browser(invalid)
 
-    def test_native_request_requires_exact_prompt_ratio_duration_and_model(self):
+    def test_native_request_requires_exact_ui_prompt_ratio_duration_and_model(self):
         self.assertEqual(_native_request_id(_native_request(), "a river", "16:9", 5),
                          "native-1")
         for request in (
             _native_request(prompt="another prompt"),
-            _native_request(prompt="please make a river video"),
+            _native_request(text="a river"),
+            _native_request(text="Generated video: a river, 9:16"),
+            _native_request(text="Generated video: a river, 16:9 extra"),
+            _native_request(text="Generated video: a river, 16:9, 16:9"),
             _native_request(ratio="9:16"),
+            _native_request(ratio="9:16", text="Generated video: a river, 16:9"),
             _native_request(duration=10),
             _native_request(model="unknown"),
         ):
@@ -61,11 +68,12 @@ class DolaBrowserUITests(unittest.TestCase):
                     _native_request_id(request, "a river", "16:9", 5)
 
     def test_native_id_is_durable_before_post_send_contract_rejection(self):
-        seen = []
-        with self.assertRaisesRegex(DolaCookieError, "NATIVE_REQUEST_UNVERIFIED"):
-            _native_request_id(_native_request(model="drifted"), "a river", "16:9", 5,
-                               seen.append)
-        self.assertEqual(seen, ["native-1"])
+        for request in (_native_request(model="drifted"), _native_request(text="a river")):
+            seen = []
+            with self.subTest(body=request.post_data_json):
+                with self.assertRaisesRegex(DolaCookieError, "NATIVE_REQUEST_UNVERIFIED"):
+                    _native_request_id(request, "a river", "16:9", 5, seen.append)
+                self.assertEqual(seen, ["native-1"])
 
     def test_failed_send_click_does_not_fall_back_to_enter(self):
         page = Mock()
@@ -145,6 +153,7 @@ class DolaBrowserUITests(unittest.TestCase):
     def test_runner_uses_one_click_and_persists_native_id_before_receipt(self):
         class Browser:
             def __init__(self, request):
+                self.elapsed = 0.0
                 self.page = Mock(url="https://www.dola.com/chat/12345")
                 self.context = Mock(pages=[self.page])
                 self.playwright = Mock()
@@ -158,8 +167,12 @@ class DolaBrowserUITests(unittest.TestCase):
                 locator.nth.return_value = self.send
                 self.page.locator.return_value = locator
                 self.page.get_by_text.return_value.count.return_value = 0
-                self.page.on.side_effect = lambda event, callback: setattr(self, "observe", callback)
-                self.send.click.side_effect = lambda **kwargs: self.observe(request)
+                self.page.on.side_effect = lambda event, callback: setattr(self, event, callback)
+                self.page.wait_for_timeout.side_effect = self.advance
+                self.send.click.side_effect = lambda **kwargs: self.request(request)
+
+            def advance(self, milliseconds):
+                self.elapsed += milliseconds / 1000
 
         request = _native_request()
         request.method = "POST"
@@ -167,11 +180,13 @@ class DolaBrowserUITests(unittest.TestCase):
         browser = Browser(request)
         reader = Mock()
         reader.verify_input.return_value = True
+        reader.poll.return_value = {"status": "COMPLETED"}
         native, receipts = [], []
         with TemporaryDirectory() as directory, \
                 patch("patchright.sync_api.sync_playwright", return_value=browser.manager), \
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
+                patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
                 patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
             result = PatchrightDolaRunner().run(
                 cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",
@@ -193,6 +208,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 patch("patchright.sync_api.sync_playwright", return_value=browser.manager), \
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
+                patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
                 patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
             with self.assertRaisesRegex(DolaCookieError, "NATIVE_REQUEST_UNVERIFIED"):
                 PatchrightDolaRunner().run(
@@ -202,6 +218,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 )
         self.assertEqual((native, receipts), (["native-1"], []))
         browser.send.click.assert_called_once()
+        self.assertGreaterEqual(browser.elapsed, 180)
 
         browser = Browser(request)
         native, receipts = [], []
@@ -211,6 +228,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 patch("patchright.sync_api.sync_playwright", return_value=browser.manager), \
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
+                patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
                 patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
             with self.assertRaisesRegex(DolaCookieError, "PERSIST_FAILED"):
                 PatchrightDolaRunner().run(
@@ -220,6 +238,137 @@ class DolaBrowserUITests(unittest.TestCase):
                 )
         self.assertEqual(receipts, [])
         browser.send.click.assert_called_once()
+        self.assertGreaterEqual(browser.elapsed, 180)
+
+    def test_runner_waits_for_late_receipt_and_never_accepts_unlinked_media(self):
+        class Browser:
+            def __init__(self, *, numeric_at=None, media_at=None, click_error=False):
+                self.elapsed = 0.0
+                self.numeric_at = numeric_at
+                self.media_at = media_at
+                self.page = Mock(url="https://www.dola.com/chat/local_123")
+                self.context = Mock(pages=[self.page])
+                playwright = Mock()
+                playwright.chromium.launch_persistent_context.return_value = self.context
+                self.manager = MagicMock()
+                self.manager.__enter__.return_value = playwright
+                self.send = Mock()
+                self.send.is_visible.return_value = True
+                self.page.locator.side_effect = self.locator
+                self.page.get_by_text.return_value.count.return_value = 0
+                self.page.on.side_effect = lambda event, callback: setattr(self, event, callback)
+                self.page.wait_for_timeout.side_effect = self.advance
+                self.send.click.side_effect = self.click
+                self.click_error = click_error
+
+            def locator(self, selector):
+                result = Mock()
+                if selector.startswith("button[type='submit']"):
+                    result.count.return_value = 1
+                    result.nth.return_value = self.send
+                elif selector.startswith("video,"):
+                    result.count.side_effect = lambda: int(
+                        self.media_at is not None and self.elapsed >= self.media_at
+                    )
+                else:
+                    result.evaluate_all.return_value = []
+                return result
+
+            def click(self, **kwargs):
+                request = _native_request()
+                request.method = "POST"
+                request.url = "https://www.dola.com/chat/completion"
+                self.request(request)
+                unrelated = Mock(url="https://cdn.bytevcloud.com/other.mp4", status=200)
+                self.response(unrelated)
+                if self.click_error:
+                    raise RuntimeError("click timed out after send")
+
+            def advance(self, milliseconds):
+                self.elapsed += milliseconds / 1000
+                if self.numeric_at is not None and self.elapsed >= self.numeric_at:
+                    self.page.url = "https://www.dola.com/chat/12345"
+
+        def exercise(browser, *, verified, poll_status="COMPLETED"):
+            reader = Mock()
+            if isinstance(verified, Exception):
+                reader.verify_input.side_effect = verified
+            else:
+                reader.verify_input.return_value = verified
+            if isinstance(poll_status, list):
+                reader.poll.side_effect = [{"status": status} for status in poll_status]
+            else:
+                reader.poll.return_value = {"status": poll_status}
+            native, receipts = [], []
+            with TemporaryDirectory() as directory, \
+                    patch("patchright.sync_api.sync_playwright", return_value=browser.manager), \
+                    patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
+                    patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
+                    patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
+                    patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
+                try:
+                    result = PatchrightDolaRunner().run(
+                        cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",
+                        binding="a" * 64, prompt="a river", ratio="16:9", duration=5,
+                        on_native_request=native.append, on_receipt=receipts.append, reader=reader,
+                    )
+                except DolaCookieError as error:
+                    result = error.failure_class
+                    browser.read_diagnostic = error.read_diagnostic
+            return result, native, receipts, reader
+
+        late = Browser(numeric_at=65, click_error=True)
+        result, native, receipts, reader = exercise(
+            late, verified=True, poll_status=["PENDING", "COMPLETED"]
+        )
+        self.assertEqual((result, native, receipts), ("12345", ["native-1"], ["12345"]))
+        self.assertGreaterEqual(late.elapsed, 70)
+        self.assertLess(late.elapsed, 180)
+        late.send.click.assert_called_once()
+        reader.verify_input.assert_called_with("12345", "native-1")
+        late.context.close.assert_called_once()
+
+        pending = Browser(numeric_at=5)
+        result, native, receipts, reader = exercise(pending, verified=True,
+                                                    poll_status="PENDING")
+        self.assertEqual((result, native, receipts), ("12345", ["native-1"], ["12345"]))
+        self.assertGreaterEqual(pending.elapsed, 180)
+        pending.send.click.assert_called_once()
+        self.assertGreater(reader.poll.call_count, 1)
+
+        unverified = Browser(numeric_at=5)
+        result, native, receipts, reader = exercise(unverified, verified=False)
+        self.assertEqual((result, native, receipts),
+                         ("DOLA_UI_RESULT_IDENTITY_UNVERIFIED", ["native-1"], []))
+        self.assertGreaterEqual(unverified.elapsed, 180)
+        unverified.send.click.assert_called_once()
+        reader.poll.assert_not_called()
+
+        read_failure = Browser(numeric_at=5)
+        result, native, receipts, reader = exercise(
+            read_failure, verified=DolaCookieError("PROVIDER_TRANSIENT", "AMBIGUOUS")
+        )
+        self.assertEqual((result, receipts), ("DOLA_UI_RESULT_IDENTITY_UNVERIFIED", []))
+        self.assertEqual(read_failure.read_diagnostic,
+                         "PROVIDER_TRANSIENT|PROVIDER_TRANSIENT")
+        self.assertGreaterEqual(read_failure.elapsed, 180)
+
+        contradictory = Browser(numeric_at=5)
+        result, native, receipts, reader = exercise(
+            contradictory,
+            verified=DolaCookieError("DOLA_RESULT_IDENTITY_MISMATCH", "AMBIGUOUS"),
+        )
+        self.assertEqual((result, receipts), ("DOLA_RESULT_IDENTITY_MISMATCH", []))
+        self.assertGreaterEqual(contradictory.elapsed, 180)
+        reader.poll.assert_not_called()
+
+        unrelated_media = Browser(media_at=10)
+        result, native, receipts, reader = exercise(unrelated_media, verified=False)
+        self.assertEqual((result, native, receipts),
+                         ("DOLA_UI_MEDIA_UNATTRIBUTED", ["native-1"], []))
+        self.assertGreaterEqual(unrelated_media.elapsed, 180)
+        unrelated_media.send.click.assert_called_once()
+        reader.poll.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,9 @@ class FakeDola:
             raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS")
         if self.crash == "http_404":
             raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS", http_status=404)
+        if self.crash == "read_diagnostic":
+            raise DolaCookieError("DOLA_UI_RESULT_IDENTITY_UNVERIFIED", "AMBIGUOUS",
+                                  read_diagnostic="DOLA_RESULT_IDENTITY_MISMATCH|DOLA_READ_TIMEOUT")
         on_receipt("conversation-fixture")
         if self.crash == "after_receipt":
             raise ConnectionError("fixture private diagnostic")
@@ -76,10 +79,24 @@ class DolaOpeningTests(unittest.TestCase):
 
     def test_missing_receipt_cannot_repeat_or_switch_account(self):
         client = FakeDola(crash="before_receipt")
-        self.assertEqual(self.run_slot(client)["slots"][0]["api_generation"]["status"], "AMBIGUOUS")
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(first["status"], "AMBIGUOUS")
+        self.assertEqual(first["submission_diagnostic"], "AMBIGUOUS")
         self.run_slot(client)
         with self.assertRaisesRegex(DolaCookieError, "ACCOUNT_MISMATCH"):
             self.run_slot(client, "another")
+        self.assertEqual(client.submits, 1)
+
+    def test_ambiguous_read_diagnostic_is_saved_without_a_receipt(self):
+        client = FakeDola(crash="read_diagnostic")
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(first["status"], "AMBIGUOUS")
+        self.assertEqual(first["submission_diagnostic"],
+                         "DOLA_UI_RESULT_IDENTITY_UNVERIFIED")
+        self.assertEqual(first["submission_read_diagnostic"],
+                         "DOLA_RESULT_IDENTITY_MISMATCH|DOLA_READ_TIMEOUT")
+        self.assertFalse(first.get("provider_task_id"))
+        self.run_slot(client)
         self.assertEqual(client.submits, 1)
 
     def test_browser_ui_persists_native_request_mapping_before_receipt(self):
@@ -130,7 +147,9 @@ class DolaOpeningTests(unittest.TestCase):
                 on_native_request("native-1")
                 raise DolaCookieError("NO_RECEIPT", "AMBIGUOUS")
         browser = UnreceiptedBrowser()
-        self.assertEqual(self.run_slot(browser)["slots"][0]["api_generation"]["status"], "AMBIGUOUS")
+        first = self.run_slot(browser)["slots"][0]["api_generation"]
+        self.assertEqual((first["status"], first["submission_diagnostic"]),
+                         ("AMBIGUOUS", "NO_RECEIPT"))
         direct = FakeDola()
         with self.assertRaisesRegex(DolaCookieError, "TRANSPORT_MISMATCH"):
             self.run_slot(direct)

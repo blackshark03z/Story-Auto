@@ -57,12 +57,16 @@ def _safe_response_kind(headers: Any) -> str:
 class DolaCookieError(RuntimeError):
     def __init__(self, failure_class: str, dispatch_state: str = "NOT_DISPATCHED",
                  *, http_status: int | None = None, response_kind: str | None = None,
-                 receipt_state: str | None = None) -> None:
+                 receipt_state: str | None = None,
+                 read_diagnostic: str | None = None) -> None:
         self.failure_class = failure_class
         self.dispatch_state = dispatch_state
         self.http_status = _safe_http_status(http_status)
         self.response_kind = response_kind if response_kind in {"SSE", "JSON", "HTML", "OTHER", "UNKNOWN"} else None
         self.receipt_state = receipt_state if receipt_state in {"EMPTY_BODY", "NO_ACK", "ACK_INVALID"} else None
+        self.read_diagnostic = (read_diagnostic if isinstance(read_diagnostic, str)
+                                and re.fullmatch(r"[A-Z][A-Z0-9_]{1,79}(?:\|[A-Z][A-Z0-9_]{1,79})?",
+                                                 read_diagnostic) else None)
         super().__init__(failure_class)
 
 

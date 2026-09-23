@@ -1,5 +1,53 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 Dola browser observation adapted from Owner blueprint
+
+The separately authorized second browser-UI canary used one new submit action
+in a distinct isolated project, `prj_dola_browser_ui_canary_2_20260923`, with a
+red-rowboat prompt. Attempt `e57bc54e851c4fcb8d0fc38f625e5af8` lasted from
+09:15:50 to 09:16:45 UTC and saved a native local input ID, but no confirmed
+conversation ID or video. It remains `AMBIGUOUS`, `submit_attempts=1`,
+`provider_submissions=0`. Two subsequent read-only checks each saw 11 recent
+conversations and zero exact input matches, with zero read errors. A separate
+signed-in browser view showed no red-rowboat prompt in the current chat or
+recent list. These observations do not prove zero provider effect. The prior
+O1 attempt is separate and remains ambiguous. The Owner's one additional
+request authorization has been consumed; neither attempt may be retried.
+That second canary ran the older 45-second observer and its manifest contains
+no per-stage submission or read diagnostic.
+
+The Owner-supplied Patchright blueprint was compared with the actual Gemini
+PoC and current code. The PoC used the Dola browser UI and observed for up to
+180 seconds; its successful video is evidence for one UI workflow. The
+blueprint's claims that closing the browser cancelled either Story Auto job,
+that an `local_*` value is a server receipt, and that any CDN URL belongs to
+the current prompt are not established by the saved evidence. The candidate
+runner now keeps the browser open for up to 180 seconds after its one send,
+checks for a late conversation and exact native-input readback, observes
+rendered media only as a diagnostic, and waits for a linked terminal result
+before closing early. It records the safe submission diagnostic and HTTP
+status when available. An unrelated video card or CDN response cannot be
+imported. These 180-second and diagnostic behaviors are offline code/test
+evidence, not observed properties of either earlier live canary. Offline
+focused tests: 58 passed, 32 subtests passed. The full offline suite passed
+1,056 tests and 372 subtests; quality, security and `git diff --check` gates
+passed. No Dola generation was sent while applying this blueprint.
+
+## 2026-09-23 Dola browser-UI prompt check corrected; attempt still ambiguous
+
+The isolated browser-UI runner now verifies the observed native text format
+`Generated video: <original prompt>, <ratio>` exactly, alongside the existing
+model, duration, and ratio fields. Offline tests cover the wrapper and reject
+raw or altered text/settings; the receipt still requires a conversation URL
+and an exact readback of the native input ID. No generation was submitted by
+this change. A fresh read-only reconciliation at
+`D:\Story Auto\evidence\dola-browser-ui-canary-20260923\readonly-reconcile-20260923T090432Z.json`
+found zero exact matches among 11 recent conversations, with zero read failures
+and zero generation submissions. The original O1 attempt remains `AMBIGUOUS`,
+one submit action, one saved native local ID, no confirmed conversation/task
+ID or asset. Absence from the recent window does not prove no provider effect;
+do not redispatch this attempt or infer a quota result.
+
 ## Dola opt-in operator journey contract (candidate, not enabled)
 
 UX_CONTRACT

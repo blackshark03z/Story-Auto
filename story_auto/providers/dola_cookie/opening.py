@@ -165,6 +165,10 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                                       dispatch_state="NOT_DISPATCHED" if known_unsent else "AMBIGUOUS",
                                       failure_class=error.failure_class if known_unsent else "DOLA_SUBMISSION_UNCERTAIN",
                                       updated_at=_now())
+                        if isinstance(error, DolaCookieError):
+                            record["submission_diagnostic"] = error.failure_class
+                            if error.read_diagnostic is not None:
+                                record["submission_read_diagnostic"] = error.read_diagnostic
                         if isinstance(error, DolaCookieError) and error.http_status is not None:
                             record["submission_http_status"] = error.http_status
                         if isinstance(error, DolaCookieError) and error.response_kind is not None:
