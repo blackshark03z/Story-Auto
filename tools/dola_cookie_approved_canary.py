@@ -3,12 +3,23 @@
 Preparation is local-only. Dispatch is limited to the first missing slot of a
 fixed isolated project and requires an explicit command-line acknowledgement.
 The old ambiguous Dola project is never opened or modified here.
+
+Canonical invocation from this checkout: python tools/dola_cookie_approved_canary.py status
 """
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+import story_auto
+
+if not Path(story_auto.__file__).resolve().is_relative_to(REPO_ROOT / "story_auto"):
+    raise SystemExit("CANDIDATE_IMPORT_MISMATCH: no provider request")
 
 from story_auto.core.artifacts import read_json
 from story_auto.core.project import ProjectConfig, RuntimeLayout, create_project, load_project
