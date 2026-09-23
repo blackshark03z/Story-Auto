@@ -2,7 +2,7 @@
 
 ## 2026-09-23 isolated Dola browser-UI candidate
 
-The isolated `codex/product-acceptance-candidate` worktree now has an
+The isolated `codex/product-acceptance-candidate` clone/branch now has an
 **opt-in, non-default** Patchright browser-UI submit client. It seeds a
 dedicated profile from one named encrypted cookie account, checks the visible
 video controls, performs at most one send action, durably records the app's

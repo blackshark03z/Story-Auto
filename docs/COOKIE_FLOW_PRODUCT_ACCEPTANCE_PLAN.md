@@ -3,10 +3,14 @@
 ## Current execution plan — 2026-09-23
 
 This is the active plan; older checkpoints below are provenance. Work in the
-isolated `codex/product-acceptance-candidate` worktree, preserving the dirty
+isolated `codex/product-acceptance-candidate` clone/branch, preserving the dirty
 source checkout. The accepted Flow final is a product asset, while the
 separate unresolved Flow canary and three Dola direct-cookie attempts retain
 their own ambiguous histories. No cross-provider replacement or blind retry.
+The candidate is a separate Git clone whose `origin` points to the dirty
+source checkout; it is not registered as one of that checkout's worktrees.
+Promotion therefore needs an explicit path/scope reconciliation rather than
+assuming a worktree branch is already available in source main.
 
 | Milestone | Current proof | Remaining gate |
 | --- | --- | --- |
