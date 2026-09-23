@@ -64,9 +64,32 @@ HTTP 200. The result is `BROWSER_AUTH_READ_PASS`, not a generation or account
 identity proof. Evidence:
 `D:\Story Auto\evidence\dola-profile-read-20260923\probe-01.json`.
 No cookie values or conversation content were recorded; generation count 0.
-A second read-only probe (`probe-02.json`) reproduced the auth contrast but
-did not recognize a video-entry button in either context. This is an
-unverified UI affordance, not proof the account lacks video capability.
+The first video-entry matcher missed the current plural label `Create Videos`.
+The corrected control (`probe-05.json`) found it in both blank and signed-in
+contexts, so the entry alone is not an auth proof. In the signed-in profile,
+opening this mode without a prompt displayed Dreamina Seedance 2.0 Fast,
+10s and a ratio selector (`video-mode-06.png`). Separate pre-submit menu
+inspection found 5s/10s and 16:9 among available options (`probe-07.json`,
+`options-07.png`); the model menu displayed Dreamina Seedance 2.5, 2.0 Fast
+and 1.0 (`model-08.png`). No model/ratio/duration was changed, no prompt was
+entered, and no generation occurred. These controls establish a selectable
+UI surface, not request acceptance or video output identity.
+
+An additional pre-submit control selected 5s and 16:9 in the profile UI and
+visually confirmed both choices (`probe-11.json`, `selection-11.png`), still
+with an empty prompt and zero generation. Full cookies from that profile were
+then replayed in a fresh Chrome context **in memory only**: the blank control
+showed Login while the replay did not (`probe-12.json`). Unlike the earlier
+seven-cookie export, this fresh profile contains exact `sessionid` as well as
+`sessionid_ss`.
+
+The fresh cookie set was imported under new DPAPI alias
+`dola-profile-20260923` (28 www-applicable cookie pairs), leaving `dola-main`
+untouched. A separate read-only browser roundtrip from the saved alias also
+distinguished the login control (`saved-alias-01.json`). Cookie-only **browser
+UI authentication** is now qualified for this new alias. This still does not
+prove private video API acceptance, a charge-free submit, or correct result
+identity; it does not authorize replay of either ambiguous Dola attempt.
 
 The next candidate is a separate feature-gated UI transport. It
 must retain Story Auto's durable one-attempt journal, account lock, exact
@@ -75,9 +98,9 @@ and fail-closed manual handling for CAPTCHA/verification. Do not copy the
 gateway's automated CAPTCHA solver, default extension/interception, silent
 ratio/duration fallbacks, or unauthenticated server defaults.
 
-Before enabling it, bind the profile to an explicit account identity and
-qualify the video-mode controls without submitting. A fresh browser session
-must visibly preserve the requested model, ratio and duration. Persist the
+Before enabling it, bind the profile to an explicit account identity. The
+video-mode controls are now observed, but the eventual transport must verify
+the requested model, ratio and duration on every new attempt. Persist the
 attempt before the single final UI action; on a missing conversation receipt,
 leave `AMBIGUOUS` and do not rotate or repeat. Poll only the proven same
 conversation and import only a video linked to the submitted input. Test

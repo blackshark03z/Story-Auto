@@ -10,11 +10,18 @@ cookie; both profile opens showed no Login and cookie names `sessionid` and
 `sessionid_ss`. All loaded `www.dola.com/chat` with HTTP 200. Status:
 `BROWSER_AUTH_READ_PASS`; evidence in
 `D:\Story Auto\evidence\dola-profile-read-20260923\probe-01.json` and
-`probe-02.json`. The latter did not recognize a video-entry button; video UI
-capability is therefore still unverified rather than absent.
-No cookie values or chat contents were saved, no generation occurred, and
+`probe-05.json` through `probe-12.json`. The initial video-entry matcher
+missed the plural label `Create Videos`; corrected control and cropped
+composer views show the signed-in video mode, Dreamina Seedance 2.0 Fast,
+5s/10s and 16:9 in its pre-submit menus. The entry is public and is not an
+authentication check. A later control selected 5s/16:9 locally, still with
+an empty prompt. Full profile cookies replayed in a fresh Chrome context
+without writing plaintext, then were saved as new DPAPI alias
+`dola-profile-20260923` (28 pairs), leaving `dola-main` intact. A separate
+read-only replay from that saved alias passed the blank-vs-signed-in control.
+No plaintext cookie values or chat contents were saved in evidence, no generation occurred, and
 the ambiguous Dola attempts remain frozen. This verifies browser UI login,
-not video capability, account identity matching or whole-product acceptance.
+not private video API acceptance, result identity or whole-product acceptance.
 Next: feature-gated UI transport with offline exact-once/identity tests;
 fresh bounded authorization is required before another live generation.
 
