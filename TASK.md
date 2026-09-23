@@ -96,6 +96,10 @@ a brief person in Opening O2 differs from the body traveler; the Owner explicitl
 accepted the current final video on 2026-09-23 despite this note. This decision
 applies to this exact final MP4, not Dola or the whole product. Evidence
 product-acceptance-audit-20260923.json, final-contact-sheet.png.
+The later saved-cookie unavailability and separate closed-Chrome canary
+ambiguity do not revoke this final's acceptance. No Flow profile login or
+cookie refresh is needed to view or accept this existing video; refresh is
+only for future generation or separately scoped reliability/recovery work.
 
 Home card stale-state bug FIXED: Hybrid list cards now derive composed status
 from current manifests; live desktop IAB shows Complete/100%/Open final video,

@@ -2,6 +2,8 @@
 
 Status: **NOT PRODUCT_ACCEPTED**. This is the exact current local candidate,
 not a merge, tag, push, default production activation, or legal clearance.
+This whole-product status does **not** revoke acceptance of the existing Flow
+final: that exact MP4 is technically complete and Owner quality-accepted.
 
 ## Identity and boundaries
 
@@ -39,13 +41,16 @@ for this release or provide a vendor-authorized integration path, and separately
 approve the exact release/promotion scope. Until then keep production promotion
 on HOLD. The scoped 8778 candidate can be reviewed without altering source main.
 
-Flow credential refresh is a distinct operator action. The saved
+Flow credential refresh is **not required** to accept or view the completed
+Flow final. It is relevant only to a future generation or a separately scoped
+reliability/recovery qualification. The closed-Chrome canary is a different
+attempt; its ambiguity does not change the completed project's result. The saved
 `flow-product-20260923` revision 1 currently fails a read-only project check;
 the dedicated Chrome profile is not listening on port 9333. Do not silently
 rewrite revision 1 because the unresolved attempt is pinned to it. If the
-Owner opens that exact profile and a fresh export succeeds, use a new alias or
-explicitly reviewed same-owner recovery design before any journal recovery;
-no new generation is implied by the refresh.
+Owner later chooses to refresh that exact profile for future work, use a new
+alias or explicitly reviewed same-owner recovery design before any journal
+recovery; no new generation is implied by a refresh.
 
 Canonical context: `TASK.md`, `docs/COOKIE_FLOW_PRODUCT_ACCEPTANCE_PLAN.md`,
 `docs/FLOW_RPC_OPERATIONS.md`, and the cited evidence files. Current Dola Terms:
