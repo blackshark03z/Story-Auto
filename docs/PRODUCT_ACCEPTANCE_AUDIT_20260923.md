@@ -32,24 +32,26 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 | Current Flow final media | `evidence/flow-real-product-journey-20260921/projects/prj_flow_real_product/output/final.mp4` SHA-256 `de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132` equals `final_manifest.json`; fresh ffprobe H264/AAC 1280x720, 39.583333 s, 22,131,107 bytes; full ffmpeg decode exit 0 | PASS |
 | Current served project | After the 8778 restart, HTTP 200 text/html; production query `pipeline_status=COMPLETE`, `final_output.present=true`, `next_action=open_final`; asset single range returns 206 video/mp4, bytes 0-1023/22131107; file SHA-256 still matches the accepted final | PASS at current runtime check |
 | Owner visual acceptance | Owner explicitly accepted that exact final MP4 on 2026-09-23, with Opening/body traveler continuity note disclosed | PASS for that MP4 only |
-| Code validation | Full candidate suite 927/927 at code commit `5b141a8`; subsequent commits are documentation-only. Current quality and security gates PASS; JS syntax and rendered 576/1440px Dola Settings preview PASS | Engineering PASS |
+| Code validation | Post-change full candidate suite 932/932 PASS in 353.513 s; focused Dola 32/32 PASS; quality/security gates PASS. Independent review finding on abnormal HTTP status was fixed and regression-tested. JS syntax and rendered 576/1440px Dola Settings preview passed before this backend-only change | Engineering PASS; live Dola still pending |
 | Browser playback | Supported Chrome inline playback and seek PASS; Codex IAB inline Play still crashes, while direct media view works | PARTIAL; IAB limitation disclosed |
 | Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
 | Dola account/live canary | One encrypted account saved. `evidence/dola-live-qualification-20260923/canary-attempt-ba87f1eb43ea4c018491cd80d3d45d7a.json`: one submit attempt, no provider receipt or asset, external effect unknown | AMBIGUOUS; no retry |
-| Dola provider permission | Official Dola Terms (2026-09-04) restrict automation, reverse engineering, incorporation and automated output extraction; no vendor-approved integration contract recorded | HOLD; risk inference, not legal ruling |
-| Release promotion | Candidate is clean; source has 92 dirty/untracked entries and 86/87 candidate-path overlap. No exact Owner authorization to promote or redefine Dola as manual-only | PENDING OWNER DECISION |
+| Dola provider permission | Owner reports direct Dola confirmation that cookie integration is allowed; no written scope is recorded here. Owner explicitly approved one separate new canary after the unresolved-effect warning | OWNER-ATTESTED; production scope unverified |
+| Release promotion | Source has 92 dirty/untracked entries and 86/87 candidate-path overlap at the previous preflight. Dola cookie path remains chosen; no exact Owner authorization to promote this new candidate | PENDING OWNER DECISION |
 
 ## Next decision and allowed work
 
 The real Flow final and its quality are accepted, but that does not accept the
-whole product or unresolved provider attempts. No further Dola private requests,
-account rotation, or attempts to bypass service controls. Preserve both Dola and
-Flow ambiguous journals. The Owner needs to decide whether Dola is manual-only
-for this release or provide a vendor-authorized integration path, and separately
-approve the exact release/promotion scope. Until then keep production promotion
-on HOLD. The scoped 8778 candidate can be reviewed without altering source main.
-An unsent, secret-free vendor inquiry is prepared in
-`docs/DOLA_INTEGRATION_AUTHORIZATION_REQUEST.md`; it is not evidence of approval.
+whole product or unresolved provider attempts. The Owner chose Dola cookie
+integration and authorized exactly one new, separate canary after the risk was
+disclosed. Preserve the old Dola and Flow ambiguous journals; do not retry or
+rotate accounts. The new canary may proceed only after read-only session and
+code-safety checks, and must stop on uncertainty. Production promotion remains
+on HOLD pending live result identity, quality, scope, and exact release approval.
+The scoped 8778 candidate can be reviewed without altering source main. An
+unsent, secret-free vendor inquiry remains in
+`docs/DOLA_INTEGRATION_AUTHORIZATION_REQUEST.md` for clarifying written scope;
+the Owner's direct-confirmation report is a separate attestation.
 
 Flow credential refresh is **not required** to accept or view the completed
 Flow final. It is relevant only to a future generation or a separately scoped

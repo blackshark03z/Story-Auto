@@ -88,6 +88,33 @@ class DolaCookieClientTests(unittest.TestCase):
         with self.assertRaises(DolaCookieError) as caught:
             client.submit("a river", "16:9", 5, lambda _: None)
         self.assertEqual((caught.exception.failure_class, caught.exception.dispatch_state), ("RECEIPT_MISSING", "AMBIGUOUS"))
+        self.assertEqual(caught.exception.http_status, 200)
+
+    def test_submit_http_error_records_status_without_claiming_no_dispatch(self):
+        from urllib.error import HTTPError
+        for status in (401, 404, 429, 503):
+            with self.subTest(status=status):
+                def rejected(*args):
+                    raise HTTPError("https://www.dola.com/chat/completion", status, "private", {}, None)
+                with self.assertRaises(DolaCookieError) as caught:
+                    DolaCookieClient(COOKIE, opener=rejected).submit("a river", "16:9", 5, lambda _: None)
+                self.assertEqual(caught.exception.dispatch_state, "AMBIGUOUS")
+                self.assertEqual(caught.exception.http_status, status)
+                self.assertNotIn("private", str(caught.exception))
+
+    def test_submit_non_exception_http_error_is_also_ambiguous(self):
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(b"", status=403)))
+        with self.assertRaises(DolaCookieError) as caught:
+            client.submit("a river", "16:9", 5, lambda _: None)
+        self.assertEqual((caught.exception.dispatch_state, caught.exception.http_status), ("AMBIGUOUS", 403))
+
+    def test_abnormal_http_status_never_enters_safe_diagnostic(self):
+        for status in (0, 1, 600, True):
+            with self.subTest(status=status):
+                client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(b"", status=status)))
+                with self.assertRaises(DolaCookieError) as caught:
+                    client.submit("a river", "16:9", 5, lambda _: None)
+                self.assertIsNone(caught.exception.http_status)
 
     def test_submit_disconnect_is_ambiguous(self):
         def disconnected(request, timeout):

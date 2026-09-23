@@ -30,10 +30,17 @@ _CREDIT_FAILURE = re.compile(
 )
 
 
+def _safe_http_status(value: Any) -> int | None:
+    return (value if isinstance(value, int) and not isinstance(value, bool)
+            and 100 <= value <= 599 else None)
+
+
 class DolaCookieError(RuntimeError):
-    def __init__(self, failure_class: str, dispatch_state: str = "NOT_DISPATCHED") -> None:
+    def __init__(self, failure_class: str, dispatch_state: str = "NOT_DISPATCHED",
+                 *, http_status: int | None = None) -> None:
         self.failure_class = failure_class
         self.dispatch_state = dispatch_state
+        self.http_status = _safe_http_status(http_status)
         super().__init__(failure_class)
 
 
@@ -201,25 +208,33 @@ class DolaCookieClient:
             payload["option"]["unique_key"] = client_request_id
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         request = Request(ORIGIN + "/chat/completion?" + self._params(), data=body, method="POST", headers=self._headers(sse=True))
+        observed_status: int | None = None
         try:
             response = self._opener(request, self._timeout)
         except HTTPError as error:
-            if error.code in {401, 403}:
-                raise DolaCookieError("CREDENTIAL_OR_ACCESS_DENIED") from error
-            raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS") from error
+            failure = "CREDENTIAL_OR_ACCESS_DENIED" if error.code in {401, 403} else "AMBIGUOUS"
+            # A POST reached an HTTP responder; even an auth error is not
+            # provider-side proof that no effect occurred.
+            raise DolaCookieError(failure, "AMBIGUOUS", http_status=error.code) from error
         except (TimeoutError, URLError, OSError) as error:
             raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS") from error
         try:
             with response:
-                if int(getattr(response, "status", 200)) in {401, 403}:
-                    raise DolaCookieError("CREDENTIAL_OR_ACCESS_DENIED")
-                if int(getattr(response, "status", 200)) >= 400:
-                    raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS")
-                return self._receipt_from_sse(response, on_receipt)
+                observed_status = int(getattr(response, "status", 200))
+                if observed_status in {401, 403}:
+                    raise DolaCookieError("CREDENTIAL_OR_ACCESS_DENIED", "AMBIGUOUS", http_status=observed_status)
+                if observed_status >= 400:
+                    raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS", http_status=observed_status)
+                try:
+                    return self._receipt_from_sse(response, on_receipt)
+                except DolaCookieError as error:
+                    if error.http_status is None:
+                        error.http_status = _safe_http_status(observed_status)
+                    raise
         except DolaCookieError:
             raise
         except (TimeoutError, URLError, OSError) as error:
-            raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS") from error
+            raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS", http_status=observed_status) from error
 
     def _receipt_from_sse(self, response: _Response, on_receipt: Callable[[str], None]) -> str:
         buffered = b""

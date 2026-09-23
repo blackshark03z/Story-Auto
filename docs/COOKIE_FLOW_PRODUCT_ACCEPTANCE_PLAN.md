@@ -3,14 +3,22 @@
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
 
-Dola permission hold: official terms at `https://www.dola.com/legal/terms/en`
+Current Dola choice: the Owner reports Dola directly confirmed permission for
+cookie integration; no written scope is stored here. After disclosure that the
+earlier ambiguous attempt might have had an effect or used a credit, the Owner
+approved **one separate new canary request**. This is bounded experimental
+authorization, not proof of provider output, billing, or product acceptance.
+Finish safe HTTP-status journaling and a read-only session check first. Preserve
+the old attempt; no retry or account rotation.
+
+Historical permission hold: official terms at `https://www.dola.com/legal/terms/en`
 (last updated 2026-09-04) restrict automated use, reverse engineering,
 incorporation into another product and automated output extraction. The
-candidate's private-endpoint design is therefore not a supportable production
-assumption absent vendor permission or an official API; this is a risk
-classification, not legal advice. Do not send another private Dola request or
-bypass controls. Preserve the ambiguous O1 record below, and choose an
-authorized provider path/manual Dola path for product acceptance.
+candidate's private-endpoint design was not a supportable production assumption
+without provider permission or an official API; this was a risk classification,
+not legal advice. The newer Owner attestation above supersedes the previous
+blanket request hold only for the specifically authorized canary, not for
+production promotion. Preserve the ambiguous O1 record below.
 
 2026-09-23 live Dola O1 result: Owner saved `dola-main` (one configured account)
 and one bounded canary call recorded attempt

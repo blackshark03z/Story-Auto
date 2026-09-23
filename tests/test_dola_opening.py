@@ -8,7 +8,7 @@ import unittest
 from story_auto.core.artifacts import read_json
 from story_auto.core.project import RuntimeLayout, ProjectConfig, create_project
 from story_auto.core.visual.opening_builder import configure_opening_builder
-from story_auto.providers.dola_cookie.client import DolaCookieError
+from story_auto.providers.dola_cookie.client import DolaCookieClient, DolaCookieError
 from story_auto.providers.dola_cookie.opening import generate_dola_opening
 
 
@@ -25,6 +25,8 @@ class FakeDola:
         self.params = params
         if self.crash == "before_receipt":
             raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS")
+        if self.crash == "http_404":
+            raise DolaCookieError("AMBIGUOUS", "AMBIGUOUS", http_status=404)
         on_receipt("conversation-fixture")
         if self.crash == "after_receipt":
             raise ConnectionError("fixture private diagnostic")
@@ -78,6 +80,31 @@ class DolaOpeningTests(unittest.TestCase):
         with self.assertRaisesRegex(DolaCookieError, "ACCOUNT_MISMATCH"):
             self.run_slot(client, "another")
         self.assertEqual(client.submits, 1)
+
+    def test_http_failure_preserves_safe_status_and_never_resubmits(self):
+        client = FakeDola(crash="http_404")
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual((first["status"], first["dispatch_state"]), ("AMBIGUOUS", "AMBIGUOUS"))
+        self.assertEqual(first["submission_http_status"], 404)
+        self.run_slot(client)
+        self.assertEqual(client.submits, 1)
+        raw = self.paths.artifact_path("output/opening_manifest.json").read_text()
+        self.assertNotIn("private diagnostic", raw)
+
+    def test_real_client_http_failure_flows_to_manifest_without_retry(self):
+        from urllib.error import HTTPError
+        requests = []
+        def reject(request, timeout):
+            requests.append(request.get_method())
+            raise HTTPError("https://www.dola.com/chat/completion", 404, "private", {}, None)
+        client = DolaCookieClient("sessionid_ss=fixture", opener=reject)
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(first["submission_http_status"], 404)
+        self.assertEqual((first["status"], first["dispatch_state"]), ("AMBIGUOUS", "AMBIGUOUS"))
+        self.run_slot(client)
+        self.assertEqual(requests, ["POST"])
+        raw = self.paths.artifact_path("output/opening_manifest.json").read_text()
+        self.assertNotIn("private", raw)
 
     def test_receipt_survives_client_crash_and_fresh_client_resumes(self):
         client = FakeDola(crash="after_receipt")
