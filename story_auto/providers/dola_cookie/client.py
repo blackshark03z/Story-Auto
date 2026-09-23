@@ -30,6 +30,9 @@ _CREDIT_FAILURE = re.compile(
     r"无法生成|無法生成|不能生成|無法完成|无法完成",
     re.IGNORECASE,
 )
+_DURATION_CONFIRMATION = re.compile(
+    r"\bshould i proceed with\s+\d+\s+seconds?\b", re.IGNORECASE,
+)
 
 
 def _safe_http_status(value: Any) -> int | None:
@@ -256,6 +259,38 @@ def _linked_master_url(payload: dict[str, Any], download_url: str) -> str | None
     if len(best) != 1:
         raise DolaCookieError("PROVIDER_RESULT_AMBIGUOUS", "DISPATCH_CONFIRMED")
     return best.pop()
+
+
+def _linked_duration_confirmation(payload: dict[str, Any], conversation_id: str, local_id: str) -> bool:
+    """Recognize only a duration question replying to this exact native input."""
+    messages = ((payload.get("downlink_body") or {}).get("pull_singe_chain_downlink_body") or {}).get("messages")
+    if not isinstance(messages, list):
+        return False
+    inputs = {message.get("message_id") for message in messages
+              if isinstance(message, dict) and message.get("local_message_id") == local_id
+              and message.get("conversation_id") in {None, "", conversation_id}
+              and isinstance(message.get("message_id"), str)}
+    if len(inputs) != 1:
+        return False
+    for message in messages:
+        if (not isinstance(message, dict) or message.get("bot_reply_message_id") not in inputs
+                or message.get("conversation_id") not in {None, "", conversation_id}):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("block_type") != 10000:
+                continue
+            text = ((block.get("content") or {}).get("text_block") or {}).get("text")
+            if isinstance(text, str) and _DURATION_CONFIRMATION.search(text):
+                return True
+    return False
 
 
 class DolaCookieClient:
@@ -511,6 +546,8 @@ class DolaCookieClient:
             if master:
                 return {"status": "COMPLETED", "video_url": master, "media_variant": "master"}
             return {"status": "COMPLETED", "video_url": urls[0]}
+        if client_request_id and _linked_duration_confirmation(payload, conversation_id, client_request_id):
+            return {"status": "NEEDS_OPERATOR", "reason": "DOLA_DURATION_CONFIRMATION_REQUIRED"}
         text = " ".join(str(node.get("text", "")) for node in _walk(payload))
         return {"status": "FAILED" if _CREDIT_FAILURE.search(text) else "PENDING"}
 

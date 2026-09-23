@@ -197,6 +197,13 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                 if status == "FAILED":
                     update(status="FAILED_TERMINAL", failure_class="DOLA_PROVIDER_FAILED")
                     break
+                if status == "NEEDS_OPERATOR":
+                    if result.get("reason") != "DOLA_DURATION_CONFIRMATION_REQUIRED":
+                        raise DolaCookieError("DOLA_STATUS_UNKNOWN", "DISPATCH_CONFIRMED")
+                    update(status="OPERATOR_DECISION_REQUIRED",
+                           provider_task_status="awaiting_confirmation",
+                           failure_class="DOLA_DURATION_CONFIRMATION_REQUIRED")
+                    break
                 if status == "COMPLETED":
                     variant = result.get("media_variant")
                     variant = variant if variant in {"master", "preview"} else "preview"

@@ -353,6 +353,7 @@ function openingBuilderSurface(snapshot) {
     const importButton = unresolvedProvider ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
     if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'Saved evidence shows no video was submitted. Check the session, then review and confirm one new request.' : 'We cannot confirm whether Dola accepted the original request. Review diagnostics before any new video; Story Auto will not resend it.'} ${esc(api.failure_class || '')}</small>`;
+    if (!ready && dolaActive && apiState === 'OPERATOR_DECISION_REQUIRED') apiNote = '<small>Dola asked to change the requested duration. Story Auto did not agree or send another message. This slot has no video yet; review the original Dola conversation before deciding what to do next.</small>';
     if (!ready && noProvider && allowDola && dola.configured && !dola.generation_enabled) apiNote = dola.browser_gate_configured ? '<small>Check this Dola session before creating one video for the selected slot. A failed check does not submit or consume a generation.</small>' : '<small>Dola account saved, but generation is paused for this project. Import a clip now; configure the dedicated Dola browser gate before generating.</small>';
     if (!ready && noProvider && allowDola && !dola.configured) apiNote = '<small>Add Dola accounts in Settings to use cookie-based text-to-video.</small>';
     if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
@@ -373,6 +374,7 @@ function openingBuilderSurface(snapshot) {
     const statusLabel = ready ? 'READY'
       : dolaActive && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'NOT SENT'
       : dolaActive && apiState === 'AMBIGUOUS' ? 'OUTCOME UNCERTAIN'
+      : dolaActive && apiState === 'OPERATOR_DECISION_REQUIRED' ? 'NEEDS YOUR DECISION'
       : apiState !== 'NOT_STARTED' ? apiState : 'MISSING';
     return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${esc(statusLabel)}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${flowControls}${apiNote}${source}${lockedPreview}${preview}</article>`;
   }).join('');

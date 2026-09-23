@@ -312,6 +312,22 @@ class DolaOpeningTests(unittest.TestCase):
         self.assertEqual(fresh.submits, 0)
         self.assertEqual(fresh.polled, ["conversation-fixture"])
 
+    def test_duration_question_waits_for_operator_without_a_second_submit(self):
+        class NeedsOperator(FakeDola):
+            def poll(self, task, *, client_request_id=None):
+                self.polled.append(task)
+                return {"status": "NEEDS_OPERATOR", "reason": "DOLA_DURATION_CONFIRMATION_REQUIRED"}
+
+        client = NeedsOperator()
+        generation = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(generation["status"], "OPERATOR_DECISION_REQUIRED")
+        self.assertEqual(generation["failure_class"], "DOLA_DURATION_CONFIRMATION_REQUIRED")
+        self.assertEqual((generation["submit_attempts"], generation["provider_submissions"]), (1, 1))
+        fresh = NeedsOperator()
+        self.run_slot(fresh)
+        self.assertEqual(fresh.submits, 0)
+        self.assertEqual(fresh.polled, ["conversation-fixture"])
+
     def test_expired_cookie_before_submit_allows_explicit_same_account_retry(self):
         class Expired(FakeDola):
             def submit(self, **params):

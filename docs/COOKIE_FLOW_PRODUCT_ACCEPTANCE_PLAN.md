@@ -1,5 +1,25 @@
 # Cookie Flow product acceptance delivery
 
+## Product-button update — 2026-09-23
+
+The Owner requested a live click through the product's Dola Create action.
+The first UI attempt in review-copy O2 confirmed one native input and
+conversation `38417989246554641`, then Dola asked whether to change the
+requested 5 seconds to 15 seconds. No video was produced. The confirmed
+attempt remains `OPERATOR_DECISION_REQUIRED`; its quota effect is unknown.
+The product now detects the exact linked duration question and shows a clear
+decision state without replying or redispatching. The Owner chose a new 5s
+request instead of agreeing to 15s.
+
+A separate fresh project in the same review runtime made exactly one new
+product-button request with an explicit “five-second” prompt. Conversation
+`38417972965476625` succeeded. The linked master without visible Dola logo
+was acquired and imported to OPENING_O1 READY, with source SHA256
+`4619ef31e9355956513cb078d355a954233bbf33169bca35476d55d81ea0b314`.
+The new project's O2/O3 remain unattempted. See the Dola runbook and the
+`PRODUCT_UI_*` records under the UI-review evidence root. This proves one
+live product-button path, but not a composed final from this Dola project.
+
 ## Current checkpoint — 2026-09-23 after fourth Dola canary
 
 The 2026-09-23 fourth Story Auto browser-UI canary supersedes the older
@@ -29,11 +49,11 @@ proven preview when the master is missing/invalid. See the runbook for hashes.
 The remaining release boundary is a composed final from the exact candidate,
 reconciled promotion to the source checkout, final code/security gates, and
 explicit Owner acceptance of the scoped product candidate. The accepted Flow
-final remains separate evidence. A new Dola UI generation is only needed if
-the acceptance scope specifically requires observing Create through the
-product button; the single previously approved Dola send is consumed. The
-first three Dola browser attempts and separate Flow ambiguities remain
-unresolved. No automatic retry or extra provider spend follows from this plan.
+final remains separate evidence. The Owner required observing Create through
+the product button; the two subsequently approved product-button sends are
+recorded in the update above. Neither approval covers another send. The first
+three Dola browser attempts and separate Flow ambiguities remain unresolved.
+No automatic retry or extra provider spend follows from this plan.
 
 The exact candidate UI code was then served over the already accepted Flow
 final runtime on port 8783. The final SHA256 stayed
@@ -65,7 +85,7 @@ assuming a worktree branch is already available in source main.
 | Dola browser transport engineering | Story Auto fourth canary submitted once, read back the exact native input and receipt, polled the same conversation, and imported O1 | Repeated-use stability is unverified; first three ambiguous attempts remain separate |
 | Browser pre-submit stability | Dedicated profile reused; headed CAPTCHA path and fail-closed composer draft guard covered by focused tests | Future CAPTCHA and profile survival still require human operation when encountered |
 | Bounded live qualification | Fourth canary O1 succeeded; linked no-logo master from the same creation was acquired without another generation | No new Dola send is authorized; O2/O3 remain unattempted |
-| Product integration | Exact candidate UI played Dola O1/master in a review copy and the already accepted Flow final at 1440/576px | Dola Create was not exercised through the product button; no newly composed final includes Dola O1 |
+| Product integration | Exact candidate UI played prior Dola O1/master and accepted Flow final; a new product-button Dola request confirmed receipt, acquired master, and imported OPENING_O1 | New project O2/O3 and composed final remain open; in-app browser crashed on playback of the new clip |
 | Release and acceptance | Flow final accepted by Owner; candidate implementation and rendered evidence exist | Reconcile dirty source checkout for promotion and obtain explicit Owner acceptance of the scoped product candidate |
 
 Main agent is the only writer. Use independent read-only review on consequential

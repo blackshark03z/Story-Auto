@@ -205,6 +205,18 @@ class DolaOperatorGateTests(unittest.TestCase):
                         page.set_viewport_size({"width": 1440, "height": 900})
                         page.locator(".opening-slot-grid").scroll_into_view_if_needed()
                         page.screenshot(path=str(folder / "ui-ambiguous-1440.png"))
+                    manifest = read_json(manifest_path)
+                    manifest["slots"][0]["api_generation"].update(
+                        status="OPERATOR_DECISION_REQUIRED", dispatch_state="CONFIRMED",
+                        provider_task_id="conversation-fixture", provider_submissions=1,
+                        failure_class="DOLA_DURATION_CONFIRMATION_REQUIRED")
+                    atomic_write_json(manifest_path, manifest)
+                    page.reload()
+                    page.get_by_role("button", name="View project", exact=True).click()
+                    page.get_by_text("NEEDS YOUR DECISION", exact=True).wait_for(timeout=8000)
+                    self.assertEqual(page.get_by_text("Dola asked to change the requested duration", exact=False).count(), 1)
+                    self.assertEqual(page.locator('[data-opening-dola="OPENING_O1"][data-resume="true"]').count(), 1)
+                    self.assertEqual(page.get_by_role("button", name="Create one Dola video").count(), 0)
                     browser.close()
             finally:
                 server.shutdown()

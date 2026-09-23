@@ -223,6 +223,33 @@ class DolaCookieClientTests(unittest.TestCase):
         client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(_chain())))
         self.assertEqual(client.poll("conv-1"), {"status": "PENDING"})
 
+    def test_poll_links_duration_question_to_exact_native_input(self):
+        payload = json.loads(_chain())
+        messages = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"]
+        messages.extend([
+            {"message_id": "reply-1", "bot_reply_message_id": "input-1",
+             "content": json.dumps([{"block_type": 10000, "content": {"text_block": {"text":
+                "I can generate it at 15 seconds. Should I proceed with 15 seconds?"}}}])},
+            {"message_id": "input-1", "local_message_id": "native-1",
+             "content": json.dumps([{"block_type": 10000}])},
+        ])
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="native-1"),
+                         {"status": "NEEDS_OPERATOR", "reason": "DOLA_DURATION_CONFIRMATION_REQUIRED"})
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="unrelated"), {"status": "PENDING"})
+        messages[-2]["bot_reply_message_id"] = "other-input"
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="native-1"), {"status": "PENDING"})
+        messages[-2]["bot_reply_message_id"] = "input-1"
+        messages[-2]["conversation_id"] = "other-conv"
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="native-1"), {"status": "PENDING"})
+        messages[-2]["conversation_id"] = "conv-1"
+        messages[-1]["conversation_id"] = "other-conv"
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertEqual(client.poll("conv-1", client_request_id="native-1"), {"status": "PENDING"})
+
     def test_poll_uses_observed_nested_read_only_uplink(self):
         bodies = []
         def capture(request, timeout):
