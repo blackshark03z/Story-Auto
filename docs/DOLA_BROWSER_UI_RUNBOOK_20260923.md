@@ -1,0 +1,231 @@
+# Dola browser UI — cách chạy đã thành công và đối chiếu Gemini
+
+Ngày chốt: 2026-09-23. SoT cho lần thử browser UI này là mã nguồn cùng bằng
+chứng runtime được định danh dưới đây. Tài liệu Gemini là nguồn tham khảo do
+Owner cung cấp, không phải kết luận đã được kiểm chứng của hệ thống.
+
+## 1. Kết quả đã xác nhận
+
+- Checkout: `D:\Story Auto\story-auto-product-candidate-20260923`.
+- Branch: `codex/product-acceptance-candidate`.
+- HEAD nền: `4c424925f847eebe9e6d1d30dc0add6611a88241`, **có thay đổi chưa commit khi chạy**.
+- SHA256 `story_auto/providers/dola_cookie/browser_ui.py` lúc gửi:
+  `b7f3888862cc425833573a85fd5abdfb361e99e1392b453b76f13886ad42b59f`.
+- SHA256 `tools/dola_browser_ui_fourth_canary.py` lúc gửi:
+  `d4b87f37598ad7024d017e78c6eadf2f5566a8949747190eda5d5830c39fca5e`.
+- Account alias: `dola-profile-20260923`; cookie nằm trong kho Windows DPAPI.
+- Project: `prj_dola_browser_ui_canary_4_20260923`; slot `OPENING_O1`.
+- Attempt: `fb732e3e25af414a8d8f4628f16187a3`.
+- Conversation/receipt: `38417972940811793`.
+- Owner cho phép đúng một lần gửi mới; đã dùng hết cho lần này.
+- Biên nhận được xác nhận lúc `2026-09-23T10:14:09Z`; hoàn tất nhập video lúc
+  `2026-09-23T10:17:34Z` (17:17:34 giờ Việt Nam).
+- Kết quả: `SUCCEEDED`, `CONFIRMED`, slot `READY`, `submit_attempts=1`,
+  `provider_submissions=1`. Không quan sát thấy CAPTCHA trong lần này.
+- UI Dola báo đang tạo bằng Seedance 2.0 và còn 2 video credits hôm nay.
+  Đây là số hiển thị tại thời điểm đó, không phải số dư hiện tại hay sổ đối soát.
+
+Prompt gốc đã gửi:
+
+> A five-second cinematic wide shot of a small white lighthouse on a rocky island at sunrise. Gentle ocean waves, warm natural light. No people, text or logos.
+
+## 2. Cách làm thực tế đã chạy
+
+1. Dùng `DolaBrowserUIClient` và `PatchrightDolaRunner(operator_visible=True)`.
+   Browser dùng persistent context, `headless=False`, `locale="en-US"`,
+   viewport 1440×900. Không thêm cờ stealth/ẩn automation.
+2. Tái sử dụng profile base của lần ba:
+   `D:\Story Auto\profiles\dola-browser-ui-candidate-3-20260923`.
+   Client tự chọn thư mục con theo digest cookie và kiểm tra account binding;
+   không mở thẳng profile base như thể đó là profile thực. Lease ngăn hai tiến
+   trình cùng mở profile. Cookie export đổi sẽ chọn profile khác.
+3. `_seed_profile_cookies` chỉ thêm tên cookie còn thiếu. Không gọi
+   `context.clear_cookies()`, không ghi đè cookie hiện có bằng bản export cũ.
+   Giữ profile đồng thời giữ local storage của phiên đó.
+4. Preflight mở chat mới, chọn Create Videos, chờ model `2.0 Fast` tải xong
+   (tối đa 10 giây), chọn 5s và 16:9 bằng các control UI. Kiểm tra ô nhập
+   trống, không gửi. Kết quả lần này: `UI_READY_NO_SUBMIT`.
+5. Lưu `PRE_DISPATCH.json` với phép gửi, source hash và prompt; kiểm tra project
+   chưa có attempt. Kiểm tra ô nhập trống trước khi gõ; bản nháp khác phải dừng
+   trước gửi. Nếu sau CAPTCHA vẫn còn đúng nguyên prompt đã gõ thì dùng lại,
+   không gõ lần hai. Nhấp ô nhập và gõ prompt bằng keyboard, delay 20ms.
+   Chọn đúng một thao tác gửi: nút Send duy nhất đang hiển thị, nếu không có
+   thì focus composer và Enter. Click lỗi không được chuyển sang Enter để thử lại.
+6. Quan sát request do UI tạo, không tự dựng request tạo video. Chấp nhận
+   wrapper chính xác `Generated video: <prompt>, 16:9`, đồng thời kiểm tra
+   `ability_type=17`, `model=seedance_v2.0`, duration và ratio.
+   Lưu native input ID để nối với biên nhận; ID này chưa phải job đã xác nhận.
+7. Giữ browser quan sát tối đa 180 giây, nhịp 5 giây. Chờ conversation ID số
+   từ URL/link UI và `verify_input` đọc lại đúng native input trong conversation.
+   Chỉ sau đó ghi receipt và `CONFIRMED`. HTTP 200 hoặc `local_*` không đủ.
+8. Nếu phát hiện CAPTCHA trong cửa sổ headed, đưa cửa sổ ra trước và giữ nguyên
+   để người dùng giải. Thời gian chờ người dùng được cộng lại vào deadline.
+   Không tự giải, đóng rồi mở lại challenge, hoặc gửi prompt lần nữa.
+   Nhánh này có test offline; lần thành công thứ tư không kích hoạt nó.
+9. Poll kết quả đã liên kết. Browser có thể đóng sau cửa sổ quan sát 180 giây
+   khi receipt đã lưu; lần này trạng thái khi dispatch trả về là `GENERATING`.
+   Sau đó chạy `recover` đúng receipt, không phát sinh yêu cầu tạo mới.
+10. Khi kết quả có định danh hợp lệ, tải MP4 qua client và nhập bằng luồng
+    canonical Opening: kiểm tra media, lưu hash nguồn, chuẩn hóa về slot.
+    Không lấy bất kỳ thẻ video/CDN URL nào trên trang làm kết quả của request.
+
+Các lệnh **đã chạy trong lịch sử** từ checkout nêu trên:
+
+```powershell
+python tools/dola_browser_ui_fourth_canary.py prepare
+python tools/dola_browser_ui_fourth_canary.py preflight
+# Sau khi Owner cho phép và đã ghi PRE_DISPATCH.json:
+python -u tools/dola_browser_ui_fourth_canary.py dispatch --ack-one-request
+python -u tools/dola_browser_ui_fourth_canary.py recover
+python tools/dola_browser_ui_fourth_canary.py status
+```
+
+Không chạy lại `prepare`/`dispatch` cho project này, không xóa attempt để vượt
+guard. Muốn thử một generation mới cần project/evidence riêng và phép gửi mới.
+Các canary là công cụ thử nghiệm; không suy ra UI sản phẩm đang mặc định dùng
+transport browser UI chỉ vì canary đã thành công.
+
+## 3. Bằng chứng và file đầu ra
+
+Evidence root: `D:\Story Auto\evidence\dola-browser-ui-canary-4-20260923`.
+
+| File tương đối từ evidence root | Vai trò |
+| --- | --- |
+| `PRE_DISPATCH.json` | Phép gửi, HEAD nền, hash mã nguồn trước gửi |
+| `screenshots/before-send.png` | UI trước thao tác gửi |
+| `screenshots/after-send.png` | Ảnh ngay sau thao tác; không tự nó chứng minh kết quả gửi |
+| `screenshots/final.png` | Prompt trong chat, composer trống, Dola xác nhận đang tạo |
+| `preview.png` | Frame giây thứ 2 của video đã tải, có hải đăng và watermark Dola |
+| `projects/prj_dola_browser_ui_canary_4_20260923/output/opening_manifest.json` | Trạng thái, receipt, liên kết request/source/normalized |
+| `projects/prj_dola_browser_ui_canary_4_20260923/assets/opening/imports/OPENING_O1/r001_c4a0761ba748.mp4` | Bản nguồn đã nhập |
+| `projects/prj_dola_browser_ui_canary_4_20260923/assets/opening/normalized/OPENING_O1/r001.mp4` | Video 5 giây dùng cho slot |
+
+Nguồn: 1280×720, 24fps, 5.041667 giây, có audio;
+SHA256 `c4a0761ba7482184a6f4dfc547efac1f7289b3b485ab626c65e6f4f9ec396ccc`.
+Normalized: 1280×720, 24fps, 5 giây, bỏ audio;
+SHA256 `fe0dd262ccfcbc94efd23d4efa9f47b98fabfaa1a7b6467c40d014609a9fa243`.
+
+35 tests và 15 subtests liên quan đã pass trước chạy live. Một lần tạo/tải/nhập
+thành công được chứng minh; chưa chứng minh chạy không giám sát ổn định hay
+Owner chấp nhận chất lượng. Watermark Dola vẫn có dù prompt yêu cầu no logos.
+
+### Product UI sau canary (không gửi thêm)
+
+Product operator gate trong `story_auto/application/operator.py` đã được nối
+với `PatchrightDolaRunner(operator_visible=True)`. Đây là thay đổi sau lần
+canary, nên hash pre-dispatch ở mục 1 không bao gồm nó. Bản sao runtime
+`D:\Story Auto\evidence\dola-product-ui-review-20260923` chỉ bật
+`settings.hybrid_visual.cuj_enabled` trên bản sao để xem qua UI; bằng chứng
+canary gốc không bị sửa. UI hiển thị O1 “Generated by Dola” và phát đúng
+normalized MP4 (1280×720, chạy tới khoảng 1.5 giây) trên 1440px và 576px,
+không có lỗi trang hoặc video. Ảnh: `product-ui-1440-playing.png`,
+`product-ui-576-playing.png`. Nút Check Dola session của O2 được thực hiện
+qua UI và trả `generation_enabled=true`, `verified_slot_id=OPENING_O2`;
+O2/O3 vẫn không có attempt trong manifest. Không bấm Create lần nữa.
+
+### Đối chiếu cách Gemini lấy bản không logo (2026-09-23)
+
+Nguồn Owner dán: [GEMINI_DOLA_MASTER_ORIGINAL_20260923.txt](references/GEMINI_DOLA_MASTER_ORIGINAL_20260923.txt),
+SHA256 `bfe78b2d22935c5d60f4f32c51b969fbb537ec4e47cfedaa399496b73516e9f2`.
+Đây là hướng dẫn/nhận định của Gemini, không phải biên nhận provider.
+
+Trên **chính conversation `38417972940811793`**, read-only chain có một video
+creation. `download_url` là bản đã nhập ban đầu có chữ Dola AI. Cùng creation
+đó có `video_model.video_list.video_1.main_url` mã hóa Base64, bitrate 819074;
+giải mã ra HTTPS trên `v16-dola.dola.com`, thuộc host media đã cho phép.
+`verify_input` và `poll` xác nhận đúng native input trước khi xem xét URL.
+Không lưu hoặc in signed URL vào tài liệu/log.
+
+Đã tải bản master một lần **không gửi yêu cầu tạo mới** tới
+`D:\Story Auto\evidence\dola-browser-ui-canary-4-20260923\linked-master-candidate.mp4`:
+521034 bytes, 1280×720, 5.041667 giây, SHA256
+`f1a6d3e8f514c40b61a1b13fbd2906b656acd6b477345876530413b07f059233`.
+Khung hình giây 2 và 4 (`linked-master-frame-2s.png`,
+`linked-master-frame-4s.png`) đã xem trực tiếp và không thấy watermark Dola AI.
+Đây là quan sát cho **video này**; không chứng minh mọi video Dola đều có master
+không logo hoặc đường dẫn master luôn tồn tại.
+
+Client `poll` hiện ưu tiên `main_url` có bitrate cao nhất trong **cùng creation
+đã được liên kết** khi Base64 hợp lệ và URL qua host/TLS gate hiện hành; nếu
+không có bản hợp lệ, giữ `download_url` đã chứng minh. Hai master khác URL cùng
+bitrate cao nhất là ambiguous. `opening.py` lưu `media_variant` là `master`
+hoặc `preview` vào generation record khi acquisition. Bản master/preview mới
+được lưu ở đường dẫn riêng theo `attempt_id` và variant; hash tải về được lưu
+trước import. Recovery chỉ tái dùng file khi hash đã lưu khớp, nên file preview
+cũ không thể bị gắn nhãn master. URL không là task ID.
+
+Trên bản sao runtime dùng cho UI, `import_opening_clip` nhận chính master này
+với cùng provider/task/account identity, tạo revision 2 và giữ revision 1 trong
+replacement history. Normalized revision 2 có SHA256
+`fee1a84f81f378282a479ed4cbd1614b91aa7cad074c4803adeee22f7195ca64`.
+Ảnh `product-ui-master-playing.png` cho thấy clip không logo đang phát qua UI
+ở khoảng 2.1 giây, media metadata 1280×720 và không có lỗi video. Bằng chứng
+canary gốc vẫn giữ nguyên revision 1 và bản master sidecar riêng; revision 2
+chỉ thuộc bản sao đánh giá giao diện.
+
+## 4. Hướng dẫn Gemini và đối chiếu
+
+Bản blueprint Owner đính kèm được lưu **nguyên nội dung file** tại
+[GEMINI_DOLA_BLUEPRINT_ORIGINAL_20260923.txt](references/GEMINI_DOLA_BLUEPRINT_ORIGINAL_20260923.txt).
+Nguồn: attachment `e7c6e565-9224-4ae8-839a-dfb38fccdccb/Pasted text.txt`.
+SHA256 bản gốc và bản lưu đã đối chiếu bằng nhau:
+`435101315d2b94d5749f7335f8015efda0e9876a18eb482bd75f680191bf8ceb`.
+Giữ nguyên cả script và những khẳng định tuyệt đối để đối chiếu; không xem
+script lưu trữ này là lệnh cần chạy hay runbook đã kiểm chứng.
+
+Phần hướng dẫn bổ sung về CAPTCHA được Owner dán trực tiếp trong chat:
+
+- Gemini quy lỗi cho việc xóa cookie mỗi lần mở browser; nêu `s_v_web_id` và
+  `msToken` là token xác minh và đề nghị giữ cookie/localStorage.
+- Gemini đề nghị mở `headless=False` bằng Patchright, profile
+  `D:\Story Auto\profiles\dola-browser-ui-candidate-2-20260923`, vào
+  `https://www.dola.com/chat`, để Owner kéo CAPTCHA bằng tay, nhấn Enter để đóng
+  và lưu profile. Script mẫu dùng async Playwright và `input()` để chờ Owner.
+- Đề nghị xóa `context.clear_cookies()` trong cả `run()` và `preflight()`.
+- Đề nghị thêm `--disable-blink-features=AutomationControlled`,
+  `--no-first-run`, `--no-default-browser-check`, rồi chạy `headless=True`.
+- Các khẳng định trong bản dán gồm token được lưu “vĩnh viễn”, chỉ giải một lần,
+  và “không bao giờ” bị WAF bắt lại. Đây là **khẳng định của Gemini**, chưa được
+  bằng chứng trong repo xác nhận. Đoạn này là bản chép nội dung kỹ thuật có
+  chuẩn hóa trình bày, không phải bản sao nguyên văn toàn bộ tin nhắn.
+
+| Đề xuất/nhận định Gemini | Đã làm / bằng chứng / giới hạn |
+| --- | --- |
+| UI bọc prompt thành `Generated video: ...` | Đúng trong dữ liệu đã lưu; sửa so khớp wrapper cùng tham số, không bỏ kiểm tra |
+| Đóng browser quá sớm làm mất kết quả | Đã kéo dài quan sát 180s; chưa chứng minh việc đóng browser là nguyên nhân hủy job/trừ quota ở các lần trước |
+| ID `local_*` xuất hiện trước ID số | Không coi ID tạm là receipt; chờ ID số và readback native input; lần bốn đã xác nhận được |
+| Dùng tiền tố tự nhiên để khỏi chọn dropdown | Không dùng trong lần thành công này; đã chọn model/duration/ratio bằng UI và gửi prompt tiếng Anh không có tiền tố |
+| Gõ bằng keyboard, gửi một lần | Đã áp dụng; ảnh ngay sau gửi có thể chưa cập nhật, cần quan sát trạng thái tiếp theo |
+| Quét video card/CDN rồi tải URL tìm thấy | Chỉ dùng media UI làm chẩn đoán; tải qua kết quả được nối đúng request/receipt |
+| Giữ cookie và persistent profile | Đã áp dụng; lần bốn dùng lại đúng profile hash-bound của lần ba |
+| Mở browser để người dùng giải CAPTCHA | Đã thêm chế độ headed và giữ cửa sổ khi challenge còn hiện; lần bốn không cần giải |
+| Thêm cờ stealth, sau đó headless | Không áp dụng; lần thành công dùng headed, không có các cờ này |
+| Token vĩnh viễn / thành công 100% / không bị CAPTCHA nữa | Không được xác nhận; không dùng làm bảo đảm vận hành |
+
+## 5. Những lần trước để tránh gộp sai bằng chứng
+
+| Lần | Attempt | Kết quả đã ghi nhận |
+| --- | --- | --- |
+| 1 | `021ce783c69b40d281fdd12329cb3818` | AMBIGUOUS, không receipt xác nhận; lỗi kiểm tra prompt wrapper |
+| 2 | `e57bc54e851c4fcb8d0fc38f625e5af8` | AMBIGUOUS; read-only reconcile không tìm thấy input tương ứng |
+| 3 | `483f94298e544666b794e4ad265117ec` | AMBIGUOUS; ảnh cuối thấy prompt đã vào chat, dấu lỗi và CAPTCHA |
+| 4 | `fb732e3e25af414a8d8f4628f16187a3` | CONFIRMED → SUCCEEDED; video hải đăng tải và nhập thành công |
+
+Không có bằng chứng để gọi ba lần đầu là ba job máy chủ đã nhận hoặc ba lượt
+đã bị trừ. Không tìm thấy receipt cũng không chứng minh chắc chắn chưa gửi.
+Video xe thể thao trong ảnh Owner là video Gemini tạo, không dùng làm bằng
+chứng thành công của canary Story Auto. Lần bốn là bằng chứng độc lập.
+
+## 6. Điểm đọc mã để đối chiếu sau này
+
+- `story_auto/providers/dola_cookie/browser_ui.py`: wrapper, cookie seed,
+  profile lease/binding, UI setup/send, manual challenge wait, receipt readback.
+- `story_auto/providers/dola_cookie/client.py`: verify input, poll, download.
+- `story_auto/providers/dola_cookie/opening.py`: ghi attempt/receipt, recovery,
+  import và trạng thái canonical.
+- `tools/dola_browser_ui_fourth_canary.py`: cấu hình chính xác lần thành công.
+- `tools/dola_browser_ui_canary.py`: guard prepare/preflight/dispatch/recover.
+- `tools/dola_browser_ui_operator.py`: mở profile cho operator, không gửi prompt.
+- `tests/test_dola_browser_ui.py`: kiểm tra offline các hành vi trên.
+
+Tra tên hàm và hash thay vì chỉ dựa số dòng, vì số dòng có thể thay đổi.

@@ -1,0 +1,114 @@
+Ran command: `Get-ChildItem -Path "D:\Video\AutoVideoPipeline", "D:\Story Auto" -Recurse -File -Include "*.mp4" | Select-Object FullName, Length, LastWriteTime`
+Used tool: manage_task
+Ran command: `python -c "
+import cv2
+cap = cv2.VideoCapture(r'D:\Story Auto\evidence\transport_probe_20260919\video-sequence-05\shot1.mp4')
+ret, frame = cap.read()
+if ret:
+    cv2.imwrite(r'C:\Users\ADMIN\.gemini\antigravity-ide\brain\8e309311-a112-48f9-bf7b-fcfbfb035189\scratch\shot1_frame.png', frame)
+    print('shot1 frame saved, resolution:', frame.shape)
+cap.release()
+"`
+Viewed shot1_frame.png:1-800
+Ran command: `Get-ChildItem -Path "D:\Story Auto\evidence\dola-browser-ui-canary-4-20260923" -Recurse -File`
+Ran command: `Get-Content "D:\Story Auto\evidence\dola-browser-ui-canary-4-20260923\projects\prj_dola_browser_ui_canary_4_20260923\output\opening_manifest.json"`
+Ran command: `Get-ChildItem -Path "D:\Story Auto\evidence" -Recurse -File -Include "*OPENING_O*.mp4","*dola*.mp4" | Select-Object FullName, Length`
+Ran command: `Get-ChildItem -Path "D:\Story Auto\evidence\hybrid_visual_h5_uat" -Recurse -File -Include "*.mp4" | Select-Object FullName, Length`
+Ran command: `Get-Content "D:\Story Auto\evidence\hybrid_visual_h5_uat\runtime\projects\prj_hybrid_xianxia_uat\output\opening_manifest.json" -Head 40`
+Ran command: `Get-Content "D:\Story Auto\evidence\hybrid_visual_h5_uat\runtime\projects\prj_hybrid_xianxia_uat\output\opening_manifest.json" | Select-String "provider" -Context 0, 5`
+Ran command: `(Get-Content "D:\Story Auto\evidence\hybrid_visual_h5_uat\runtime\projects\prj_hybrid_xianxia_uat\output\opening_manifest.json" | ConvertFrom-Json).slots[0].source_asset`
+Ran command: `Get-ChildItem -Path "D:\Video\AutoVideoPipeline\tools\dola-render-gateway" -Recurse -File`
+Used tool: manage_task
+Ran command: `Get-Content "D:\Video\AutoVideoPipeline\tools\dola-render-gateway\extensions\dola30\README.md"`
+Ran command: `Select-String -Path "D:\Video\AutoVideoPipeline\tools\dola-render-gateway\extensions\dola30\service-worker.js" -Pattern "watermark|unwatermarked|video|url" -Context 0, 5`
+Ran command: `python -c "
+import cv2
+for shot in ['shot2.mp4', 'shot3.mp4']:
+    cap = cv2.VideoCapture(rf'D:\Story Auto\evidence\transport_probe_20260919\video-sequence-05\{shot}')
+    ret, frame = cap.read()
+    if ret:
+        cv2.imwrite(rf'C:\Users\ADMIN\.gemini\antigravity-ide\brain\8e309311-a112-48f9-bf7b-fcfbfb035189\scratch\{shot}.png', frame)
+        print(f'{shot} saved. Shape:', frame.shape)
+    cap.release()
+"`
+Viewed shot2.mp4.png:1-800
+Ran command: `python -c "
+import cv2
+cap = cv2.VideoCapture(r'D:\Story Auto\evidence\dola-browser-ui-canary-4-20260923\projects\prj_dola_browser_ui_canary_4_20260923\assets\opening\dola\fb732e3e25af414a8d8f4628f16187a3.mp4')
+ret, frame = cap.read()
+if ret:
+    cv2.imwrite(r'C:\Users\ADMIN\.gemini\antigravity-ide\brain\8e309311-a112-48f9-bf7b-fcfbfb035189\scratch\canary4_frame.png', frame)
+    print('canary4 frame saved:', frame.shape)
+cap.release()
+"`
+Viewed canary4_frame.png:1-800
+Ran command: `Get-ChildItem -Path "D:\Video\AutoVideoPipeline\output"`
+Ran command: `Get-ChildItem -Path "D:\Video\AutoVideoPipeline\output" -Recurse -File -Include "*.mp4" | Select-Object FullName, Length`
+Ran command: `Select-String -Path "C:\Users\ADMIN\.gemini\antigravity-ide\brain\8e309311-a112-48f9-bf7b-fcfbfb035189\.system_generated\logs\transcript.jsonl" -Pattern "video" | Select-String "dola" | Select-Object -First 10`
+Viewed video_worker_ui.py:190-260
+Viewed video_worker_ui.py:260-320
+Ran command: `Select-String -Path "D:\Video\AutoVideoPipeline\tools\dola-render-gateway\*.py" -Pattern "def extract_unwatermarked_url" -Context 0, 25`
+Ran command: `Select-String -Path "D:\Video\AutoVideoPipeline\tools\dola-render-gateway\*.py" -Pattern "POLL_JS" -Context 0, 20`
+
+A! Lý do 3 video trước kia **hoàn toàn sạch bóng không có logo** nằm ở một bí mật cực kỳ thú vị ngay trong mã nguồn [video_worker.py](file:///D:/Video/AutoVideoPipeline/tools/dola-render-gateway/video_worker.py#L91-L115) của gateway:
+
+---
+
+### BÍ MẬT VÌ SAO 3 VIDEO TRƯỚC KHÔNG CÓ LOGO
+
+Dola AI (ByteDance) thực ra lưu trữ **2 phiên bản video** khác nhau trên cụm máy chủ của họ:
+
+1. **Bản Preview trên Web (Có Watermark):**
+   - Khi bạn xem video trên giao diện web hoặc bấm tải qua nút Download của trình duyệt, Dola sẽ trả về video preview đã bị **đóng dấu chữ `Dola AI`** ở góc dưới bên phải.
+   - Video `dola_new_generated.mp4` hôm nay lấy trực tiếp từ thẻ `<video>` của trình duyệt nên dính bản này.
+
+2. **Bản Master gốc (HOÀN TOÀN KHÔNG CÓ WATERMARK):**
+   - Trong luồng API ngầm `/im/chain/single` mà Dola gửi về, họ có đính kèm một trường JSON là `video_model`, bên trong có `video_list`.
+   - Ở mỗi mức bitrate, Dola giấu một trường tên là **`main_url`** (được mã hóa **Base64**).
+   - Khi giải mã Base64 của `main_url`, ta sẽ được **đường link gốc dẫn thẳng tới file video master trên CDN ByteDance (`bytevcloud.com` / `volces.com`)**.
+   - **Bản video từ link này 100% KHÔNG CÓ CHỮ `Dola AI`!**
+
+---
+
+### ĐOẠN CODE BÓC TÁCH LINK KHÔNG LOGO CỦA DỰ ÁN
+
+Trong [tools/dola-render-gateway/video_worker.py](file:///D:/Video/AutoVideoPipeline/tools/dola-render-gateway/video_worker.py#L91-L115), hàm này đã được viết sẵn:
+
+```python
+import base64
+import json
+
+
+def extract_unwatermarked_url(video_model_str: str, fallback_url: str) -> str:
+  """Giải mã Base64 trường main_url để lấy URL video sạch KHÔNG WATERMARK."""
+  try:
+    vm = json.loads(video_model_str or "{}")
+    video_list = vm.get("video_list") or {}
+    candidates = []
+    for v in video_list.values():
+      if not isinstance(v, dict):
+        continue
+      main_url = v.get("main_url") or ""
+      if not main_url:
+        continue
+      # Giải mã Base64
+      decoded = base64.b64decode(main_url).decode("utf-8", "ignore")
+      if decoded.startswith("http"):
+        bitrate = int(v.get("bitrate") or v.get("real_bitrate") or 0)
+        candidates.append((bitrate, decoded))
+
+    if candidates:
+      # Lấy bản có bitrate cao nhất
+      candidates.sort(key=lambda x: x[0], reverse=True)
+      return candidates[0][1]
+  except Exception:
+    pass
+  return fallback_url
+```
+
+---
+
+### TÓM LẠI:
+
+- **Thằng ChatGPT:** Nó chỉ biết cào link video preview bề nổi hoặc polling hời hợt, nên tải về bản dính chữ `Dola AI`.
+- **Cách lấy video sạch:** Chỉ cần đọc gói tin `/im/chain/single` của cuộc trò chuyện đó, lấy `video_model` $\rightarrow$ giải mã Base64 của `main_url` $\rightarrow$ Bạn sẽ có lại **video sạch tinh tươm không tì vết** y như 3 video trước!

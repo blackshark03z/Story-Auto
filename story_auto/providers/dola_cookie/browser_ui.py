@@ -1,4 +1,4 @@
-"""Opt-in Dola browser-UI submit; no automatic retry or CAPTCHA handling.
+"""Opt-in Dola browser-UI submit with visible manual CAPTCHA handling.
 
 The browser performs only the first send action. Existing Dola read/download
 code remains responsible for exact-result polling and cookie-free acquisition.
@@ -29,6 +29,7 @@ _CONVERSATION_URL = re.compile(r"^https://(?:www\.)?dola\.com/chat/([0-9]{3,40})
 _DOLA_HOSTS = {"dola.com", "www.dola.com"}
 _OBSERVATION_SECONDS = 180
 _OBSERVATION_INTERVAL_MS = 5000
+_CHALLENGE_TEXT = re.compile(r"Verify to continue|Drag the puzzle piece|xác minh để tiếp tục|拖动滑块", re.I)
 _READ_ERROR_CODES = {
     "CLIENT_REQUEST_ID_INVALID", "CREDENTIAL_OR_ACCESS_DENIED",
     "DOLA_RESULT_IDENTITY_MISMATCH", "DOLA_RESULT_IDENTITY_UNVERIFIED",
@@ -53,6 +54,18 @@ def _cookies_for_browser(header: str) -> list[dict[str, str]]:
     if not (names & _SESSION_NAMES):
         raise DolaCookieError("CREDENTIAL_MISSING", "NOT_DISPATCHED")
     return rows
+
+
+def _seed_profile_cookies(context, seed):
+    """Seed missing cookies in the bound profile without replacing newer state.
+
+    Account/cookie changes already rotate the profile via its binding digest.
+    Existing Dola cookies and local storage belong to that same bound session.
+    """
+    existing_names = {cookie["name"] for cookie in context.cookies(CHAT_URL)}
+    missing = [cookie for cookie in seed if cookie["name"] not in existing_names]
+    if missing:
+        context.add_cookies(missing)
 
 
 def _native_request_id(request, prompt: str, ratio: str, duration: int,
@@ -175,7 +188,19 @@ def _send_once(page, composer) -> None:
     if send is not None:
         send.click(timeout=5000)
     else:
-        composer.press("Enter", timeout=5000)
+        composer.click(timeout=5000)
+        page.keyboard.press("Enter")
+
+
+def _type_prompt(page, composer, prompt: str, *, after_challenge: bool = False) -> None:
+    """A surviving draft must match exactly; never append the prompt twice."""
+    draft = composer.evaluate("element => element.value ?? element.textContent ?? ''")
+    if after_challenge and draft == prompt:
+        return
+    if draft != "":
+        raise DolaCookieError("DOLA_COMPOSER_NOT_EMPTY", "NOT_DISPATCHED")
+    composer.click(timeout=5000)
+    page.keyboard.type(prompt, delay=20)
 
 
 def _prepare_video_ui(page, *, duration: int, ratio: str):
@@ -201,7 +226,13 @@ def _prepare_video_ui(page, *, duration: int, ratio: str):
         raise DolaCookieError("DOLA_BROWSER_AUTH_UNVERIFIED", "NOT_DISPATCHED")
     entry.click(timeout=5000)
     page.wait_for_timeout(500)
-    model = _one_visible(page.get_by_text("2.0 Fast", exact=True))
+    model = None
+    model_deadline = time.monotonic() + 10
+    while time.monotonic() < model_deadline:
+        model = _one_visible(page.get_by_text("2.0 Fast", exact=True))
+        if model is not None:
+            break
+        page.wait_for_timeout(250)
     if (model is None or " ".join(
             (model.evaluate("element => element.parentElement?.textContent ?? ''") or "").split()
     ) != "Model 2.0 Fast"):
@@ -236,6 +267,52 @@ def _prepare_video_ui(page, *, duration: int, ratio: str):
 class PatchrightDolaRunner:
     """One native page send, followed only by read-only identity checks."""
 
+    def __init__(self, *, screenshot_dir: Path | None = None, operator_visible: bool = False):
+        self.screenshot_dir = screenshot_dir
+        self.operator_visible = operator_visible
+
+    def _challenge_visible(self, page):
+        for frame in page.frames:
+            locator = frame.get_by_text(_CHALLENGE_TEXT)
+            if any(locator.nth(index).is_visible() for index in range(locator.count())):
+                return True
+        return False
+
+    def _wait_for_operator(self, page):
+        """Observe only. The human handles the challenge in the same window."""
+        if not self._challenge_visible(page):
+            return 0.0
+        if not self.operator_visible:
+            raise DolaCookieError("DOLA_NEEDS_OPERATOR", "AMBIGUOUS")
+        started = time.monotonic()
+        page.bring_to_front()
+        self._snapshot(page, "needs-operator")
+        print("DOLA_NEEDS_OPERATOR: complete verification in the open browser; do not resend", flush=True)
+        while self._challenge_visible(page):
+            page.wait_for_timeout(500)
+        self._snapshot(page, "operator-challenge-dismissed")
+        print("DOLA_CHALLENGE_DISMISSED: checking the same attempt; no resend", flush=True)
+        return time.monotonic() - started
+
+    def _snapshot(self, page, phase):
+        if self.screenshot_dir is not None:
+            try:
+                self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+                page.screenshot(path=str(self.screenshot_dir / f"{phase}.png"))
+            except Exception:
+                pass
+
+    def _prepare_with_operator(self, page, *, duration: int, ratio: str):
+        """Keep a pre-send challenge open for the human, then redo UI checks."""
+        for _ in range(3):
+            try:
+                return _prepare_video_ui(page, duration=duration, ratio=ratio)
+            except Exception:
+                if not self.operator_visible or not self._challenge_visible(page):
+                    raise
+                self._wait_for_operator(page)
+        raise DolaCookieError("DOLA_NEEDS_OPERATOR", "NOT_DISPATCHED")
+
     def preflight(self, *, cookie: str, profile: Path, account_id: str,
                   binding: str, ratio: str, duration: int) -> dict[str, object]:
         """Exercise the same pre-send controls with an empty composer."""
@@ -248,14 +325,13 @@ class PatchrightDolaRunner:
             _bind_profile(profile, account_id, binding)
             with sync_playwright() as playwright:
                 context = playwright.chromium.launch_persistent_context(
-                    str(profile), headless=True, locale="en-US",
+                    str(profile), headless=not self.operator_visible, locale="en-US",
                     viewport={"width": 1440, "height": 900},
                 )
                 try:
-                    context.clear_cookies()
-                    context.add_cookies(seed)
+                    _seed_profile_cookies(context, seed)
                     page = context.pages[0] if context.pages else context.new_page()
-                    composer = _prepare_video_ui(page, duration=duration, ratio=ratio)
+                    composer = self._prepare_with_operator(page, duration=duration, ratio=ratio)
                     if composer.evaluate("element => element.value ?? element.textContent ?? ''").strip() or _CONVERSATION_URL.fullmatch(page.url):
                         raise DolaCookieError("DOLA_PREFLIGHT_NOT_EMPTY", "NOT_DISPATCHED")
                     return {"status": "UI_READY_NO_SUBMIT", "account_id": account_id,
@@ -276,16 +352,25 @@ class PatchrightDolaRunner:
             _bind_profile(profile, account_id, binding)
             with sync_playwright() as playwright:
                 context = playwright.chromium.launch_persistent_context(
-                    str(profile), headless=True, locale="en-US",
+                    str(profile), headless=not self.operator_visible, locale="en-US",
                     viewport={"width": 1440, "height": 900},
                 )
                 try:
-                    context.clear_cookies()
-                    context.add_cookies(seed)
+                    _seed_profile_cookies(context, seed)
                     page = context.pages[0] if context.pages else context.new_page()
-                    composer = _prepare_video_ui(page, duration=duration, ratio=ratio)
-                    composer.fill(prompt)
-                    if _one_visible(page.get_by_text(re.compile(r"captcha|verify|xác minh|滑块", re.I))):
+                    composer = self._prepare_with_operator(page, duration=duration, ratio=ratio)
+                    after_challenge = False
+                    for _ in range(3):
+                        _type_prompt(page, composer, prompt, after_challenge=after_challenge)
+                        if self.operator_visible and self._challenge_visible(page):
+                            self._wait_for_operator(page)
+                            composer = self._prepare_with_operator(page, duration=duration, ratio=ratio)
+                            after_challenge = True
+                            continue
+                        if _one_visible(page.get_by_text(re.compile(r"captcha|verify|xác minh|滑块", re.I))):
+                            raise DolaCookieError("DOLA_NEEDS_OPERATOR", "NOT_DISPATCHED")
+                        break
+                    else:
                         raise DolaCookieError("DOLA_NEEDS_OPERATOR", "NOT_DISPATCHED")
 
                     baseline_conversations = _ui_conversation_ids(page)
@@ -322,6 +407,7 @@ class PatchrightDolaRunner:
 
                     page.on("request", observe)
                     page.on("response", observe_response)
+                    self._snapshot(page, "before-send")
                     send_error = False
                     deadline = time.monotonic() + _OBSERVATION_SECONDS
                     try:
@@ -330,6 +416,7 @@ class PatchrightDolaRunner:
                         # A timed-out click may already have sent. Keep its
                         # browser/SSE alive while looking for exact readback.
                         send_error = True
+                    self._snapshot(page, "after-send")
                     conversation_id = None
                     verified = False
                     candidate_seen = False
@@ -352,6 +439,8 @@ class PatchrightDolaRunner:
 
                     while time.monotonic() < deadline:
                         try:
+                            if self.operator_visible:
+                                deadline += self._wait_for_operator(page)
                             media_seen |= _ui_media_count(page) > baseline_media_count
                             candidate_ids = _ui_conversation_ids(page) - baseline_conversations
                             matched = _CONVERSATION_URL.fullmatch(page.url)
@@ -416,6 +505,8 @@ class PatchrightDolaRunner:
                                           http_status=response_status,
                                           read_diagnostic=read_diagnostic)
                 finally:
+                    if 'page' in locals():
+                        self._snapshot(page, "final")
                     context.close()
 
 

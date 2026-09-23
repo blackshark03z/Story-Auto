@@ -55,6 +55,14 @@ class DolaOperatorGateTests(unittest.TestCase):
                                                    account_id="daily", confirm_generate=True)
         self.client.preflight.assert_not_called()
 
+    def test_exact_gate_uses_visible_browser_for_manual_verification(self):
+        with patch.dict(os.environ, {"STORY_AUTO_DOLA_BROWSER_UI_ENABLED": "1",
+                                     "STORY_AUTO_DOLA_BROWSER_UI_PROJECT": "prj_dola",
+                                     "STORY_AUTO_DOLA_BROWSER_UI_ACCOUNT": "daily"}), \
+                patch("story_auto.providers.dola_cookie.browser_ui.DolaBrowserUIClient") as browser:
+            self.service._dola_browser_client("prj_dola", "daily")
+        self.assertTrue(browser.call_args.kwargs["runner"].operator_visible)
+
     def test_exact_project_account_slot_and_confirmation_are_required(self):
         with patch.dict(os.environ, {"STORY_AUTO_DOLA_BROWSER_UI_ENABLED": "1",
                                      "STORY_AUTO_DOLA_BROWSER_UI_PROJECT": "prj_dola",

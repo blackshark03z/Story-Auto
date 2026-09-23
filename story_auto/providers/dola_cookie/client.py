@@ -5,6 +5,7 @@ automation, cookie pool, reference upload, or retry policy is hidden here.
 """
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import re
@@ -184,6 +185,77 @@ def _video_urls(payload: dict[str, Any]) -> list[str]:
                         raise DolaCookieError("PROVIDER_RESULT_URL_REJECTED", "DISPATCH_CONFIRMED")
                     urls.append(canonical)
     return list(dict.fromkeys(urls))
+
+
+def _linked_master_url(payload: dict[str, Any], download_url: str) -> str | None:
+    """Prefer a safe master variant inside the exact linked video creation.
+
+    The caller first proves the conversation/input/reply linkage using the
+    ordinary download URL. A decoded URL from any other creation is ignored.
+    """
+    messages = ((payload.get("downlink_body") or {}).get("pull_singe_chain_downlink_body") or {}).get("messages")
+    if not isinstance(messages, list):
+        return None
+    candidates: list[tuple[int, str]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            try:
+                content = json.loads(content)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("block_type") != 2074:
+                continue
+            creations = ((block.get("content") or {}).get("creation_block") or {}).get("creations")
+            if not isinstance(creations, list):
+                continue
+            for creation in creations:
+                if not isinstance(creation, dict) or creation.get("type") != 2:
+                    continue
+                video = creation.get("video") or {}
+                preview = video.get("download_url") if isinstance(video, dict) else None
+                if not isinstance(preview, str) or _canonical_media_url(preview) != download_url:
+                    continue
+                model = video.get("video_model")
+                if isinstance(model, str):
+                    if len(model) > 128 * 1024:
+                        continue
+                    try:
+                        model = json.loads(model)
+                    except json.JSONDecodeError:
+                        continue
+                variants = model.get("video_list") if isinstance(model, dict) else None
+                if not isinstance(variants, dict):
+                    continue
+                for variant in variants.values():
+                    if not isinstance(variant, dict):
+                        continue
+                    token = variant.get("main_url")
+                    if not isinstance(token, str) or not 1 <= len(token) <= 8192:
+                        continue
+                    try:
+                        url = base64.b64decode(token, validate=True).decode("utf-8")
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    canonical = _canonical_media_url(url)
+                    if not canonical or not _safe_host(canonical):
+                        continue
+                    bitrate = variant.get("bitrate") or variant.get("real_bitrate") or 0
+                    if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate < 0:
+                        continue
+                    candidates.append((bitrate, canonical))
+    if not candidates:
+        return None
+    highest = max(rate for rate, _ in candidates)
+    best = {url for rate, url in candidates if rate == highest}
+    if len(best) != 1:
+        raise DolaCookieError("PROVIDER_RESULT_AMBIGUOUS", "DISPATCH_CONFIRMED")
+    return best.pop()
 
 
 class DolaCookieClient:
@@ -435,6 +507,9 @@ class DolaCookieClient:
                         raise DolaCookieError("DOLA_RESULT_IDENTITY_UNVERIFIED", "DISPATCH_CONFIRMED")
                 if not linked:
                     raise DolaCookieError("DOLA_RESULT_IDENTITY_UNVERIFIED", "DISPATCH_CONFIRMED")
+            master = _linked_master_url(payload, urls[0])
+            if master:
+                return {"status": "COMPLETED", "video_url": master, "media_variant": "master"}
             return {"status": "COMPLETED", "video_url": urls[0]}
         text = " ".join(str(node.get("text", "")) for node in _walk(payload))
         return {"status": "FAILED" if _CREDIT_FAILURE.search(text) else "PENDING"}

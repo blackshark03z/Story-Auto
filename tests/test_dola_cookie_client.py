@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 import json
 from pathlib import Path
@@ -55,6 +56,45 @@ def _chain(*urls: str) -> bytes:
 
 
 class DolaCookieClientTests(unittest.TestCase):
+    def test_poll_prefers_master_from_the_same_video_creation(self):
+        preview = "https://v16-dola.dola.com/preview.mp4"
+        master = "https://v16-dola.dola.com/master.mp4"
+        unrelated = "https://v16-dola.dola.com/unrelated.mp4"
+        payload = json.loads(_chain(preview))
+        message = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"][0]
+        content = json.loads(message["content"])
+        video = content[0]["content"]["creation_block"]["creations"][0]["video"]
+        video["video_model"] = json.dumps({"video_list": {
+            "low": {"main_url": base64.b64encode(unrelated.encode()).decode(), "bitrate": 100},
+            "high": {"main_url": base64.b64encode(master.encode()).decode(), "bitrate": 200},
+        }})
+        content[0]["content"]["creation_block"]["creations"].append({
+            "type": 2, "video": {"download_url": "https://v16-dola.dola.com/other.mp4",
+                                 "video_model": json.dumps({"video_list": {"higher": {
+                                     "main_url": base64.b64encode(unrelated.encode()).decode(),
+                                     "bitrate": 1000}}})}})
+        # More than one creation is still ambiguous, even if a master matches.
+        message["content"] = json.dumps(content)
+        with self.assertRaisesRegex(DolaCookieError, "PROVIDER_RESULT_AMBIGUOUS"):
+            DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode()))).poll("conv-1")
+        content[0]["content"]["creation_block"]["creations"].pop()
+        message["content"] = json.dumps(content)
+        result = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode()))).poll("conv-1")
+        self.assertEqual(result, {"status": "COMPLETED", "video_url": master, "media_variant": "master"})
+
+    def test_poll_falls_back_to_preview_when_master_is_unsafe(self):
+        preview = "https://v16-dola.dola.com/preview.mp4"
+        payload = json.loads(_chain(preview))
+        message = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"][0]
+        content = json.loads(message["content"])
+        video = content[0]["content"]["creation_block"]["creations"][0]["video"]
+        video["video_model"] = json.dumps({"video_list": {"unsafe": {
+            "main_url": base64.b64encode(b"http://other.invalid/video.mp4").decode(),
+            "bitrate": 9000}}})
+        message["content"] = json.dumps(content)
+        result = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode()))).poll("conv-1")
+        self.assertEqual(result, {"status": "COMPLETED", "video_url": preview})
+
     def test_current_sessionid_ss_is_accepted_and_forwarded_without_aliasing(self):
         cookie = "sessionid_ss=opaque-current; passport_csrf_token=opaque-csrf"
         client = DolaCookieClient(cookie)

@@ -77,6 +77,41 @@ class DolaOpeningTests(unittest.TestCase):
         self.run_slot(client)
         self.assertEqual((client.submits, client.downloads), (1, 1))
 
+    def test_linked_master_variant_is_recorded_with_canonical_import(self):
+        class MasterDola(FakeDola):
+            def poll(self, task, *, client_request_id=None):
+                result = super().poll(task, client_request_id=client_request_id)
+                if result["status"] == "COMPLETED":
+                    result["media_variant"] = "master"
+                return result
+
+        slot = self.run_slot(MasterDola())["slots"][0]
+        self.assertEqual(slot["api_generation"]["media_variant"], "master")
+        self.assertEqual(slot["source_asset"]["provider"], "dola_cookie")
+
+    def test_recovery_does_not_relabel_old_preview_as_master(self):
+        class MasterDola(FakeDola):
+            def poll(self, task, *, client_request_id=None):
+                result = super().poll(task, client_request_id=client_request_id)
+                if result["status"] == "COMPLETED":
+                    result["media_variant"] = "master"
+                return result
+
+        client = MasterDola(pending=True)
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        legacy = self.paths.artifact_path(f"assets/opening/dola/{first['attempt_id']}.mp4")
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_bytes(b"old-preview-fixture")
+        client.pending = False
+        slot = self.run_slot(client)["slots"][0]
+        self.assertEqual(client.submits, 1)
+        self.assertEqual(client.downloads, 1)
+        self.assertEqual(slot["api_generation"]["media_variant"], "master")
+        self.assertEqual(slot["api_generation"]["acquired_sha256"], slot["source_asset"]["sha256"])
+        self.assertTrue(self.paths.artifact_path(
+            f"assets/opening/dola/{first['attempt_id']}-master.mp4").is_file())
+        self.assertEqual(legacy.read_bytes(), b"old-preview-fixture")
+
     def test_missing_receipt_cannot_repeat_or_switch_account(self):
         client = FakeDola(crash="before_receipt")
         first = self.run_slot(client)["slots"][0]["api_generation"]

@@ -505,10 +505,11 @@ class OperatorService:
     def _dola_browser_client(self, project_id: str, account_id: str):
         if not account_id or self._dola_browser_gate_account(project_id) != account_id:
             raise OperatorServiceError("DOLA_BROWSER_GATE_NOT_ENABLED")
-        from story_auto.providers.dola_cookie.browser_ui import DolaBrowserUIClient
+        from story_auto.providers.dola_cookie.browser_ui import DolaBrowserUIClient, PatchrightDolaRunner
         cookie = DolaAccountStore().get_cookie(account_id)
         return DolaBrowserUIClient(cookie, account_id=account_id,
-                                   profile_dir=self.runtime.root / "profiles" / "dola" / account_id)
+                                   profile_dir=self.runtime.root / "profiles" / "dola" / account_id,
+                                   runner=PatchrightDolaRunner(operator_visible=True))
 
     def preflight_dola_opening(self, project_id: str, *, slot_id: str, account_id: str) -> dict[str, Any]:
         client = self._dola_browser_client(project_id, account_id)

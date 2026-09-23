@@ -8,6 +8,7 @@ import re
 import time
 from uuid import uuid4
 
+from story_auto.core.artifacts import sha256_file
 from story_auto.core.project.lock import ProjectLock
 from story_auto.core.visual.opening_builder import import_opening_clip
 from story_auto.providers.byteplus_seedance.opening import (
@@ -197,12 +198,24 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                     update(status="FAILED_TERMINAL", failure_class="DOLA_PROVIDER_FAILED")
                     break
                 if status == "COMPLETED":
-                    update(status="ACQUIRING", provider_task_status="succeeded")
-                    destination = paths.artifact_path(f"assets/opening/dola/{attempt_id}.mp4")
+                    variant = result.get("media_variant")
+                    variant = variant if variant in {"master", "preview"} else "preview"
+                    with ProjectLock(runtime, project_id):
+                        current, current_slot = _load_slot(paths, project_id, slot_id)
+                        saved = current_slot.get("api_generation") or {}
+                        saved_hash = (saved.get("acquired_sha256")
+                                      if saved.get("media_variant") == variant else None)
+                    update(status="ACQUIRING", provider_task_status="succeeded",
+                           media_variant=variant, acquired_sha256=saved_hash)
+                    destination = paths.artifact_path(f"assets/opening/dola/{attempt_id}-{variant}.mp4")
                     # Acquire through the same conversation on every recovery;
                     # URLs never become durable task identity.
-                    if not destination.exists():
+                    if destination.exists():
+                        if not saved_hash or sha256_file(destination) != saved_hash:
+                            raise DolaCookieError("DOLA_ACQUIRED_ASSET_UNVERIFIED", "DISPATCH_CONFIRMED")
+                    else:
                         active.download(result["video_url"], destination)
+                        update(acquired_sha256=sha256_file(destination))
                     import_opening_clip(runtime.root, project_id, slot_id, destination,
                                         original_filename=f"dola_{slot_id}.mp4",
                                         _provider_identity={"provider": PROVIDER_ID, "provider_task_id": task_id,

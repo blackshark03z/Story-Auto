@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from story_auto.providers.dola_cookie.browser_ui import (
     DolaBrowserUIClient, PatchrightDolaRunner, _CONVERSATION_URL, _bind_profile, _cookies_for_browser,
-    _native_request_id, _send_once,
+    _native_request_id, _send_once, _seed_profile_cookies, _type_prompt,
 )
 from story_auto.providers.dola_cookie.client import DolaCookieError
 
@@ -33,6 +33,77 @@ def _native_request(*, prompt="a river", ratio="16:9", duration=5, model="seedan
 
 
 class DolaBrowserUITests(unittest.TestCase):
+    def test_surviving_draft_is_never_doubled_after_manual_challenge(self):
+        page = Mock()
+        composer = Mock()
+        composer.evaluate.side_effect = ["", "a river", "partial a river"]
+        _type_prompt(page, composer, "a river")
+        _type_prompt(page, composer, "a river", after_challenge=True)
+        page.keyboard.type.assert_called_once_with("a river", delay=20)
+        composer.click.assert_called_once()
+        with self.assertRaisesRegex(DolaCookieError, "DOLA_COMPOSER_NOT_EMPTY"):
+            _type_prompt(page, composer, "a river", after_challenge=True)
+        page.keyboard.type.assert_called_once()
+
+    def test_initial_stale_draft_fails_before_any_type_or_send(self):
+        page = Mock()
+        composer = Mock()
+        composer.evaluate.return_value = "old draft"
+        with self.assertRaisesRegex(DolaCookieError, "DOLA_COMPOSER_NOT_EMPTY"):
+            _type_prompt(page, composer, "a river")
+        page.keyboard.type.assert_not_called()
+        page.keyboard.press.assert_not_called()
+
+    def test_pre_send_challenge_waits_in_same_window_then_rechecks_controls(self):
+        runner = PatchrightDolaRunner(operator_visible=True)
+        page = Mock()
+        composer = Mock()
+        with patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui",
+                   side_effect=[DolaCookieError("DOLA_NEEDS_OPERATOR", "NOT_DISPATCHED"), composer]) as prepare, \
+                patch.object(runner, "_challenge_visible", side_effect=[True, True, True, False]), \
+                patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=[10, 11]):
+            self.assertIs(runner._prepare_with_operator(page, duration=5, ratio="16:9"), composer)
+        self.assertEqual(prepare.call_count, 2)
+        page.bring_to_front.assert_called_once()
+        page.wait_for_timeout.assert_called_once_with(500)
+        page.context.close.assert_not_called()
+        page.keyboard.press.assert_not_called()
+
+    def test_manual_challenge_wait_preserves_browser_without_sending(self):
+        runner = PatchrightDolaRunner(operator_visible=True)
+        page = Mock()
+        with patch.object(runner, "_challenge_visible", side_effect=[True, True, False]), \
+                patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=[10, 310]):
+            elapsed = runner._wait_for_operator(page)
+        self.assertEqual(elapsed, 300)
+        page.wait_for_timeout.assert_called_once_with(500)
+        page.bring_to_front.assert_called_once()
+        page.keyboard.press.assert_not_called()
+        page.context.close.assert_not_called()
+
+    def test_profile_seed_preserves_existing_session_and_verification_cookies(self):
+        context = Mock()
+        context.cookies.return_value = [
+            {"name": "sessionid", "value": "newer-session"},
+            {"name": "msToken", "value": "newer-token"},
+            {"name": "s_v_web_id", "value": "verification-fixture"},
+        ]
+        _seed_profile_cookies(context, _cookies_for_browser(COOKIE))
+        context.add_cookies.assert_called_once_with([
+            {"name": "store-idc", "value": "fixture-idc", "url": "https://www.dola.com/chat"}
+        ])
+        context.clear_cookies.assert_not_called()
+
+    def test_empty_profile_is_seeded_once(self):
+        context = Mock()
+        seed = _cookies_for_browser(COOKIE)
+        context.cookies.return_value = []
+        _seed_profile_cookies(context, seed)
+        context.cookies.return_value = seed
+        _seed_profile_cookies(context, seed)
+        context.add_cookies.assert_called_once_with(seed)
+        context.clear_cookies.assert_not_called()
+
     def test_conversation_url_allows_only_dola_apex_or_www(self):
         for url in ("https://www.dola.com/chat/12345", "https://dola.com/chat/12345"):
             self.assertEqual(_CONVERSATION_URL.fullmatch(url).group(1), "12345")
@@ -156,6 +227,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 self.elapsed = 0.0
                 self.page = Mock(url="https://www.dola.com/chat/12345")
                 self.context = Mock(pages=[self.page])
+                self.context.cookies.return_value = []
                 self.playwright = Mock()
                 self.playwright.chromium.launch_persistent_context.return_value = self.context
                 self.manager = MagicMock()
@@ -187,7 +259,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
                 patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
-                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
+                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock(evaluate=Mock(return_value=""))):
             result = PatchrightDolaRunner().run(
                 cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",
                 binding="a" * 64, prompt="a river", ratio="16:9", duration=5,
@@ -209,7 +281,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
                 patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
-                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
+                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock(evaluate=Mock(return_value=""))):
             with self.assertRaisesRegex(DolaCookieError, "NATIVE_REQUEST_UNVERIFIED"):
                 PatchrightDolaRunner().run(
                     cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",
@@ -229,7 +301,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                 patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
                 patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
-                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
+                patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock(evaluate=Mock(return_value=""))):
             with self.assertRaisesRegex(DolaCookieError, "PERSIST_FAILED"):
                 PatchrightDolaRunner().run(
                     cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",
@@ -248,6 +320,7 @@ class DolaBrowserUITests(unittest.TestCase):
                 self.media_at = media_at
                 self.page = Mock(url="https://www.dola.com/chat/local_123")
                 self.context = Mock(pages=[self.page])
+                self.context.cookies.return_value = []
                 playwright = Mock()
                 playwright.chromium.launch_persistent_context.return_value = self.context
                 self.manager = MagicMock()
@@ -305,7 +378,7 @@ class DolaBrowserUITests(unittest.TestCase):
                     patch("story_auto.providers.dola_cookie.browser_ui._profile_lease", return_value=nullcontext()), \
                     patch("story_auto.providers.dola_cookie.browser_ui._bind_profile"), \
                     patch("story_auto.providers.dola_cookie.browser_ui.time.monotonic", side_effect=lambda: browser.elapsed), \
-                    patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock()):
+                    patch("story_auto.providers.dola_cookie.browser_ui._prepare_video_ui", return_value=Mock(evaluate=Mock(return_value=""))):
                 try:
                     result = PatchrightDolaRunner().run(
                         cookie=COOKIE, profile=Path(directory) / "profile", account_id="daily",

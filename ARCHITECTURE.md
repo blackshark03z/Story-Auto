@@ -35,6 +35,15 @@ reference images and observed upstream model identity remain unqualified.
 This is distinct from the unimplemented `dola_official` placeholder. See
 Decision 0011 for the Owner's change to the earlier official-only restriction.
 
+An explicitly constructed browser UI transport also exists in
+`providers/dola_cookie/browser_ui.py`. Its headed, bound persistent-profile
+canary completed one live acquisition on 2026-09-23. It preserves profile
+cookies, sends through the native UI once, confirms exact input readback before
+accepting a conversation receipt, and reuses same-receipt recovery and canonical
+import. This does not establish default product routing or unattended stability.
+See [the browser UI runbook and Gemini comparison](docs/DOLA_BROWSER_UI_RUNBOOK_20260923.md)
+for the successful source/runtime identity and archived reference guidance.
+
 One modular production pipeline with mode-specific media policy and provider boundaries. Never build a separate Full Image, Full Video, or legacy-mode pipeline.
 
 ## Architecture drivers
