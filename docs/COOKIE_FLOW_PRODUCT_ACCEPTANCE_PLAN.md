@@ -20,6 +20,10 @@ of that scope. The Dola button itself has produced one ready five-second master
 without a visible logo. A new Dola-containing final would require O2/O3 and
 body material, and no further Dola request is authorized. IAB inline video Play
 still crashes; Chrome played the accepted Flow final and an earlier Dola master.
+The exact candidate UI displayed Complete/100% and the final result on port
+8785. Read-only promotion comparison found 86 overlaps with the dirty source
+work; 16 contents differ, so no `main` update was attempted. Evidence:
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\PROMOTION_RECONCILIATION.json`.
 
 ## Product-button update — 2026-09-23
 

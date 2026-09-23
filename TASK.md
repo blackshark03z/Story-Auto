@@ -18,6 +18,11 @@ obtain explicit Owner acceptance of the scoped product. If the Owner requires
 a Dola-containing final, the separate Dola project still needs O2/O3 and body
 inputs, and no further provider send is authorized. In-app browser inline Play
 still crashes, while system Chrome playback of the accepted final passed.
+The current candidate UI also displayed Complete/100% and the final result
+from a local server at port 8785. Read-only promotion comparison found 86
+overlapping paths between source dirty work and candidate changes: 70 have
+identical content, 16 differ. `main` was not advanced. Evidence:
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\PROMOTION_RECONCILIATION.json`.
 
 ## 2026-09-23 product-button Dola qualification
 
