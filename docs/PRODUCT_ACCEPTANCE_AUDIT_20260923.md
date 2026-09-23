@@ -12,13 +12,26 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
   `feeb9f0e696a0de42c6ef9c8201e7d1348d86f36`. Working tree was clean
   before this audit-only update; its commit changes documentation only.
 - Source `main` remains HEAD `5464cbb1d1c11a550b5e096647b9f94587de5bfe`.
-  A fresh release preflight found 92 dirty/untracked entries, including six
-  untracked temporary directories; 86 of 87 candidate-changed paths overlap
-  source dirt. Byte comparison found 78 identical files, 8 files differing
-  between source and candidate, and this audit file absent from source.
-  These are current-state observations, not permission to overwrite any path.
+  The current read-only release preflight found 92 dirty/untracked entries
+  (21 tracked changes, 71 untracked). The candidate differs from source HEAD
+  on 92 paths; comparing those paths to the current source working tree found
+  74 byte-identical, 12 different, and 6 absent from source. The 12 different
+  paths include the Dola adapter, application routing, UI and tests; no path
+  may be overwritten from this count alone. These are current-state
+  observations, not permission to overwrite any path.
   Do not merge, reset, clean, or stage source without an exact
   Owner-authorized promotion scope and file-by-file reconciliation.
+  Current differing paths: `TASK.md`,
+  `docs/COOKIE_FLOW_PRODUCT_ACCEPTANCE_PLAN.md`, `docs/dola-cookie-ux.md`,
+  `story_auto/application/operator.py`, the Dola `accounts.py`, `client.py`,
+  `opening.py`, `story_auto/providers/video_generation.py`,
+  `story_auto/ui/static/app.js`, and three Dola test files (`accounts`,
+  `cookie_client`, `opening`). Candidate-only paths: this audit,
+  `docs/DOLA_GATEWAY_COMPARISON_20260923.md`,
+  `docs/DOLA_INTEGRATION_AUTHORIZATION_REQUEST.md`,
+  `docs/DOLA_UNVERIFIED_UX_REVIEW_20260923.md`,
+  `tests/test_dola_approved_canary.py`, and
+  `tools/dola_cookie_approved_canary.py`.
 - The earlier UI snapshot on `127.0.0.1:8778` ran in process 19580. The
   candidate UI was restarted after the Dola safety gate, preserving the Flow
   RPC gate for the same bound Google project. Runtime check reports process
@@ -38,7 +51,7 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 | Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
 | Dola account/live canaries | One encrypted account saved. Old attempt `ba87f1eb...` remains ambiguous. Owner-approved separate canary `9a849c09...` observed HTTP 200 but no parseable SSE receipt; one submit, no task ID/asset. Fresh positive/negative control showed login-required UI in both contexts, withdrawing the earlier HTTP-200 auth claim. Owner reports no job/credit deduction. Product UI and server now block fresh Dola submission until verification; confirmed receipt can still be polled. See `evidence/dola-cookie-approved-canary-20260923/POST_DISPATCH.md` | AMBIGUOUS; auth NOT PASS; no retry |
 | Dola provider permission | Owner reports direct Dola confirmation that cookie integration is allowed; no written scope is recorded here. Owner explicitly approved one separate new canary after the unresolved-effect warning | OWNER-ATTESTED; production scope unverified |
-| Release promotion | Source has 92 dirty/untracked entries and 86/87 candidate-path overlap at the previous preflight. Dola cookie path remains chosen; no exact Owner authorization to promote this new candidate | PENDING OWNER DECISION |
+| Release promotion | Source has 92 dirty/untracked entries. Across 92 candidate-changed paths, 74 match current source bytes, 12 differ, and 6 are absent there. No exact Owner authorization to promote this candidate or reconcile the 12 different paths | PENDING OWNER DECISION |
 
 ## Next decision and allowed work
 
