@@ -65,19 +65,27 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
             if generation:
                 if generation.get("provider") != PROVIDER_ID or generation.get("account_id") != account_id:
                     raise DolaCookieError("DOLA_ATTEMPT_IDENTITY_MISMATCH")
+                known_unsent = (generation.get("status") == "FAILED_PRE_DISPATCH"
+                                and generation.get("dispatch_state") == "NOT_DISPATCHED"
+                                and not generation.get("provider_task_id")
+                                and not generation.get("provider_local_message_id")
+                                and int(generation.get("provider_submissions", 0)) == 0)
                 if (not generation.get("provider_task_id")
                         and generation.get("transport", "cookie_http") != transport):
                     raise DolaCookieError("DOLA_TRANSPORT_MISMATCH")
                 if (generation.get("transport", "cookie_http") == "browser_ui"
                         and transport == "browser_ui"
                         and generation.get("profile_binding") != profile_binding):
-                    raise DolaCookieError("DOLA_PROFILE_BINDING_MISMATCH")
+                    if not known_unsent:
+                        raise DolaCookieError("DOLA_PROFILE_BINDING_MISMATCH")
+                    generation.setdefault("previous_profile_bindings", []).append(
+                        generation.get("profile_binding"))
+                    generation["profile_binding"] = profile_binding
                 if generation.get("prompt_sha256") != slot.get("prompt_sha256"):
                     raise DolaCookieError("DOLA_PROMPT_CHANGED")
                 if generation.get("status") in {"SUCCEEDED", "FAILED_TERMINAL"}:
                     return _safe_view(runtime.root, project_id)
-                if (generation.get("status") == "FAILED_PRE_DISPATCH"
-                        and generation.get("dispatch_state") == "NOT_DISPATCHED"):
+                if known_unsent:
                     generation.update(status="PRE_DISPATCH", dispatch_state="AMBIGUOUS",
                                       submit_attempts=int(generation.get("submit_attempts", 0)) + 1,
                                       failure_class=None, updated_at=_now())

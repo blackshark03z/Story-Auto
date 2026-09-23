@@ -307,8 +307,10 @@ function openingBuilderSurface(snapshot) {
       flowControls = `<small>Flow session ${esc(api.account_id)} · revision ${esc(api.revision)}. Recovery checks this same video only; it never creates a replacement.</small><button data-opening-flow="${esc(slot.slot_id)}" data-resume="true" type="button">Check / recover Flow video</button><button data-opening-flow-reset="${esc(slot.slot_id)}" type="button">Reset unused setup</button><small>Reset is allowed only when saved evidence proves that no upload or generation was attempted. Attempt history is preserved.</small>`;
     }
     if (!ready && noProvider) {
-      if (allowDola && dola.configured && dola.live_verified && dola.generation_enabled && Number(slot.duration_seconds) <= 10) {
+      if (allowDola && dola.configured && dola.live_verified && dola.generation_enabled && dola.verified_slot_id === slot.slot_id && Number(slot.duration_seconds) <= 10) {
         providerControls += `<label>Dola account <select aria-label="Dola account for ${esc(slot.slot_id)}" data-opening-dola-account="${esc(slot.slot_id)}">${(dola.accounts || []).map(a => `<option value="${esc(a.account_id)}">${esc(a.account_id)}</option>`).join('')}</select></label><button data-opening-dola="${esc(slot.slot_id)}" type="button">Generate with Dola</button>`;
+      } else if (allowDola && dola.browser_gate_configured && Number(slot.duration_seconds) <= 10) {
+        providerControls += `<button data-opening-dola-check="${esc(slot.slot_id)}" data-account="${esc(dola.browser_account_id)}" type="button">Check Dola session</button>`;
       }
       if (allowBytePlus && byteplus.status === 'READY') providerControls += `<button data-opening-api="${esc(slot.slot_id)}" type="button">Generate with BytePlus</button>`;
       if (allowElyum && elyum.configured) {
@@ -320,8 +322,12 @@ function openingBuilderSurface(snapshot) {
           providerControls += `<button data-opening-elyum-preflight="${esc(slot.slot_id)}" type="button">Check Elyum options</button>`;
         }
       }
-    } else if (!ready && dolaActive && dola.live_verified && dola.generation_enabled && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED') {
-      providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Try Dola after updating cookie</button>`;
+    } else if (!ready && dolaActive && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' && !api.provider_task_id && !api.provider_local_message_id && Number(api.provider_submissions || 0) === 0 && dola.browser_gate_configured && dola.browser_account_id === api.account_id) {
+      if (dola.live_verified && dola.generation_enabled && dola.verified_slot_id === slot.slot_id) {
+        providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Try Dola after updating cookie</button>`;
+      } else {
+        providerControls += `<button data-opening-dola-check="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Check Dola session</button>`;
+      }
     } else if (!ready && dolaActive && api.provider_task_id && !['SUCCEEDED','FAILED_TERMINAL'].includes(apiState)) {
       providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-resume="true" type="button">Check / recover Dola video</button>`;
     } else if (!ready && byteplusActive && !['AMBIGUOUS','FAILED_TERMINAL'].includes(apiState)) {
@@ -343,8 +349,8 @@ function openingBuilderSurface(snapshot) {
     const unresolvedProvider = !!providerId && !['FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED','FAILED_TERMINAL','KILLED','SUCCEEDED'].includes(apiState);
     const importButton = unresolvedProvider ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
-    if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : 'Submission needs attention; a second video will not be submitted automatically.'} ${esc(api.failure_class || '')}</small>`;
-    if (!ready && noProvider && allowDola && dola.configured && !dola.generation_enabled) apiNote = '<small>Dola account saved, but sign-in has not been verified. Dola generation is paused. Import a clip now; verify a dedicated Dola profile before generating.</small>';
+    if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'Saved evidence shows no video was submitted. Check the session, then review and confirm one new request.' : 'Submission needs attention; a second video will not be submitted automatically.'} ${esc(api.failure_class || '')}</small>`;
+    if (!ready && noProvider && allowDola && dola.configured && !dola.generation_enabled) apiNote = dola.browser_gate_configured ? '<small>Check this Dola session before creating one video for the selected slot. A failed check does not submit or consume a generation.</small>' : '<small>Dola account saved, but generation is paused for this project. Import a clip now; configure the dedicated Dola browser gate before generating.</small>';
     if (!ready && noProvider && allowDola && !dola.configured) apiNote = '<small>Add Dola accounts in Settings to use cookie-based text-to-video.</small>';
     if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
     else if (!ready && noProvider && providerPolicy === 'BYTEPLUS' && byteplus.status !== 'READY') apiNote = '<small>BytePlus is selected but not configured. Manual import remains available.</small>';
@@ -417,14 +423,14 @@ async function openingFilePayload(file) {
   return {filename:file.name,base64:encoded};
 }
 
-async function confirmFlowAction(message, actionLabel) {
+async function confirmFlowAction(message, actionLabel, title='Review Flow action') {
   if (document.getElementById('flowConfirmDialog')) return false;
   const previousFocus=document.activeElement;
   const dialog=document.createElement('dialog');
   dialog.id='flowConfirmDialog';
   dialog.setAttribute('aria-labelledby','flowConfirmTitle');
   dialog.setAttribute('aria-describedby','flowConfirmMessage');
-  dialog.innerHTML=`<div class="dialog-shell"><header class="dialog-head"><h2 id="flowConfirmTitle">Review Flow action</h2></header><div class="dialog-content"><p id="flowConfirmMessage">${esc(message)}</p></div><footer class="dialog-actions"><button type="button" data-flow-cancel autofocus>Cancel</button><button type="button" data-flow-confirm>${esc(actionLabel)}</button></footer></div>`;
+  dialog.innerHTML=`<div class="dialog-shell"><header class="dialog-head"><h2 id="flowConfirmTitle">${esc(title)}</h2></header><div class="dialog-content"><p id="flowConfirmMessage">${esc(message)}</p></div><footer class="dialog-actions"><button type="button" data-flow-cancel autofocus>Cancel</button><button type="button" data-flow-confirm>${esc(actionLabel)}</button></footer></div>`;
   document.body.append(dialog);
   return new Promise(resolve=>{
     dialog.addEventListener('close',()=>{
@@ -440,6 +446,9 @@ async function confirmFlowAction(message, actionLabel) {
 }
 
 function bindOpeningBuilderControls() {
+  document.querySelectorAll('[data-opening-dola-check]').forEach(button=>button.addEventListener('click',async()=>{
+    await runAction('preflight_dola_opening','Checking the selected Dola session without generating...',{slot_id:button.dataset.openingDolaCheck,account_id:button.dataset.account || ''});
+  }));
   document.querySelectorAll('[data-opening-flow-project]').forEach(input=>{
     input.value=state.snapshot?.opening_api_providers?.flow_cookie?.generation_project_url || '';
   });
@@ -488,8 +497,16 @@ function bindOpeningBuilderControls() {
   document.querySelectorAll('[data-opening-dola]').forEach(button => button.addEventListener('click', async () => {
     const slotId = button.dataset.openingDola;
     const account = document.querySelector(`[data-opening-dola-account="${CSS.escape(slotId)}"]`)?.value || button.dataset.account || '';
-    if (!button.dataset.resume && !window.confirm(`Generate one Dola text-to-video clip for ${slotId} using account ${account}? A 5 or 10 second clip will be requested and trimmed to this slot. Account quota may be consumed. Image references are not supported yet.`)) return;
-    await runAction('generate_dola_opening',button.dataset.resume ? 'Checking the same Dola video...' : 'Submitting one Dola video...',{slot_id:slotId,account_id:account});
+    if (button.dataset.resume) {
+      await runAction('generate_dola_opening','Checking the same Dola video...',{slot_id:slotId,recovery_only:true});
+      return;
+    }
+    const slot = (state.snapshot?.opening_builder?.slots || []).find(item=>item.slot_id===slotId);
+    if (!slot || !account) { toast('Choose a Dola account and Opening slot first.',true); return; }
+    const length = Number(slot.duration_seconds) <= 5 ? 5 : 10;
+    const review = `Create one ${length}-second Dola video for ${slotId} using account ${account}? Prompt: ${slot.prompt}. The clip will be trimmed to this slot; account quota may be consumed. No image reference is supported. If the outcome is uncertain, Story Auto will not send a replacement automatically.`;
+    if (!await confirmFlowAction(review,'Create one Dola video','Review Dola video')) return;
+    await runAction('generate_dola_opening','Submitting one Dola video...',{slot_id:slotId,account_id:account,confirm_generate:true});
   }));
   document.querySelectorAll('[data-opening-elyum-preflight]').forEach(button => button.addEventListener('click', async () => {
     await runAction('preflight_elyum_opening',`Checking Elyum models and cost for ${button.dataset.openingElyumPreflight}...`,{slot_id:button.dataset.openingElyumPreflight});
@@ -575,7 +592,7 @@ function renderProject() {
   const activeText=visual.status === 'RUNNING' && visual.total_items ? `Creating visuals — ${visual.completed_items} of ${visual.total_items}` : (blocker?.human_message || recovery.human_message || 'Completed stages are saved. Continue resumes the canonical production path.');
   syncActivityPresentation();
   const durableAction = canonicalBlockerAction(production);
-  const immediateAction = durableAction || (state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action);
+  const immediateAction = durableAction || (state.actionOutcome?.kind === 'blocker' && state.actionOutcome.action_id ? {action:state.actionOutcome.action_id,label:state.actionOutcome.action} : action) || {action:'review_project',label:'Review project'};
   const showActionOutcome = state.actionOutcome && !redundantSafetyOutcome(state.actionOutcome, production);
   const qualityPolicyRecovery = production.quality?.policy === 'AI_REVIEW'
     ? `<section class="surface" data-quality-policy-surface><div class="surface-head"><div><p class="eyebrow">QUALITY REVIEW</p><h2>Choose a supported review policy</h2><p>AI Review is reserved but is not runnable in this version. Choose the policy for this project so production can continue.</p></div></div><div class="button-row"><button class="button-primary" data-project-qc-policy="AUTO_ACCEPT" type="button" ${state.busy ? 'disabled' : ''}>Use Automatic</button><button data-project-qc-policy="MANUAL_REVIEW" type="button" ${state.busy ? 'disabled' : ''}>Use Manual review</button></div></section>`

@@ -139,6 +139,36 @@ class DolaOpeningTests(unittest.TestCase):
             self.run_slot(browser)
         self.assertEqual((browser.submits, direct.submits), (1, 0))
 
+    def test_browser_ui_known_unsent_can_rebind_refreshed_cookie_with_history(self):
+        class UnsentBrowser(FakeDola):
+            transport = "browser_ui"
+            profile_binding = "a" * 64
+            def submit(self, **params):
+                self.submits += 1
+                raise DolaCookieError("SESSION_EXPIRED", "NOT_DISPATCHED")
+
+        class RefreshedBrowser(FakeDola):
+            transport = "browser_ui"
+            profile_binding = "b" * 64
+            def submit(self, *, on_native_request, on_receipt, **params):
+                self.submits += 1
+                on_native_request("native-refreshed")
+                on_receipt("conversation-fixture")
+                return "conversation-fixture"
+            def poll(self, task, *, client_request_id=None):
+                return {"status": "PENDING"}
+
+        first = UnsentBrowser()
+        initial = self.run_slot(first)["slots"][0]["api_generation"]
+        self.assertEqual((initial["status"], initial["dispatch_state"]),
+                         ("FAILED_PRE_DISPATCH", "NOT_DISPATCHED"))
+        refreshed = RefreshedBrowser()
+        result = self.run_slot(refreshed)["slots"][0]["api_generation"]
+        self.assertEqual((first.submits, refreshed.submits), (1, 1))
+        self.assertEqual(result["profile_binding"], "b" * 64)
+        self.assertEqual(result["previous_profile_bindings"], ["a" * 64])
+        self.assertEqual((result["provider_submissions"], result["submit_attempts"]), (1, 2))
+
     def test_unverified_application_session_cannot_create_a_dola_attempt(self):
         client = FakeDola()
         with self.assertRaisesRegex(DolaCookieError, "DOLA_SESSION_NOT_VERIFIED"):

@@ -1,5 +1,34 @@
 # Story Auto — current delivery and historical checkpoints
 
+## Dola opt-in operator journey contract (candidate, not enabled)
+
+UX_CONTRACT
+PRIMARY_USER=Operator preparing one Hybrid Opening clip from one saved Dola account.
+PRIMARY_JOURNEY=Opening slot -> check named Dola session -> review exact slot/account/prompt/duration -> create one video -> inspect status/result.
+PRIMARY_SURFACE=Opening Builder controls for the selected slot.
+INFORMATION_HIERARCHY=Slot and prompt first; account/check/create actions next; technical evidence remains in diagnostics.
+SCOPE_MODEL=One configured project, one slot, one named account and one bound browser profile; no provider fallback.
+PRIMARY_CONTROLS=Check Dola session, then Create one Dola video; existing Import clip stays available before a submit.
+ADVANCED_CONTROLS=Profile path, local attempt IDs and browser transport configuration stay outside the ordinary controls.
+STATES=Gate off: saved but paused; check pending: no Create; check passed: Create; submitted: same-attempt status/recovery; ambiguous: no new Create.
+BULK_DESTRUCTIVE=No bulk action; the single potentially charged Create requires a review confirmation.
+DISCOVERABILITY=The check action is adjacent to the slot when an exact non-default project/account gate is configured.
+ACCESSIBILITY=Named controls, keyboard-accessible review dialog, live status and visible focus.
+OWNER_PREFERENCE=NONE for this safety-gated candidate; live spend still needs separate Owner authorization.
+
+CREATE_FLOW_CONTRACT
+TASK_GOAL=Create one Dola Opening video for the selected slot.
+LINEAR_OR_NONLINEAR=Linear check -> review -> create; no invented setup wizard.
+STEPS=Check named session; review slot/account/prompt/duration; Create one video; inspect same attempt/result.
+STEP_DEPENDENCIES=Exact project/account gate and successful current-process preflight before Create.
+BACK_BEHAVIOR=Cancel review returns to the same slot without creating an attempt.
+NEXT_VALIDATION=Validate account and preflight at check; validate again server-side immediately before Create.
+FINAL_REVIEW_STEP=Modal summarizes slot, account, requested length, prompt and potential quota use.
+PRIMARY_COMMIT_ACTION=Create one Dola video; exactly one provider send action may occur.
+CANCEL_EXIT_BEHAVIOR=Cancel before Create has no provider effect; after Create, status/recovery never silently resends.
+DRAFT_PERSISTENCE=Slot prompt and account remain in the existing project/session state; no duplicate draft.
+POST_SUBMIT_DESTINATION=Opening slot shows generating, completed, or ambiguous same-attempt status.
+
 ## 2026-09-23 isolated Dola browser-UI candidate
 
 The isolated `codex/product-acceptance-candidate` clone/branch now has an
@@ -13,7 +42,10 @@ CAPTCHA solver, or production routing is included. The existing Story Auto UI
 still blocks new Dola submissions. Optional dependency contract:
 `requirements-dola-browser.txt`. Offline focused tests pass; no new live Dola
 generation was made by this candidate. The external Gemini success remains
-one observed run, not this candidate's live acceptance.
+one observed run, not this candidate's live acceptance. A later isolated
+operator/UI change adds an exact-project/account, default-off gate with
+per-slot read-only check and an explicit one-video review dialog; the ordinary
+production runtime has not enabled or accepted it.
 
 The candidate preflight exercised its own Patchright profile with encrypted
 alias `dola-profile-20260923`. An initial 5s run passed; a following 10s run
@@ -32,10 +64,21 @@ It cannot submit or adopt a result, and no match does not prove no effect.
 The browser profile now rotates automatically to a new dedicated subdirectory
 when the encrypted account's cookie header changes, preventing stale browser
 storage from silently following a refreshed session.
+For an attempt proved `FAILED_PRE_DISPATCH/NOT_DISPATCHED` with zero native ID,
+conversation and provider submissions, a refreshed cookie may rebind that
+same named account after another check and explicit review; the previous
+profile binding remains in the manifest. Any ambiguous attempt stays frozen.
 The candidate code commit `5b6a77c` plus documentation-only Git-identity
 correction `49ee04c` passed the full Python suite: 1,048 tests and 366
 subtests; quality and security gates PASS, and the isolated clone was clean.
 This is engineering evidence, not live Dola or product acceptance.
+
+The Owner-supplied technical recap repeats the observed successful browser
+workflow and MP4, but its claims of universal WAF/CAPTCHA bypass or 100%
+stability are hypotheses, not measured Story Auto acceptance. The sample
+depends on a single chat phrase, CSS class and CDN response; the candidate
+instead requires exact attempt-to-native-message-to-conversation attribution
+and fails closed on drift. No new provider request was made during this review.
 
 ## 2026-09-23 corrected Dola browser-UI evidence
 

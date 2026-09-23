@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import time
 import uuid
 import base64
 import tempfile
@@ -308,6 +309,7 @@ class OperatorService:
         self.auto_flow_projects=auto_flow_projects or flow_projects is not None
         self.production_queries=ProductionQueries(self.runtime, self.flow_connections)
         self.runtime_defaults=RuntimeDefaults(self.runtime, lambda voice_id: _creation_settings({}, voice_id))
+        self._dola_browser_verified: dict[str, tuple[str, str, str, float]] = {}
 
     def list_projects(self) -> list[dict[str, Any]]:
         result=[]
@@ -389,7 +391,7 @@ class OperatorService:
             "hybrid_body":hybrid_body_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "hybrid_preview":hybrid_preview_view(self.runtime.root, project_id) if config.render_mode=="hybrid_hook" else None,
             "opening_api_provider":seedance_readiness() if config.render_mode=="hybrid_hook" else None,
-            "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status(), "dola": self.dola_connection_status(), "flow_cookie": self.flow_cookie_connection_status()} if config.render_mode=="hybrid_hook" else None),
+            "opening_api_providers":({"byteplus": seedance_readiness(), "elyum": self.elyum_connection_status(), "dola": self.dola_connection_status(project_id), "flow_cookie": self.flow_cookie_connection_status()} if config.render_mode=="hybrid_hook" else None),
             "opening_provider_policy":(str(config.settings.get("hybrid_visual",{}).get("opening_provider_policy","AUTO")).upper() if config.render_mode=="hybrid_hook" and isinstance(config.settings,dict) else None),
             "can_render_again":production["stages"]["RENDER"]["execution"] != "BLOCK",
         }
@@ -460,10 +462,74 @@ class OperatorService:
     def generate_opening_api(self, project_id: str, *, slot_id: str) -> dict[str, Any]:
         return generate_opening_slot_api(self.runtime.root, project_id, slot_id)
 
-    def generate_dola_opening(self, project_id: str, *, slot_id: str, account_id: str = "") -> dict[str, Any]:
+    def generate_dola_opening(self, project_id: str, *, slot_id: str, account_id: str = "",
+                              confirm_generate: bool = False, recovery_only: bool = False) -> dict[str, Any]:
         from story_auto.providers.dola_cookie.opening import generate_dola_opening
-        return generate_dola_opening(self.runtime.root, project_id, slot_id, account_id=account_id,
-                                     allow_new_submission=False)
+        if recovery_only:
+            view = self.opening_builder(project_id) or {}
+            slot = next((item for item in view.get("slots", []) if item.get("slot_id") == slot_id), {})
+            generation = slot.get("api_generation") or {}
+            if generation.get("provider") != "dola_cookie" or not generation.get("provider_task_id"):
+                raise OperatorServiceError("DOLA_CONFIRMED_RECOVERY_NOT_AVAILABLE")
+            return generate_dola_opening(self.runtime.root, project_id, slot_id,
+                                         account_id=generation.get("account_id", ""),
+                                         allow_new_submission=False)
+        if not self._dola_browser_gate_account(project_id):
+            from story_auto.providers.dola_cookie.client import DolaCookieError
+            raise DolaCookieError("DOLA_SESSION_NOT_VERIFIED", "NOT_DISPATCHED")
+        if confirm_generate is not True:
+            raise OperatorServiceError("DOLA_GENERATION_CONFIRMATION_REQUIRED")
+        client = self._dola_browser_client(project_id, account_id)
+        status = self.dola_connection_status(project_id)
+        if not status["generation_enabled"] or status.get("verified_slot_id") != slot_id:
+            raise OperatorServiceError("DOLA_BROWSER_PREFLIGHT_REQUIRED")
+        view = self.opening_builder(project_id) or {}
+        slot = next((item for item in view.get("slots", []) if item.get("slot_id") == slot_id), {})
+        seconds = float(slot.get("duration_seconds") or 0)
+        if not 4 <= seconds <= 10:
+            raise OperatorServiceError("DOLA_OPENING_SLOT_INVALID")
+        client.preflight(duration=5 if seconds <= 5 else 10)
+        if self._dola_browser_client(project_id, account_id).profile_binding != client.profile_binding:
+            from story_auto.providers.dola_cookie.client import DolaCookieError
+            raise DolaCookieError("DOLA_COOKIE_CHANGED_BEFORE_DISPATCH", "NOT_DISPATCHED")
+        return generate_dola_opening(self.runtime.root, project_id, slot_id,
+                                     account_id=account_id, client=client,
+                                     allow_new_submission=True)
+
+    def _dola_browser_gate_account(self, project_id: str) -> str:
+        if (os.getenv("STORY_AUTO_DOLA_BROWSER_UI_ENABLED") != "1"
+                or os.getenv("STORY_AUTO_DOLA_BROWSER_UI_PROJECT") != project_id):
+            return ""
+        return os.getenv("STORY_AUTO_DOLA_BROWSER_UI_ACCOUNT", "")
+
+    def _dola_browser_client(self, project_id: str, account_id: str):
+        if not account_id or self._dola_browser_gate_account(project_id) != account_id:
+            raise OperatorServiceError("DOLA_BROWSER_GATE_NOT_ENABLED")
+        from story_auto.providers.dola_cookie.browser_ui import DolaBrowserUIClient
+        cookie = DolaAccountStore().get_cookie(account_id)
+        return DolaBrowserUIClient(cookie, account_id=account_id,
+                                   profile_dir=self.runtime.root / "profiles" / "dola" / account_id)
+
+    def preflight_dola_opening(self, project_id: str, *, slot_id: str, account_id: str) -> dict[str, Any]:
+        client = self._dola_browser_client(project_id, account_id)
+        view = self.opening_builder(project_id) or {}
+        slot = next((item for item in view.get("slots", []) if item.get("slot_id") == slot_id), {})
+        seconds = float(slot.get("duration_seconds") or 0)
+        generation = slot.get("api_generation") or {}
+        safe_retry = (generation.get("provider") == "dola_cookie"
+                      and generation.get("account_id") == account_id
+                      and generation.get("status") == "FAILED_PRE_DISPATCH"
+                      and generation.get("dispatch_state") == "NOT_DISPATCHED"
+                      and not generation.get("provider_task_id")
+                      and not generation.get("provider_local_message_id")
+                      and int(generation.get("provider_submissions", 0)) == 0)
+        if not 4 <= seconds <= 10 or (generation and not safe_retry):
+            raise OperatorServiceError("DOLA_OPENING_SLOT_INVALID")
+        result = client.preflight(duration=5 if seconds <= 5 else 10)
+        self._dola_browser_verified[project_id] = (
+            account_id, client.profile_binding, slot_id, time.monotonic() + 600,
+        )
+        return {**self.dola_connection_status(project_id), **result}
 
     def generate_flow_cookie_opening(self, project_id: str, *, slot_id: str, account_id: str = "",
                                      project_url: str = "", imported_reference=None,
@@ -1395,12 +1461,27 @@ class OperatorService:
                         "kokoro_readiness":kokoro_readiness.as_dict() if kokoro_readiness else None},
         }
 
-    def dola_connection_status(self) -> dict[str, Any]:
+    def dola_connection_status(self, project_id: str = "") -> dict[str, Any]:
         accounts = DolaAccountStore().list_accounts()
-        return {"status":"SAVED_NOT_VERIFIED" if accounts else "NOT_CONFIGURED",
-                "configured":bool(accounts), "live_verified":False, "generation_enabled":False, "accounts":accounts,
+        gate_account = self._dola_browser_gate_account(project_id) if project_id else ""
+        selected = [row for row in accounts if row.get("account_id") == gate_account]
+        verified = False
+        if selected:
+            try:
+                client = self._dola_browser_client(project_id, gate_account)
+                cached = self._dola_browser_verified.get(project_id)
+                verified = bool(cached and cached[0] == gate_account
+                                and cached[1] == client.profile_binding
+                                and cached[3] > time.monotonic())
+            except Exception:
+                verified = False
+        return {"status":"READ_VERIFIED" if verified else "SAVED_NOT_VERIFIED" if accounts else "NOT_CONFIGURED",
+                "configured":bool(accounts), "live_verified":verified, "generation_enabled":verified,
+                "verified_slot_id":cached[2] if verified else None,
+                "browser_gate_configured":bool(selected), "browser_account_id":gate_account if selected else None,
+                "accounts":selected if gate_account else accounts,
                 "account_count":len(accounts), "cookie_editor_import_supported":True,
-                "reason_code":"DOLA_SESSION_NOT_VERIFIED" if accounts else "DOLA_COOKIE_MISSING"}
+                "reason_code":None if verified else "DOLA_SESSION_NOT_VERIFIED" if accounts else "DOLA_COOKIE_MISSING"}
 
     def flow_cookie_connection_status(self) -> dict[str, Any]:
         from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore
