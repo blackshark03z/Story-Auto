@@ -1,0 +1,27 @@
+{
+  "schema": "story-auto.local-release/1.0.0",
+  "product": "Story Auto",
+  "version": "1.1.0",
+  "channel": "Local operator release",
+  "release_date": "2026-09-23",
+  "source_commit": "v1.1.0^{commit}",
+  "release_tag": "v1.1.0",
+  "accepted_candidate_commit": "6d04b4d3773a2cbe8e5ceba6687a91c6a1f3ddee",
+  "accepted_scope": [
+    "Flow complete final journey",
+    "Separate opt-in Dola Create to Opening O1 READY"
+  ],
+  "accepted_final_sha256": "de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132",
+  "dola_o1_normalized_sha256": "635358a3e1d401557cc55b0c784c12f93ee481bc8db104986235472118431820",
+  "regression": "1069 passed, 372 subtests passed",
+  "quality_gate": "PASS",
+  "security_gate": "PASS",
+  "package": "story-auto-v1.1.0-windows.zip",
+  "package_contents": "Tracked source and launcher only; no runtime, projects, media, profiles, or credentials",
+  "not_accepted": [
+    "Dola O2/O3 or a Dola-containing final",
+    "Repeatable unattended Dola generation",
+    "Source main promotion"
+  ],
+  "acceptance_record": "D:\\Story Auto\\evidence\\candidate-final-composition-c43b39d-20260923\\PRODUCT_ACCEPTANCE_20260923.json"
+}

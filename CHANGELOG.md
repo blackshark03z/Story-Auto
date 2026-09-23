@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.0 - 2026-09-23
+
+- Release the Owner-accepted local Flow final journey and the separate opt-in
+  Dola Create path that produced one ready five-second O1 master.
+- Use the working Open final video action on completed pages after the embedded
+  in-app player showed black video with audible voice.
+- Add a Windows launcher with an adjacent, separate runtime folder. Keep
+  provider sessions and generated media out of the public source package.
+- Dola O2/O3, a Dola-containing final, and repeatable unattended Dola operation
+  remain outside this release's acceptance scope.
+
 ## 1.0.0 - 2026-08-14
 
 - Freeze the accepted V1 feature set as Story Auto v1.0.0 Stable.

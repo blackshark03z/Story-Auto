@@ -206,3 +206,12 @@ failed replace preserves the prior selected output and removes partial candidate
 ## Release/deployment
 
 V1 is a local operator tool. There is no cloud deployment or YouTube publication pipeline. A release is an accepted Git baseline plus a locally runnable package/environment and verified representative runtime evidence.
+
+For v1.1.0 on Windows, extract the source package, install `requirements.txt`
+with Python 3.11, and run `Start Story Auto.cmd`. The launcher binds
+only `127.0.0.1:8765` and keeps writable data under its adjacent `runtime`
+folder. Open that URL in the browser and leave the command window running.
+The public package excludes runtime data, generated media, browser profiles,
+and session credentials. The local release qualification uses a separate copy
+of the accepted Flow project and checks that the same final survives a server
+stop/restart; it does not generate another provider asset.

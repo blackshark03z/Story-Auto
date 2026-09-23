@@ -1,20 +1,31 @@
 # Story Auto
 
-Current stable release: **Story Auto v1.0.0 Stable**. See
-[`docs/releases/v1.0.0.md`](docs/releases/v1.0.0.md) and the machine-readable
-[`docs/releases/v1.0.0.json`](docs/releases/v1.0.0.json) regression manifest.
+Current local operator release: **Story Auto v1.1.0**. See
+[`docs/releases/v1.1.0.md`](docs/releases/v1.1.0.md) for the accepted scope,
+Windows startup, evidence, and limits. The earlier
+[`v1.0.0 Stable`](docs/releases/v1.0.0.md) baseline remains available.
 
 Current delivery scope and acceptance boundaries are recorded at the top of
 [`TASK.md`](TASK.md). Historical Goal checkpoints and trials remain evidence,
-not instructions to resume provider requests. The current post-release work
-prioritizes format correctness, the complete production journey, and safe
-recovery; it does not declare a new stable release tag.
+not instructions to resume provider requests. The v1.1.0 release is scoped to
+the accepted Flow final journey and the separate opt-in Dola O1 creation path.
+
+On Windows, install Python 3.11 and `pip install -r requirements.txt`, then
+double-click `Start Story Auto.cmd` from the extracted release folder. Open
+`http://127.0.0.1:8765/` in a browser. The launcher keeps user data under its
+adjacent `runtime` folder. The public source package contains no projects,
+videos, browser profiles, or saved provider sessions.
+For opt-in Dola browser generation, also install
+`requirements-dola-browser.txt` and use the session setup in
+[`docs/DOLA_BROWSER_UI_RUNBOOK_20260923.md`](docs/DOLA_BROWSER_UI_RUNBOOK_20260923.md).
 
 Story Auto is a local, artifact-first production tool that turns a valid `content.md` narration into a cinematic long-form YouTube storytelling video.
 
 ## Production modes on current main
 
-The `v1.0.0` tag remains the stable release baseline; the statuses below describe the current post-release `main` product state.
+The `v1.0.0` tag remains the historical stable baseline. The statuses below
+describe capability boundaries; consult the v1.1.0 release notes for the
+accepted release scope.
 
 - **Full Image (`full_image`)** — stable/default path: images only, deterministic local motion, and optional waveform presentation.
 - **Hybrid Visual (`hybrid_hook`)** — **Product Flow Accepted / Quality Deferred**: 15–20s Opening Builder, automatic body images, semantic Pexels stock or image fallback, continuous narration/subtitles/waveform, and canonical final render. New UI-created projects carry an explicit CUJ activation flag; historical unflagged Hybrid projects remain fail-closed.
