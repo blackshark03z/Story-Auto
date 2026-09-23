@@ -1,5 +1,26 @@
 # Cookie Flow product acceptance delivery
 
+## Exact-candidate completion update — 2026-09-23
+
+Candidate commit `c43b39d2781ed6babbcf5dbf47fe47547f2604a0` was used to
+compose the complete Flow product video again from an isolated copy of the
+Owner-accepted project. The result's SHA256 exactly matches the accepted final:
+`de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132`.
+The repeated run returned `FINAL_VIDEO_COMPLETE` with no invoked stages. No
+provider generation occurred; the original runtime was left intact. See
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\CANDIDATE_FINAL_COMPOSITION.json`.
+Full candidate regression: 1069 passed, 372 subtests. Quality and security
+gates passed. The candidate branch was pushed into the source local repository
+as `codex/product-acceptance-candidate`; candidate working tree is clean.
+
+For the Flow full journey plus separately opt-in Dola Create path, the remaining
+decisions are (1) how to promote the candidate while the source `main` checkout
+contains 86 pre-existing dirty paths, and (2) explicit Owner product acceptance
+of that scope. The Dola button itself has produced one ready five-second master
+without a visible logo. A new Dola-containing final would require O2/O3 and
+body material, and no further Dola request is authorized. IAB inline video Play
+still crashes; Chrome played the accepted Flow final and an earlier Dola master.
+
 ## Product-button update — 2026-09-23
 
 The Owner requested a live click through the product's Dola Create action.
@@ -46,10 +67,9 @@ the UI-review copy. The original canary remains unchanged. Future acquisition
 now prefers this linked master and records its variant, falling back to the
 proven preview when the master is missing/invalid. See the runbook for hashes.
 
-The remaining release boundary is a composed final from the exact candidate,
-reconciled promotion to the source checkout, final code/security gates, and
-explicit Owner acceptance of the scoped product candidate. The accepted Flow
-final remains separate evidence. The Owner required observing Create through
+The release boundary listed here was closed for the Flow full journey by the
+exact-candidate composition recorded above. The Dola project remains separate
+evidence. The Owner required observing Create through
 the product button; the two subsequently approved product-button sends are
 recorded in the update above. Neither approval covers another send. The first
 three Dola browser attempts and separate Flow ambiguities remain unresolved.

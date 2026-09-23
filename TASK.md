@@ -1,5 +1,24 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 exact-candidate final composition
+
+On a separate copy of the previously Owner-accepted Flow project, candidate
+`c43b39d2781ed6babbcf5dbf47fe47547f2604a0` rendered the canonical final
+again using existing local inputs and zero provider dispatches. The new final
+SHA256 is exactly the accepted `de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132`.
+A repeat `run_to_final` returned `FINAL_VIDEO_COMPLETE` with no invoked stages.
+The original accepted project was not changed. Evidence:
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\CANDIDATE_FINAL_COMPOSITION.json`.
+This closes the exact-candidate composition proof for the Flow full journey;
+the separate Dola product-button O1 is not part of that video.
+
+Current remaining gates: reconcile promotion from the clean candidate branch
+into the source checkout without overwriting its 86 pre-existing dirty paths;
+obtain explicit Owner acceptance of the scoped product. If the Owner requires
+a Dola-containing final, the separate Dola project still needs O2/O3 and body
+inputs, and no further provider send is authorized. In-app browser inline Play
+still crashes, while system Chrome playback of the accepted final passed.
+
 ## 2026-09-23 product-button Dola qualification
 
 The Owner asked to test the product's Dola Create button. In a copy of the
