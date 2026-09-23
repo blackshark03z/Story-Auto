@@ -55,6 +55,15 @@ def _chain(*urls: str) -> bytes:
 
 
 class DolaCookieClientTests(unittest.TestCase):
+    def test_current_sessionid_ss_is_accepted_and_forwarded_without_aliasing(self):
+        cookie = "sessionid_ss=opaque-current; passport_csrf_token=opaque-csrf"
+        client = DolaCookieClient(cookie)
+        self.assertEqual(client._headers()["Cookie"], cookie)
+        with self.assertRaises(DolaCookieError):
+            DolaCookieClient("passport_csrf_token=opaque-csrf")
+        with self.assertRaises(DolaCookieError):
+            DolaCookieClient("SessionID_SS=wrong-case")
+
     def test_submit_records_ack_immediately_without_waiting_for_stream_end(self):
         stream = b'event: SSE_ACK\ndata: {"ack_client_meta":{"conversation_id":"conv-1"}}\n\n' + b"data: never-needed"
         client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(stream, content_type="text/event-stream")))

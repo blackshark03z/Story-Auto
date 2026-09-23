@@ -1,5 +1,25 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 Dola current-session qualification — candidate only
+
+The Owner's signed-in `dola.com` Cookie-Editor export contains seven cookies,
+including domain-scoped HttpOnly `sessionid_ss`, but no exact `sessionid`.
+Read-only isolated browser controls on `www.dola.com/chat` showed authenticated
+UI with the full export and with `sessionid_ss` alone; removing or invalidating
+`sessionid_ss` showed Login. No cookie values were printed or persisted.
+Sanitized evidence: `evidence/dola-live-qualification-20260923/
+sessionid-ss-browser-auth-read-20260923.json`. This proves browser UI auth only;
+private video API acceptance remains unverified.
+
+The isolated product candidate accepts either exact `sessionid` or
+`sessionid_ss` in a www-applicable, unexpired export; it forwards the original
+cookie name unchanged and retains named encrypted storage, preview, and
+single-submit/no-retry protections. Synthetic rendered Settings preview passed
+at 576px/1440px without saving an account. The Owner must re-paste the export
+into the updated Settings window, Preview changes, and Save accounts before a
+single bounded live Dola generation. Source main, old Flow attempts, and
+production routing remain untouched. Do not infer whole-product acceptance.
+
 ## Cookie-owned Flow delivery — 2026-09-21 current checkpoint
 
 2026-09-23 LIVE REUSE GATE refreshed (read-only, zero generations): the earlier

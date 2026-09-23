@@ -136,7 +136,7 @@ class DolaCookieClient:
 
     def __init__(self, cookie: str, *, opener: OpenRequest = _open, timeout: float = 120.0) -> None:
         if (not isinstance(cookie, str) or "\r" in cookie or "\n" in cookie
-                or not _cookie_value(cookie, "sessionid")):
+                or not (_cookie_value(cookie, "sessionid") or _cookie_value(cookie, "sessionid_ss"))):
             raise DolaCookieError("CREDENTIAL_MISSING")
         self._cookie = cookie
         self._opener = opener

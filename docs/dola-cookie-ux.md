@@ -73,7 +73,96 @@ candidate tests to be rerun at final commit. Candidate preview=PASS.
 Five levels: function=PASS; discoverable=PASS; understandable=PASS;
 hierarchy=PASS; Owner UX accepted=UNVERIFIED. owner_ux_gate=NOT_REQUIRED.
 
-## Cookie-Editor export repair, 2026-09-23 — pre-implementation contract
+## Current signed-in Dola session import, 2026-09-23 — pre-implementation contract
+
+The Owner's current signed-in Chrome export has seven Dola cookies, including
+domain-scoped, HttpOnly `sessionid_ss`, but no `sessionid`. An isolated fresh
+browser replay of that export on `www.dola.com/chat` removed the Login button;
+without `sessionid_ss` or with an invalid value, the Login button returned.
+The lone `sessionid_ss` cookie also reproduced the signed-in UI state.
+Controls were read-only and no cookie values were printed or persisted. This
+proves current browser-session authentication, not private video API acceptance.
+
+UX_CONTRACT
+PRIMARY_USER=Owner importing the actual signed-in Dola Cookie-Editor export before a bounded video canary.
+PRIMARY_JOURNEY=Settings Dola -> paste current export -> preview exact alias -> save encrypted account -> separately check live access before Generate.
+PRIMARY_SURFACE=Existing Dola accounts form in Settings.
+INFORMATION_HIERARCHY=Paste, Preview changes, and Save accounts remain primary; auth-cookie details are a short remedy, not a new workflow.
+SCOPE_MODEL=One export saves only the named account; other accounts and video attempts are unchanged.
+PRIMARY_CONTROLS=Account name, export textarea, Preview changes, Save accounts.
+ADVANCED_CONTROLS=Existing named-header and named-JSON formats remain available below the field.
+STATES=Accept unexpired `sessionid` or `sessionid_ss` valid for www; reject missing/expired/wrong-domain exports with a sanitized remedy; configured is not live-verified.
+BULK_DESTRUCTIVE=Preview and confirmation name create/update scope; no removal or generation during save.
+DISCOVERABILITY=Placeholder and help refer to the signed-in Dola tab rather than requiring the browser URL to retain www.
+ACCESSIBILITY=Keep existing labels, keyboard order, live error region, and named confirmation.
+OWNER_PREFERENCE=NONE; current export and negative controls establish the needed compatible import path.
+
+CREATE_FLOW_CONTRACT
+TASK_GOAL=Save one currently authenticated Dola browser export as a named account.
+LINEAR_OR_NONLINEAR=Linear, short existing Settings form.
+STEPS=Name -> paste export -> preview -> confirm save -> separate bounded live check.
+STEP_DEPENDENCIES=Export contains a non-expired, www-applicable `sessionid` or `sessionid_ss`; preview before save.
+BACK_BEHAVIOR=Cancel confirmation preserves the unsaved field and existing accounts.
+NEXT_VALIDATION=Preview identifies format/domain/session errors without echoing secrets.
+FINAL_REVIEW_STEP=Existing confirmation names the account and new/update count.
+PRIMARY_COMMIT_ACTION=Save accounts; encrypts the named header only, with no provider request.
+CANCEL_EXIT_BEHAVIOR=Leaving Settings without saving changes nothing.
+DRAFT_PERSISTENCE=Raw export remains only in the unsaved field until save; never localStorage/logs.
+POST_SUBMIT_DESTINATION=Settings account list and configured count; live API validation stays a distinct gate.
+
+## Current-session import candidate review, 2026-09-23
+
+Rendered candidate on port 8779 accepted a synthetic `sessionid_ss`-only
+Cookie-Editor export at 576px and 1440px. Preview named exactly one new
+`dola-main` account, with no save and no provider request. Placeholder now
+refers to the signed-in Dola tab; help names either accepted session cookie
+while retaining the www applicability condition. No horizontal overflow was
+observed. Screenshots: `D:\Story Auto\evidence\dola-live-qualification-20260923\sessionid-ss-preview-{576,1440}.png`.
+The narrow screenshot shows the sticky app header overlapping the section
+capture's very top edge; the form label, account scope, preview and actions
+remain visible. Browser-auth evidence is separately recorded in
+`sessionid-ss-browser-auth-read-20260923.json` in the same directory.
+
+UX_IMPLEMENTATION_REVIEW
+PRIMARY_SURFACE_DISCOVERABILITY=PASS: existing Settings Dola form, screenshot.
+SCOPE_CLARITY=PASS: alias and one-account preview, rendered evidence.
+APPLY_REAPPLY_RESET_EXPLICITNESS=PASS: unchanged named save confirmation.
+ADVANCED_WITHOUT_DOMINATING=PASS: named-header syntax stays in supporting text.
+DISABLED_STATE_EXPLANATION=NOT_APPLICABLE: no new disabled control.
+BULK_DESTRUCTIVE_SAFETY=PASS: preview only, no removal or generation.
+VISIBLE_HIERARCHY=PASS: account name, paste, preview, save in order.
+CONTROL_DENSITY=PASS: one concise help update, no new control.
+COHERENT_APPLICATION_COMPOSITION=PASS: credentials remain in Settings.
+DESTRUCTIVE_DIFFERENTIATION=NOT_APPLICABLE: no destructive action.
+EXISTING_WORKFLOW_PRESERVATION=PASS: legacy named formats and sessionid tests retained.
+INFORMATION_ARCHITECTURE=PASS: configuration remains separate from generation.
+NAVIGATION=PASS: unchanged Settings entry.
+WORKSPACE_LAYOUT=PASS: existing form at both widths, no horizontal overflow.
+VIEWPORT_BUDGET=PASS: primary fields/actions legible at 576px.
+PERSISTENT_CONTEXTUAL_CONTROLS=PASS: Settings-only placement.
+LAYOUT_ARCHETYPE_FIT=PASS: short stacked configuration form.
+RESPONSIVE_WORKSPACE_BEHAVIOR=PASS: 576px and 1440px rendered screenshots.
+VERTICAL_SPRAWL_REDUCED=NOT_APPLICABLE: no sprawl goal.
+WORKSPACE_LAYOUT_SOLUTION=NOT_APPLICABLE: no layout redesign.
+TASK_FLOW_ARCHITECTURE=PASS: name -> paste -> preview -> save.
+LINEAR_MULTISTEP_REASONING=PASS: short form does not need a stepper.
+REVIEW_BEFORE_COMMIT=PASS: existing alias/new/update confirmation.
+EXECUTION_STATE_SEPARATION=PASS: saved credential does not claim API verification.
+RESOURCE_MANAGEMENT_SEPARATION=PASS: named account list remains in Settings.
+POST_COMPLETION_DESTINATION=PASS: account list/count refresh after save.
+
+technical_validation=27 focused Dola tests, 17 Settings/UI tests, JS syntax,
+quality and security gates PASS; final unittest suite 927/927 PASS in267.656s.
+Independent review found and resolved exact cookie-name case and malformed
+multi-dot domain acceptance before the final suite; negative regression cases
+now fail closed. This is still browser-UI proof, not private video API proof.
+candidate_preview=PASS at 576px and 1440px using synthetic data.
+Five levels: function=PASS; discoverable=PASS; understandable=PASS;
+hierarchy=PASS; Owner UX accepted=UNVERIFIED. owner_ux_gate=NOT_REQUIRED
+for this compatible import validation. Live Dola video API and whole-product
+acceptance remain PENDING.
+
+## Cookie-Editor export repair, 2026-09-23 — historical pre-implementation contract
 
 UX_CONTRACT
 PRIMARY_USER=Owner who exported Dola cookies from Cookie-Editor and needs to save one named account without hand-building a Cookie header.

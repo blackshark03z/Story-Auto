@@ -52,6 +52,8 @@ class DolaAccountStoreTest(unittest.TestCase):
         store = DolaAccountStore(self.path)
         store.save_accounts('[{"account_id":"main","cookie":"x=1; sessionid=ok"}]')
         self.assertEqual(store.get_cookie("main"), "x=1; sessionid=ok")
+        store.save_accounts("main\tsessionid_ss=current-session; x=1")
+        self.assertEqual(store.get_cookie("main"), "sessionid_ss=current-session; x=1")
         with self.assertRaisesRegex(DolaAccountError, "sessionid"):
             store.save_accounts("main\tx=1")
         with self.assertRaisesRegex(DolaAccountError, "one line"):
@@ -94,6 +96,34 @@ class DolaAccountStoreTest(unittest.TestCase):
             store.preview_accounts({"account_id": "dola-main", "cookie_export": [
                 {**base, "value": "fixture\r\nInjected: yes"}]})
         self.assertFalse(self.path.exists())
+
+    def test_current_dola_sessionid_ss_export_is_valid_without_synthesizing_sessionid(self):
+        store = DolaAccountStore(self.path)
+        current = {"domain": ".dola.com", "hostOnly": False, "path": "/",
+                   "name": "sessionid_ss", "value": "fixture-current-session",
+                   "httpOnly": True, "expirationDate": time.time() + 3600}
+        raw = {"account_id": "current", "cookie_export": [current,
+            {"domain": ".dola.com", "hostOnly": False, "path": "/",
+             "name": "passport_csrf_token", "value": "fixture-csrf"}]}
+        self.assertEqual(store.preview_accounts(raw)["account_ids"], ["current"])
+        store.save_accounts(raw)
+        self.assertEqual(store.get_cookie("current"),
+                         "sessionid_ss=fixture-current-session; passport_csrf_token=fixture-csrf")
+        self.assertNotIn("fixture-current-session", self.path.read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(DolaAccountError, "sessionid or sessionid_ss"):
+            store.preview_accounts({"account_id": "wrong-host", "cookie_export": [
+                {**current, "domain": "dola.com", "hostOnly": True}]})
+        with self.assertRaisesRegex(DolaAccountError, "sessionid or sessionid_ss"):
+            store.preview_accounts({"account_id": "expired", "cookie_export": [
+                {**current, "expirationDate": time.time() - 60}]})
+        with self.assertRaisesRegex(DolaAccountError, "sessionid or sessionid_ss"):
+            store.preview_accounts({"account_id": "wrong-case", "cookie_export": [
+                {**current, "name": "SessionID_SS"}]})
+        with self.assertRaisesRegex(DolaAccountError, "sessionid or sessionid_ss"):
+            store.preview_accounts({"account_id": "malformed-domain", "cookie_export": [
+                {**current, "domain": "..dola.com"}]})
+        with self.assertRaisesRegex(DolaAccountError, "sessionid or sessionid_ss"):
+            store.save_accounts("wrong-case\tSessionID_SS=not-a-valid-cookie-name-for-Dola")
 
     def test_remove_is_alias_scoped(self):
         store = DolaAccountStore(self.path)

@@ -3,6 +3,15 @@
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
 
+Current Dola gate: a signed-in Owner export has exact `sessionid_ss` but no
+`sessionid`. Read-only browser positive/negative controls proved it authenticates
+the Dola UI on www, not that the private video API accepts it. The isolated
+candidate now accepts and forwards either exact cookie name, with encrypted
+named save and no provider retry. Synthetic Settings preview passed at 576px
+and 1440px. The Owner has not yet saved this account or run a live Dola video
+canary; Dola and whole-product acceptance remain PENDING. Do not reuse the
+historical ambiguous Flow attempt to bridge this gap.
+
 ## Latest acceptance checkpoint (2026-09-23)
 
 Real project `prj_flow_real_product` is `FINAL_VIDEO_COMPLETE`: three distinct

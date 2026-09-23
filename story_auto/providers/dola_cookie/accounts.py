@@ -20,7 +20,7 @@ from story_auto.providers.credentials import _OWN_ENTROPY, _protect, _unprotect
 
 _SCHEMA = "story-auto-dola-cookie-accounts"
 _ALIAS = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
-_SESSION = re.compile(r"(?:^|;)\s*sessionid=([^;\s]+)", re.IGNORECASE)
+_SESSION = re.compile(r"(?:^|;)\s*sessionid(?:_ss)?=([^;\s]+)")
 _COOKIE_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _LOCK_GUARD = threading.RLock()
 
@@ -42,7 +42,12 @@ def _header_from_cookie_editor(rows: Any) -> str:
         host_only = row.get("hostOnly", False)
         if not isinstance(domain, str) or not isinstance(path, str) or not isinstance(host_only, bool):
             raise DolaAccountError("Cookie-Editor export contains an invalid cookie entry.")
-        domain = domain.lower().lstrip(".")
+        domain = domain.lower()
+        if domain not in {"dola.com", ".dola.com", "www.dola.com", ".www.dola.com"}:
+            continue
+        if host_only and domain.startswith("."):
+            continue
+        domain = domain.removeprefix(".")
         applies_to_www = (domain == "www.dola.com" or
                           (domain == "dola.com" and not host_only))
         # A single header must work for both /chat and /im requests.
@@ -66,7 +71,7 @@ def _header_from_cookie_editor(rows: Any) -> str:
         values[name] = value
     header = "; ".join(f"{name}={value}" for name, value in values.items())
     if not _SESSION.search(header):
-        raise DolaAccountError("Export a signed-in www.dola.com session containing an unexpired sessionid cookie.")
+        raise DolaAccountError("Export a signed-in Dola session containing an unexpired sessionid or sessionid_ss cookie valid for www.dola.com.")
     if len(header.encode("utf-8")) > 65536:
         raise DolaAccountError("Cookie-Editor export is too large for one Dola account.")
     return header
@@ -147,7 +152,7 @@ class DolaAccountStore:
             if not _ALIAS.fullmatch(account_id):
                 raise DolaAccountError("Account names use letters, numbers, dots, underscores, or dashes.")
             if "\r" in cookie or "\n" in cookie or not _SESSION.search(cookie):
-                raise DolaAccountError("Each cookie header must include sessionid and contain one line.")
+                raise DolaAccountError("Each cookie header must include sessionid or sessionid_ss and contain one line.")
             if account_id in seen:
                 raise DolaAccountError("Each Dola account name may appear only once per save.")
             seen.add(account_id)
