@@ -11,9 +11,12 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
   baseline `f36c9060911978fba10fca1e451a334aa7edf6de`, tree
   `8600a898b83605e70f13227769a3b98051f12fd9`. Working tree was clean
   before this audit file was added; the audit commit changes documentation only.
-- Source `main` remains HEAD `5464cbb1d1c11a550b5e096647b9f94587de5bfe`
-  with 86 pre-existing dirty entries. Do not merge, reset, clean, or stage it
-  without an exact Owner-authorized promotion scope.
+- Source `main` remains HEAD `5464cbb1d1c11a550b5e096647b9f94587de5bfe`.
+  A fresh release preflight found 92 dirty/untracked entries, including six
+  untracked temporary directories; 86 of 87 candidate-changed paths overlap
+  source dirt. These are current-state counts, not proof that the contents
+  match. Do not merge, reset, clean, or stage source without an exact
+  Owner-authorized promotion scope and file-by-file reconciliation.
 - The earlier UI snapshot on `127.0.0.1:8778` ran in process 19580. A fresh
   2026-09-23 check found that listener stopped; the candidate UI was restarted
   with the Flow RPC gate scoped to the same bound Google project. Runtime
@@ -32,7 +35,7 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 | Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
 | Dola account/live canary | One encrypted account saved. `evidence/dola-live-qualification-20260923/canary-attempt-ba87f1eb43ea4c018491cd80d3d45d7a.json`: one submit attempt, no provider receipt or asset, external effect unknown | AMBIGUOUS; no retry |
 | Dola provider permission | Official Dola Terms (2026-09-04) restrict automation, reverse engineering, incorporation and automated output extraction; no vendor-approved integration contract recorded | HOLD; risk inference, not legal ruling |
-| Release promotion | Candidate is clean but source is dirty; no exact Owner authorization to promote this HEAD/tree or redefine Dola as manual-only | PENDING OWNER DECISION |
+| Release promotion | Candidate is clean; source has 92 dirty/untracked entries and 86/87 candidate-path overlap. No exact Owner authorization to promote or redefine Dola as manual-only | PENDING OWNER DECISION |
 
 ## Next decision and allowed work
 
