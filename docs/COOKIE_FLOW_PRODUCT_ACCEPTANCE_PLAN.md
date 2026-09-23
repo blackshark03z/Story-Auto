@@ -26,9 +26,9 @@ Current Dola gate: a signed-in Owner export has exact `sessionid_ss` but no
 the Dola UI on www, not that the private video API accepts it. The isolated
 candidate now accepts and forwards either exact cookie name, with encrypted
 named save and no provider retry. Synthetic Settings preview passed at 576px
-and 1440px. The Owner has not yet saved this account or run a live Dola video
-canary; Dola and whole-product acceptance remain PENDING. Do not reuse the
-historical ambiguous Flow attempt to bridge this gap.
+and 1440px. This pre-canary qualification is superseded by the one saved account
+and ambiguous live canary above. Dola and whole-product acceptance remain
+PENDING. Do not reuse an ambiguous Flow attempt to bridge this gap.
 
 ## Latest acceptance checkpoint (2026-09-23)
 
@@ -54,7 +54,10 @@ separate scan of64 untracked text files passed with no secret-pattern findings.
 Remaining gates include live Dola
 qualification if Dola is to be accepted as part of the product, and a
 traceable release candidate identity/promotion decision.
-There are zero configured Dola accounts, so do not infer a Dola live pass.
+One Dola account is now configured, but the sole live canary is ambiguous and
+does not prove Dola video generation. The accepted Flow final needs no cookie
+refresh or new login; later cookie expiry only affects future generation or a
+separately scoped reliability/recovery check.
 Fresh 2026-09-23 initial read-only reuse check returned
 `FLOW_COOKIE_SESSION_UNAVAILABLE` for saved `flow-product-20260922` revision 1.
 Owner signed in on the existing dedicated profile. The new automatic export

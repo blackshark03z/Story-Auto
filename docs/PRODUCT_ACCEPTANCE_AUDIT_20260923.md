@@ -14,15 +14,18 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 - Source `main` remains HEAD `5464cbb1d1c11a550b5e096647b9f94587de5bfe`
   with 86 pre-existing dirty entries. Do not merge, reset, clean, or stage it
   without an exact Owner-authorized promotion scope.
-- Local UI on `127.0.0.1:8778`, process 19580, imports Flow from this candidate.
-  The Flow RPC gate is process-scoped to the bound Google project; not global.
+- The earlier UI snapshot on `127.0.0.1:8778` ran in process 19580. A fresh
+  2026-09-23 check found that listener stopped; the candidate UI was restarted
+  with the Flow RPC gate scoped to the same bound Google project. Runtime
+  attestation now reports process 17140 and imports Flow from this candidate.
+  Process IDs are observation evidence, not durable release identity.
 
 ## Gate-by-gate result
 
 | Gate | Evidence | Classification |
 | --- | --- | --- |
 | Current Flow final media | `evidence/flow-real-product-journey-20260921/projects/prj_flow_real_product/output/final.mp4` SHA-256 `de1679ad0307e13ad8fd5a240b62af3dbb39d654a17a6a1b9559c44852acd132` equals `final_manifest.json`; fresh ffprobe H264/AAC 1280x720, 39.583333 s, 22,131,107 bytes; full ffmpeg decode exit 0 | PASS |
-| Current served project | 8778 production query `pipeline_status=COMPLETE`, `final_output.present=true`, `next_action=open_final`; asset single range returns 206 video/mp4, bytes 0-1023/22131107 | PASS |
+| Current served project | After the 8778 restart, HTTP 200 text/html; production query `pipeline_status=COMPLETE`, `final_output.present=true`, `next_action=open_final`; asset single range returns 206 video/mp4, bytes 0-1023/22131107; file SHA-256 still matches the accepted final | PASS at current runtime check |
 | Owner visual acceptance | Owner explicitly accepted that exact final MP4 on 2026-09-23, with Opening/body traveler continuity note disclosed | PASS for that MP4 only |
 | Code validation | Full candidate suite 927/927 at code commit `5b141a8`; subsequent commits are documentation-only. Current quality and security gates PASS; JS syntax and rendered 576/1440px Dola Settings preview PASS | Engineering PASS |
 | Browser playback | Supported Chrome inline playback and seek PASS; Codex IAB inline Play still crashes, while direct media view works | PARTIAL; IAB limitation disclosed |
