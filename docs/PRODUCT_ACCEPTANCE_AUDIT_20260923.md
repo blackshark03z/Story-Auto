@@ -24,7 +24,7 @@ not a merge, tag, push, default production activation, or legal clearance.
 | Owner visual acceptance | Owner explicitly accepted that exact final MP4 on 2026-09-23, with Opening/body traveler continuity note disclosed | PASS for that MP4 only |
 | Code validation | Full candidate suite 927/927 at code commit `5b141a8`; subsequent commits are documentation-only. Current quality and security gates PASS; JS syntax and rendered 576/1440px Dola Settings preview PASS | Engineering PASS |
 | Browser playback | Supported Chrome inline playback and seek PASS; Codex IAB inline Play still crashes, while direct media view works | PARTIAL; IAB limitation disclosed |
-| Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output; read-only recovery did not attribute a result | AMBIGUOUS; no retry |
+| Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
 | Dola account/live canary | One encrypted account saved. `evidence/dola-live-qualification-20260923/canary-attempt-ba87f1eb43ea4c018491cd80d3d45d7a.json`: one submit attempt, no provider receipt or asset, external effect unknown | AMBIGUOUS; no retry |
 | Dola provider permission | Official Dola Terms (2026-09-04) restrict automation, reverse engineering, incorporation and automated output extraction; no vendor-approved integration contract recorded | HOLD; risk inference, not legal ruling |
 | Release promotion | Candidate is clean but source is dirty; no exact Owner authorization to promote this HEAD/tree or redefine Dola as manual-only | PENDING OWNER DECISION |
@@ -38,6 +38,14 @@ Flow ambiguous journals. The Owner needs to decide whether Dola is manual-only
 for this release or provide a vendor-authorized integration path, and separately
 approve the exact release/promotion scope. Until then keep production promotion
 on HOLD. The scoped 8778 candidate can be reviewed without altering source main.
+
+Flow credential refresh is a distinct operator action. The saved
+`flow-product-20260923` revision 1 currently fails a read-only project check;
+the dedicated Chrome profile is not listening on port 9333. Do not silently
+rewrite revision 1 because the unresolved attempt is pinned to it. If the
+Owner opens that exact profile and a fresh export succeeds, use a new alias or
+explicitly reviewed same-owner recovery design before any journal recovery;
+no new generation is implied by the refresh.
 
 Canonical context: `TASK.md`, `docs/COOKIE_FLOW_PRODUCT_ACCEPTANCE_PLAN.md`,
 `docs/FLOW_RPC_OPERATIONS.md`, and the cited evidence files. Current Dola Terms:
