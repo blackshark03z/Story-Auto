@@ -50,6 +50,7 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 | Browser playback | Supported Chrome inline playback and seek PASS; Codex IAB inline Play still crashes, while direct media view works | PARTIAL; IAB limitation disclosed |
 | Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
 | Dola account/live canaries | One encrypted account saved. Old attempt `ba87f1eb...` remains ambiguous. Owner-approved separate canary `9a849c09...` observed HTTP 200 but no parseable SSE receipt; one submit, no task ID/asset. Fresh positive/negative control showed login-required UI in both contexts, withdrawing the earlier HTTP-200 auth claim. Owner reports no job/credit deduction. Product UI and server now block fresh Dola submission until verification; confirmed receipt can still be polled. See `evidence/dola-cookie-approved-canary-20260923/POST_DISPATCH.md` | AMBIGUOUS; auth NOT PASS; no retry |
+| Dedicated Dola browser profile | After Owner login and Chrome close, a blank Chrome context showed Login with no session cookie. The same dedicated profile opened twice across a browser restart: no Login button, `sessionid` and `sessionid_ss` cookie names present, HTTP 200 at `www.dola.com/chat`. A second probe reproduced the contrast; its conservative video-button matcher found no entry. No cookie values, prompts, conversation content or generation requests were recorded. See `evidence/dola-profile-read-20260923/probe-01.json` and `probe-02.json` | Browser UI auth READ PASS; video UI capability and account binding unverified |
 | Dola provider permission | Owner reports direct Dola confirmation that cookie integration is allowed; no written scope is recorded here. Owner explicitly approved one separate new canary after the unresolved-effect warning | OWNER-ATTESTED; production scope unverified |
 | Release promotion | Source has 92 dirty/untracked entries. Across 92 candidate-changed paths, 74 match current source bytes, 12 differ, and 6 are absent there. No exact Owner authorization to promote this candidate or reconcile the 12 different paths | PENDING OWNER DECISION |
 
@@ -63,8 +64,10 @@ AMBIGUOUS. Preserve both Dola attempts and the Flow ambiguous journal; do not
 retry, rotate accounts, or submit a replacement. Production promotion remains
 on HOLD pending live result identity, quality, scope, and exact release approval.
 The scoped 8778 candidate can be reviewed without altering source main. The
-next safe technical gate is Owner login to a dedicated Dola profile, followed
-by read-only auth and restart controls; no new generation is implied. An
+dedicated profile's read-only auth/restart gate has passed, but it does not
+make the older cookie-only HTTP transport valid. Next implement and qualify a
+separate feature-gated browser UI transport, with exact request/result
+attribution and no automatic retry; no new generation is implied. An
 unsent, secret-free vendor inquiry remains in
 `docs/DOLA_INTEGRATION_AUTHORIZATION_REQUEST.md` for clarifying written scope;
 the Owner's direct-confirmation report is a separate attestation.

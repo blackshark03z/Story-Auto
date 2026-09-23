@@ -54,14 +54,34 @@ provider received no request. Preserve the journal and do not redispatch it.
 
 Prefer an **isolated dedicated browser profile** with Owner-completed Dola
 login as the next authentication candidate, without attaching to an already
-running Chrome CDP session. First qualify it read-only with a real signed-in
-account marker and a negative control, then across a browser restart. Only
-after that should a separate feature-gated UI transport be considered. It
+running Chrome CDP session. This gate now has a read-only result: after the
+Owner closed the dedicated Chrome window, `tools/dola_profile_read_probe.py`
+opened the same profile twice with system Chrome and compared it to a blank
+Chrome context. The blank context had a visible Login button and no session
+cookie; both profile opens had no Login button and contained cookie *names*
+`sessionid` and `sessionid_ss`. All three loaded `www.dola.com/chat` with
+HTTP 200. The result is `BROWSER_AUTH_READ_PASS`, not a generation or account
+identity proof. Evidence:
+`D:\Story Auto\evidence\dola-profile-read-20260923\probe-01.json`.
+No cookie values or conversation content were recorded; generation count 0.
+A second read-only probe (`probe-02.json`) reproduced the auth contrast but
+did not recognize a video-entry button in either context. This is an
+unverified UI affordance, not proof the account lacks video capability.
+
+The next candidate is a separate feature-gated UI transport. It
 must retain Story Auto's durable one-attempt journal, account lock, exact
 conversation/output identity, no automatic POST retry or account rotation,
 and fail-closed manual handling for CAPTCHA/verification. Do not copy the
 gateway's automated CAPTCHA solver, default extension/interception, silent
 ratio/duration fallbacks, or unauthenticated server defaults.
+
+Before enabling it, bind the profile to an explicit account identity and
+qualify the video-mode controls without submitting. A fresh browser session
+must visibly preserve the requested model, ratio and duration. Persist the
+attempt before the single final UI action; on a missing conversation receipt,
+leave `AMBIGUOUS` and do not rotate or repeat. Poll only the proven same
+conversation and import only a video linked to the submitted input. Test
+crash/restart and absent/mismatched receipt cases offline first.
 
 No new generation is authorized by this comparison. The sole newly approved
 canary was consumed. A future live canary requires a fresh, explicitly bounded

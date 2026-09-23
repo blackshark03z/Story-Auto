@@ -1,5 +1,23 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 dedicated Dola profile read-only qualification
+
+The Owner logged into `D:\Story Auto\profiles\dola-owner-login-20260923`
+and closed its Chrome window. `tools/dola_profile_read_probe.py` compared an
+unauthenticated Chrome context with this profile, opening the profile twice
+across a browser restart. The blank context showed Login and no session
+cookie; both profile opens showed no Login and cookie names `sessionid` and
+`sessionid_ss`. All loaded `www.dola.com/chat` with HTTP 200. Status:
+`BROWSER_AUTH_READ_PASS`; evidence in
+`D:\Story Auto\evidence\dola-profile-read-20260923\probe-01.json` and
+`probe-02.json`. The latter did not recognize a video-entry button; video UI
+capability is therefore still unverified rather than absent.
+No cookie values or chat contents were saved, no generation occurred, and
+the ambiguous Dola attempts remain frozen. This verifies browser UI login,
+not video capability, account identity matching or whole-product acceptance.
+Next: feature-gated UI transport with offline exact-once/identity tests;
+fresh bounded authorization is required before another live generation.
+
 ## 2026-09-23 Dola generation safety gate UX contract
 
 UX_CONTRACT
