@@ -1,5 +1,32 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 Dola generation safety gate UX contract
+
+UX_CONTRACT
+PRIMARY_USER=Story Auto operator preparing one Hybrid Opening clip.
+PRIMARY_JOURNEY=Opening Builder -> inspect Dola availability -> generate only after live session qualification, otherwise import an existing clip.
+PRIMARY_SURFACE=Opening Builder provider controls for the selected slot.
+INFORMATION_HIERARCHY=Slot and available actions first; concise Dola unavailable reason supporting.
+SCOPE_MODEL=One slot and one named Dola account; no other project or provider is changed.
+PRIMARY_CONTROLS=Generate with Dola only when live-verified; existing Import clip remains available.
+ADVANCED_CONTROLS=Existing settings and diagnostics retain their current disclosure.
+STATES=No account: existing setup state; saved but unverified: no Generate, explicit reason/remedy; verified: existing one-request confirmation; ambiguous attempt: existing no-retry state.
+BULK_DESTRUCTIVE=Not applicable; one-slot external generation remains explicitly confirmed.
+DISCOVERABILITY=Unavailable reason appears where Generate would normally appear.
+ACCESSIBILITY=Visible text explains state; no unexplained disabled control or inaccessible action.
+OWNER_PREFERENCE=NONE; fail-closed unverified session follows current provider-safety boundary.
+
+Implementation checkpoint: the application refuses a fresh Dola submission
+while `live_verified=false`, without creating a provider attempt. Poll-only
+recovery for an already confirmed conversation remains available. Opening
+Builder shows the unavailable reason and Import clip instead of Generate;
+Settings distinguishes saved from verified. Focused 42/42 and full 938/938
+tests passed; JS syntax, quality/security and diff checks passed. Rendered
+1440px/576px Opening Builder and Settings were inspected under
+`D:\Story Auto\evidence\dola-cookie-approved-canary-20260923`. Candidate UI
+8778 was restarted on this code (PID 15548): Dola generation_enabled=false,
+Flow gate remains true, accepted final SHA-256 unchanged. No Dola request.
+
 ## 2026-09-23 one approved new Dola cookie canary — AMBIGUOUS
 
 The Owner's one new, separate Dola test request was executed in isolated

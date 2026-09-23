@@ -39,6 +39,12 @@ is **NOT PASS**. A separate read-only Japanese-locale view rendered the video
 entry, but that public UI affordance is not proof that generation is available
 to the saved session. No prompt was submitted by these checks.
 
+An additional read-only `/im/chain/recent_conv` query, using the gateway's
+query shape with zero requested messages, returned HTTP 200 and one cell in
+both the cookie-free and seven-cookie contexts. That response is therefore
+not a distinguishing authentication check either. No conversation IDs or
+response bodies were recorded.
+
 Story Auto's approved canary `9a849c09107a4ee4b5c019ea14424917` remains
 AMBIGUOUS: one POST, HTTP 200, no SSE receipt, no task ID, no asset. Neither
 the Owner's no-job/no-credit report nor negative UI search proves that the

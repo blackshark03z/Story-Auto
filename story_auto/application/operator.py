@@ -462,7 +462,8 @@ class OperatorService:
 
     def generate_dola_opening(self, project_id: str, *, slot_id: str, account_id: str = "") -> dict[str, Any]:
         from story_auto.providers.dola_cookie.opening import generate_dola_opening
-        return generate_dola_opening(self.runtime.root, project_id, slot_id, account_id=account_id)
+        return generate_dola_opening(self.runtime.root, project_id, slot_id, account_id=account_id,
+                                     allow_new_submission=False)
 
     def generate_flow_cookie_opening(self, project_id: str, *, slot_id: str, account_id: str = "",
                                      project_url: str = "", imported_reference=None,
@@ -1396,10 +1397,10 @@ class OperatorService:
 
     def dola_connection_status(self) -> dict[str, Any]:
         accounts = DolaAccountStore().list_accounts()
-        return {"status":"CONFIGURED" if accounts else "NOT_CONFIGURED",
-                "configured":bool(accounts), "live_verified":False, "accounts":accounts,
+        return {"status":"SAVED_NOT_VERIFIED" if accounts else "NOT_CONFIGURED",
+                "configured":bool(accounts), "live_verified":False, "generation_enabled":False, "accounts":accounts,
                 "account_count":len(accounts), "cookie_editor_import_supported":True,
-                "reason_code":None if accounts else "DOLA_COOKIE_MISSING"}
+                "reason_code":"DOLA_SESSION_NOT_VERIFIED" if accounts else "DOLA_COOKIE_MISSING"}
 
     def flow_cookie_connection_status(self) -> dict[str, Any]:
         from story_auto.providers.flow.cookie_accounts import FlowCookieAccountStore

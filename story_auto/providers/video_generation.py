@@ -98,8 +98,8 @@ def _runtime_readiness(provider_id: str) -> dict[str, Any]:
             configured = bool(DolaAccountStore().list_accounts())
         except Exception:
             return {"status": "ERROR", "reason_code": "DOLA_ACCOUNT_STORE_UNAVAILABLE"}
-        return {"status": "CONFIGURED" if configured else "NOT_CONFIGURED",
-                "reason_code": "LIVE_CONTRACT_NOT_QUALIFIED" if configured else "CREDENTIAL_MISSING"}
+        return {"status": "SAVED_NOT_VERIFIED" if configured else "NOT_CONFIGURED",
+                "reason_code": "DOLA_SESSION_NOT_VERIFIED" if configured else "CREDENTIAL_MISSING"}
     if provider_id == "byteplus_seedance":
         from story_auto.providers.byteplus_seedance import BytePlusSeedanceClient
         return dict(BytePlusSeedanceClient().readiness())

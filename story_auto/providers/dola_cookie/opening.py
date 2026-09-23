@@ -19,7 +19,8 @@ PROVIDER_ID = "dola_cookie"
 
 
 def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
-                          client=None, max_poll_seconds=0.0, poll_interval=2.0):
+                          client=None, max_poll_seconds=0.0, poll_interval=2.0,
+                          allow_new_submission=True):
     """Submit once or resume the persisted conversation; never rotate accounts."""
     runtime, paths, config = _project(runtime_root, project_id)
     policy = str(config.settings.get("hybrid_visual", {}).get("opening_provider_policy", "AUTO")).upper()
@@ -30,6 +31,10 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
             raise DolaCookieError("OPENING_PROVIDER_MISMATCH")
         if existing.get("status") == "SUCCEEDED":
             return _safe_view(runtime.root, project_id)
+        if not allow_new_submission and (not existing or (
+                existing.get("status") == "FAILED_PRE_DISPATCH"
+                and existing.get("dispatch_state") == "NOT_DISPATCHED")):
+            raise DolaCookieError("DOLA_SESSION_NOT_VERIFIED", "NOT_DISPATCHED")
         bound_account = existing.get("account_id")
         if bound_account and account_id and bound_account != account_id:
             raise DolaCookieError("DOLA_ACCOUNT_MISMATCH")

@@ -10,6 +10,7 @@ from story_auto.core.project import RuntimeLayout, ProjectConfig, create_project
 from story_auto.core.visual.opening_builder import configure_opening_builder
 from story_auto.providers.dola_cookie.client import DolaCookieClient, DolaCookieError
 from story_auto.providers.dola_cookie.opening import generate_dola_opening
+from story_auto.application import OperatorService
 
 
 class FakeDola:
@@ -80,6 +81,27 @@ class DolaOpeningTests(unittest.TestCase):
         with self.assertRaisesRegex(DolaCookieError, "ACCOUNT_MISMATCH"):
             self.run_slot(client, "another")
         self.assertEqual(client.submits, 1)
+
+    def test_unverified_application_session_cannot_create_a_dola_attempt(self):
+        client = FakeDola()
+        with self.assertRaisesRegex(DolaCookieError, "DOLA_SESSION_NOT_VERIFIED"):
+            generate_dola_opening(self.root, "prj_dola", "OPENING_O1", account_id="daily",
+                                  client=client, allow_new_submission=False)
+        self.assertEqual(client.submits, 0)
+        manifest = read_json(self.paths.artifact_path("output/opening_manifest.json"))
+        self.assertFalse(manifest["slots"][0].get("api_generation"))
+        with self.assertRaisesRegex(DolaCookieError, "DOLA_SESSION_NOT_VERIFIED"):
+            OperatorService(self.root).generate_dola_opening("prj_dola", slot_id="OPENING_O1", account_id="daily")
+        self.assertEqual(client.submits, 0)
+
+    def test_unverified_gate_still_allows_poll_only_confirmed_recovery(self):
+        first = FakeDola(pending=True)
+        self.run_slot(first)
+        recovery = FakeDola(pending=True)
+        generate_dola_opening(self.root, "prj_dola", "OPENING_O1", account_id="daily",
+                              client=recovery, allow_new_submission=False)
+        self.assertEqual((first.submits, recovery.submits), (1, 0))
+        self.assertEqual(recovery.polled, ["conversation-fixture"])
 
     def test_http_failure_preserves_safe_status_and_never_resubmits(self):
         client = FakeDola(crash="http_404")
