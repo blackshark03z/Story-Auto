@@ -40,6 +40,10 @@ AMBIGUOUS is never retryable. One fresh potentially charged Dola attempt needs
 a separate Owner decision because earlier approvals were consumed by other
 attempts. Until then, make no new provider request and do not call the whole
 product accepted.
+At 2026-09-23 07:04 UTC, a fresh canary preflight on this exact candidate
+confirmed 5s/16:9 UI readiness with `generation_submits=0`; a separate status
+read confirmed zero attempt IDs, native IDs, task IDs, and provider submissions.
+This is current pre-send readiness only, not a video-generation result.
 
 Current Dola choice: the Owner reports Dola directly confirmed permission for
 cookie integration; no written scope is stored here. After disclosure that the
