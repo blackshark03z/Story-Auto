@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import socket
 import sys
+from http.client import HTTPConnection
 from pathlib import Path
-from urllib.request import urlopen
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -24,8 +24,13 @@ def listener_state() -> str:
     except OSError:
         return "free"
     try:
-        with urlopen(URL + "api/runtime-attestation", timeout=2) as response:
-            attestation = json.load(response)
+        connection = HTTPConnection(HOST, PORT, timeout=2)
+        try:
+            connection.request("GET", "/api/runtime-attestation")
+            response = connection.getresponse()
+            attestation = json.loads(response.read()) if response.status == 200 else {}
+        finally:
+            connection.close()
         module = Path(attestation.get("flow_module", "")).resolve()
         if module == EXPECTED_MODULE:
             return "this_release"
