@@ -328,7 +328,7 @@ class DolaCookieClient:
         state = "EMPTY_BODY" if seen == 0 else "ACK_INVALID" if ack_seen else "NO_ACK"
         raise DolaCookieError("RECEIPT_MISSING", "AMBIGUOUS", receipt_state=state)
 
-    def poll(self, conversation_id: str, *, client_request_id: str | None = None) -> dict[str, str]:
+    def _read_chain(self, conversation_id: str) -> dict[str, Any]:
         if (not isinstance(conversation_id, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", conversation_id)):
             raise DolaCookieError("PROVIDER_JOB_ID_INVALID", "DISPATCH_CONFIRMED")
         # Read-only shape verified against a signed-in Dola conversation. The
@@ -364,6 +364,39 @@ class DolaCookieClient:
             raise DolaCookieError(code, "DISPATCH_CONFIRMED") from error
         except (TimeoutError, URLError, OSError) as error:
             raise DolaCookieError("PROVIDER_TRANSIENT", "DISPATCH_CONFIRMED") from error
+        return payload
+
+    def verify_input(self, conversation_id: str, local_message_id: str) -> bool:
+        """Read-only proof that this conversation contains the native UI input."""
+        if not isinstance(local_message_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", local_message_id):
+            raise DolaCookieError("CLIENT_REQUEST_ID_INVALID", "DISPATCH_CONFIRMED")
+        payload = self._read_chain(conversation_id)
+        messages = ((payload.get("downlink_body") or {}).get("pull_singe_chain_downlink_body") or {}).get("messages")
+        if not isinstance(messages, list):
+            raise DolaCookieError("PROVIDER_RESPONSE_INVALID", "DISPATCH_CONFIRMED")
+        matches = []
+        for message in messages:
+            if not isinstance(message, dict) or message.get("local_message_id") != local_message_id:
+                continue
+            if message.get("conversation_id") not in {None, "", conversation_id}:
+                raise DolaCookieError("DOLA_RESULT_IDENTITY_MISMATCH", "DISPATCH_CONFIRMED")
+            content = message.get("content")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except json.JSONDecodeError:
+                    content = None
+            if not isinstance(content, list):
+                continue
+            kinds = {block.get("block_type") for block in content if isinstance(block, dict)}
+            if 10000 in kinds and 2074 not in kinds and isinstance(message.get("message_id"), str):
+                matches.append(message)
+        if len(matches) > 1:
+            raise DolaCookieError("DOLA_RESULT_IDENTITY_UNVERIFIED", "DISPATCH_CONFIRMED")
+        return len(matches) == 1
+
+    def poll(self, conversation_id: str, *, client_request_id: str | None = None) -> dict[str, str]:
+        payload = self._read_chain(conversation_id)
         urls = _video_urls(payload)
         if len(urls) > 1:
             raise DolaCookieError("PROVIDER_RESULT_AMBIGUOUS", "DISPATCH_CONFIRMED")

@@ -82,6 +82,63 @@ class DolaOpeningTests(unittest.TestCase):
             self.run_slot(client, "another")
         self.assertEqual(client.submits, 1)
 
+    def test_browser_ui_persists_native_request_mapping_before_receipt(self):
+        class BrowserClient(FakeDola):
+            transport = "browser_ui"
+            profile_binding = "a" * 64
+            def submit(self, *, on_native_request, on_receipt, **params):
+                self.submits += 1
+                on_native_request("native-1")
+                on_receipt("conversation-fixture")
+                return "conversation-fixture"
+            def poll(self, task, *, client_request_id=None):
+                self.polled.append((task, client_request_id))
+                return {"status": "PENDING"}
+        client = BrowserClient()
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(first["transport"], "browser_ui")
+        self.assertEqual(first["profile_binding"], "a" * 64)
+        self.assertEqual(first["provider_local_message_id"], "native-1")
+        self.assertEqual(client.polled, [("conversation-fixture", "native-1")])
+        self.assertEqual(client.submits, 1)
+        fresh = BrowserClient()
+        self.run_slot(fresh)
+        self.assertEqual(fresh.submits, 0)
+        self.assertEqual(fresh.polled, [("conversation-fixture", "native-1")])
+
+    def test_browser_ui_missing_native_id_never_confirms_receipt_or_resends(self):
+        class MissingNative(FakeDola):
+            transport = "browser_ui"
+            profile_binding = "b" * 64
+            def submit(self, *, on_receipt, **params):
+                self.submits += 1
+                on_receipt("conversation-fixture")
+                return "conversation-fixture"
+        client = MissingNative()
+        first = self.run_slot(client)["slots"][0]["api_generation"]
+        self.assertEqual(first["status"], "AMBIGUOUS")
+        self.assertFalse(first.get("provider_task_id"))
+        self.run_slot(client)
+        self.assertEqual(client.submits, 1)
+
+    def test_browser_ui_unreceipted_attempt_cannot_change_transport_or_profile(self):
+        class UnreceiptedBrowser(FakeDola):
+            transport = "browser_ui"
+            profile_binding = "c" * 64
+            def submit(self, *, on_native_request, **params):
+                self.submits += 1
+                on_native_request("native-1")
+                raise DolaCookieError("NO_RECEIPT", "AMBIGUOUS")
+        browser = UnreceiptedBrowser()
+        self.assertEqual(self.run_slot(browser)["slots"][0]["api_generation"]["status"], "AMBIGUOUS")
+        direct = FakeDola()
+        with self.assertRaisesRegex(DolaCookieError, "TRANSPORT_MISMATCH"):
+            self.run_slot(direct)
+        browser.profile_binding = "d" * 64
+        with self.assertRaisesRegex(DolaCookieError, "PROFILE_BINDING_MISMATCH"):
+            self.run_slot(browser)
+        self.assertEqual((browser.submits, direct.submits), (1, 0))
+
     def test_unverified_application_session_cannot_create_a_dola_attempt(self):
         client = FakeDola()
         with self.assertRaisesRegex(DolaCookieError, "DOLA_SESSION_NOT_VERIFIED"):

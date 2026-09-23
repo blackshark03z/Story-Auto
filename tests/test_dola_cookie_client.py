@@ -196,6 +196,24 @@ class DolaCookieClientTests(unittest.TestCase):
                          ("conv-1", 3, 20))
         self.assertNotIn("conversation_id", bodies[0])
 
+    def test_verify_input_requires_one_top_level_text_message(self):
+        payload = json.loads(_chain())
+        messages = payload["downlink_body"]["pull_singe_chain_downlink_body"]["messages"]
+        input_message = {
+            "local_message_id": "native-1", "message_id": "input-1",
+            "conversation_id": "conv-1", "content": json.dumps([{"block_type": 10000}]),
+        }
+        messages.append(input_message)
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertTrue(client.verify_input("conv-1", "native-1"))
+        messages[-1] = {"metadata": input_message}
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        self.assertFalse(client.verify_input("conv-1", "native-1"))
+        messages[-1] = {**input_message, "conversation_id": "other-conv"}
+        client = DolaCookieClient(COOKIE, opener=_opener_for(_Response(json.dumps(payload).encode())))
+        with self.assertRaisesRegex(DolaCookieError, "IDENTITY_MISMATCH"):
+            client.verify_input("conv-1", "native-1")
+
     def test_poll_auth_failure_retains_confirmed_dispatch(self):
         from urllib.error import HTTPError
         def expired(*args):

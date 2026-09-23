@@ -1,5 +1,25 @@
 # Cookie Flow product acceptance delivery
 
+## Current execution plan — 2026-09-23
+
+This is the active plan; older checkpoints below are provenance. Work in the
+isolated `codex/product-acceptance-candidate` worktree, preserving the dirty
+source checkout. The accepted Flow final is a product asset, while the
+separate unresolved Flow canary and three Dola direct-cookie attempts retain
+their own ambiguous histories. No cross-provider replacement or blind retry.
+
+| Milestone | Current proof | Remaining gate |
+| --- | --- | --- |
+| Dola browser transport engineering | One external Gemini UI success; Story Auto opt-in Patchright adapter, durable native ID, exact read/poll linkage; focused tests and quality/security pass | Final exact-head full suite and one-shot browser runner review |
+| Browser pre-submit stability | Same encrypted alias in a dedicated Patchright profile; three closed/reopened 10s/5s/10s UI preflights PASS with zero sends after hydration fix | No proof yet of Story Auto's actual generation request/receipt |
+| Bounded live qualification | Separate canary project prepared; no attempt, task ID, or submission; unacknowledged dispatch refused | Fresh Owner authorization for exactly one potentially charged request, then exact request/receipt/output reconciliation; stop if ambiguous |
+| Product integration | Canonical opening manifest, media import and Flow final already exist | Feature-gated operator route and rendered UI journey after live transport qualifies; keep Dola disabled until then |
+| Release and acceptance | Flow final accepted by Owner; isolated candidate is not source main | Exact candidate/runtime identity, clean promotion scope, full composed CUJ, explicit Owner product acceptance |
+
+Main agent is the only writer. Use independent read-only review on consequential
+changes and only the existing free/approved service allowance. A successful
+preflight never authorizes a generation. Any live ambiguity stops new sends.
+
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
 

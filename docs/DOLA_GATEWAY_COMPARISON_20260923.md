@@ -153,6 +153,30 @@ leave `AMBIGUOUS` and do not rotate or repeat. Poll only the proven same
 conversation and import only a video linked to the submitted input. Test
 crash/restart and absent/mismatched receipt cases offline first.
 
+An isolated Story Auto candidate now implements this as explicit
+`DolaBrowserUIClient` injection, not a default route. It uses Patchright and
+a dedicated profile, clears stale cookies before seeding the selected named
+account, selects only the verified 2.0 Fast/5-or-10s/16:9 UI controls, and
+performs one final send action with no fallback after a failed click. The
+native app request ID is recorded before post-send wire validation, then the
+conversation must contain that exact top-level text input before a receipt is
+confirmed. Existing read/download code retains the exact input-to-video
+link requirement. Offline tests cover missing IDs, transport/profile changes,
+bad cookie names, and no duplicate send fallback. The browser submit itself
+has **not** been exercised live in Story Auto; UI selector drift, native wire
+shape, and repeated stability remain unverified. The normal operator route
+still refuses new Dola submissions.
+
+Live **pre-submit-only** qualification of the candidate's own Patchright
+profile found a UI hydration race: an initial 10s preflight could not yet
+see the video entry. Waiting for the entry fixed the issue; subsequent
+10s/5s/10s profile restarts all passed with zero generation submits. The
+selected model control is now checked as `Model 2.0 Fast`, request text must
+match the exact entered prompt, and a separate five-second read client bounds
+each post-send identity lookup. An isolated canary CLI and local project are
+prepared but no new video request has been made. The operator/product route
+still needs feature-gated wiring and a separately authorized live canary.
+
 No new generation is authorized by this comparison. The sole newly approved
 canary was consumed. A future live canary requires a fresh, explicitly bounded
 Owner decision after auth/profile qualification and offline failure tests.

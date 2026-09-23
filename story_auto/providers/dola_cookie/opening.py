@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import math
 from pathlib import Path
+import re
 import time
 from uuid import uuid4
 
@@ -46,6 +47,13 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
     lock_name = "dola_account_" + hashlib.sha256(account_id.encode()).hexdigest()[:24]
     with ProjectLock(runtime, lock_name):
         active = client if client is not None else DolaCookieClient(DolaAccountStore().get_cookie(account_id))
+        transport = getattr(active, "transport", "cookie_http")
+        if transport not in {"cookie_http", "browser_ui"}:
+            raise DolaCookieError("DOLA_TRANSPORT_INVALID")
+        profile_binding = getattr(active, "profile_binding", None) if transport == "browser_ui" else None
+        if transport == "browser_ui" and (not isinstance(profile_binding, str)
+                                           or not re.fullmatch(r"[a-f0-9]{64}", profile_binding)):
+            raise DolaCookieError("DOLA_PROFILE_BINDING_INVALID")
         with ProjectLock(runtime, project_id):
             manifest, slot = _load_slot(paths, project_id, slot_id)
             generation = slot.get("api_generation")
@@ -57,6 +65,13 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
             if generation:
                 if generation.get("provider") != PROVIDER_ID or generation.get("account_id") != account_id:
                     raise DolaCookieError("DOLA_ATTEMPT_IDENTITY_MISMATCH")
+                if (not generation.get("provider_task_id")
+                        and generation.get("transport", "cookie_http") != transport):
+                    raise DolaCookieError("DOLA_TRANSPORT_MISMATCH")
+                if (generation.get("transport", "cookie_http") == "browser_ui"
+                        and transport == "browser_ui"
+                        and generation.get("profile_binding") != profile_binding):
+                    raise DolaCookieError("DOLA_PROFILE_BINDING_MISMATCH")
                 if generation.get("prompt_sha256") != slot.get("prompt_sha256"):
                     raise DolaCookieError("DOLA_PROMPT_CHANGED")
                 if generation.get("status") in {"SUCCEEDED", "FAILED_TERMINAL"}:
@@ -76,6 +91,7 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                     "schema_version": "story-auto-dola-opening/1.0.0", "provider": PROVIDER_ID,
                     "provider_model": "seedance_v2.0", "observed_model": None,
                     "account_id": account_id, "attempt_id": uuid4().hex,
+                    "transport": transport, "profile_binding": profile_binding,
                     "prompt_sha256": slot.get("prompt_sha256"), "duration_seconds": duration,
                     "requested_duration_seconds": requested_duration,
                     "status": "PRE_DISPATCH", "dispatch_state": "AMBIGUOUS",
@@ -99,13 +115,36 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
         def receipt(conversation_id):
             if not isinstance(conversation_id, str) or not conversation_id or len(conversation_id) > 200:
                 raise DolaCookieError("DOLA_RECEIPT_INVALID", dispatch_state="AMBIGUOUS")
+            if transport == "browser_ui":
+                with ProjectLock(runtime, project_id):
+                    current, current_slot = _load_slot(paths, project_id, slot_id)
+                    record = current_slot.get("api_generation") or {}
+                    if record.get("attempt_id") != attempt_id or not record.get("provider_local_message_id"):
+                        raise DolaCookieError("DOLA_NATIVE_REQUEST_ID_MISSING", dispatch_state="AMBIGUOUS")
             update(provider_task_id=conversation_id, status="SUBMITTED", dispatch_state="CONFIRMED",
                    provider_submissions=1, failure_class=None)
 
+        def native_request(local_message_id):
+            if (not isinstance(local_message_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", local_message_id)):
+                raise DolaCookieError("DOLA_NATIVE_REQUEST_ID_INVALID", dispatch_state="AMBIGUOUS")
+            with ProjectLock(runtime, project_id):
+                current, current_slot = _load_slot(paths, project_id, slot_id)
+                record = current_slot.get("api_generation") or {}
+                if (record.get("attempt_id") != attempt_id or record.get("account_id") != account_id
+                        or record.get("transport") != "browser_ui"
+                        or record.get("provider_local_message_id") not in {None, local_message_id}):
+                    raise DolaCookieError("DOLA_NATIVE_REQUEST_ID_MISMATCH", dispatch_state="AMBIGUOUS")
+                record.update(provider_local_message_id=local_message_id, updated_at=_now())
+                _persist(paths, current)
+
         if not task_id:
             try:
-                task_id = active.submit(prompt=prompt, aspect_ratio="16:9", duration=requested_duration,
-                                        on_receipt=receipt, client_request_id=attempt_id)
+                submit_kwargs = dict(prompt=prompt, aspect_ratio="16:9", duration=requested_duration,
+                                     on_receipt=receipt, client_request_id=attempt_id)
+                if transport == "browser_ui":
+                    submit_kwargs["on_native_request"] = native_request
+                task_id = active.submit(**submit_kwargs)
             except Exception as error:
                 # A persisted receipt remains sufficient for poll-only recovery,
                 # even if the caller/stream fails immediately afterwards.
@@ -132,9 +171,15 @@ def generate_dola_opening(runtime_root, project_id, slot_id, *, account_id="",
                     raise DolaCookieError("DOLA_RECEIPT_NOT_PERSISTED", dispatch_state="AMBIGUOUS")
 
         deadline = time.monotonic() + max(0, float(max_poll_seconds))
+        with ProjectLock(runtime, project_id):
+            current, current_slot = _load_slot(paths, project_id, slot_id)
+            record = current_slot.get("api_generation") or {}
+            poll_local_id = record.get("provider_local_message_id") or attempt_id
+            if record.get("transport") == "browser_ui" and not record.get("provider_local_message_id"):
+                raise DolaCookieError("DOLA_NATIVE_REQUEST_ID_MISSING", dispatch_state="DISPATCH_CONFIRMED")
         while True:
             try:
-                result = active.poll(task_id, client_request_id=attempt_id)
+                result = active.poll(task_id, client_request_id=poll_local_id)
                 status = result.get("status")
                 if status == "FAILED":
                     update(status="FAILED_TERMINAL", failure_class="DOLA_PROVIDER_FAILED")

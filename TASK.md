@@ -1,5 +1,38 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 isolated Dola browser-UI candidate
+
+The isolated `codex/product-acceptance-candidate` worktree now has an
+**opt-in, non-default** Patchright browser-UI submit client. It seeds a
+dedicated profile from one named encrypted cookie account, checks the visible
+video controls, performs at most one send action, durably records the app's
+native local message ID, and confirms the resulting conversation by an exact
+read-only input lookup before normal poll/download. A contract mismatch or
+missing receipt remains `AMBIGUOUS`; no automatic retry, account rotation,
+CAPTCHA solver, or production routing is included. The existing Story Auto UI
+still blocks new Dola submissions. Optional dependency contract:
+`requirements-dola-browser.txt`. Offline focused tests pass; no new live Dola
+generation was made by this candidate. The external Gemini success remains
+one observed run, not this candidate's live acceptance.
+
+The candidate preflight exercised its own Patchright profile with encrypted
+alias `dola-profile-20260923`. An initial 5s run passed; a following 10s run
+failed before dispatch because Dola's client UI hydrated later than the
+fixed two-second wait. After waiting for the video entry to become visible,
+three separate closed/reopened-profile preflights passed (10s, 5s, 10s), each
+reporting `generation_submits=0`. The selected model control was verified as
+`Model 2.0 Fast`, not merely seen among options. The isolated canary project
+at `D:\Story Auto\evidence\dola-browser-ui-canary-20260923` has no attempt,
+receipt, or submission. Its `preflight` passes; `dispatch` without
+`--ack-one-request` refuses and preserves zero counters. A fresh Owner
+authorization is required before its one-shot live dispatch.
+If that later dispatch lacks a receipt but records the native input ID,
+`tools/dola_browser_ui_reconcile.py` can search recent conversations read-only.
+It cannot submit or adopt a result, and no match does not prove no effect.
+The browser profile now rotates automatically to a new dedicated subdirectory
+when the encrypted account's cookie header changes, preventing stale browser
+storage from silently following a refreshed session.
+
 ## 2026-09-23 corrected Dola browser-UI evidence
 
 An independent Gemini/Patchright run on this machine **did generate a new Dola

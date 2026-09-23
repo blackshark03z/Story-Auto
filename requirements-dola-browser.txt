@@ -1,0 +1,4 @@
+# Optional, explicit Dola browser-UI transport only. The default provider
+# routing remains disabled until separate live qualification.
+-r requirements.txt
+patchright>=1.62,<2
