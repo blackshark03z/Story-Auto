@@ -14,10 +14,10 @@ assuming a worktree branch is already available in source main.
 
 | Milestone | Current proof | Remaining gate |
 | --- | --- | --- |
-| Dola browser transport engineering | One external Gemini UI success; Story Auto opt-in Patchright adapter, durable native ID, exact read/poll linkage; focused tests and quality/security pass | Final exact-head full suite and one-shot browser runner review |
+| Dola browser transport engineering | One external Gemini UI success; Story Auto opt-in Patchright adapter, durable native ID, exact read/poll linkage; exact-head 1,053 tests/366 subtests plus quality/security PASS | One Story Auto live submit/receipt/output qualification; no stability claim from the external single run |
 | Browser pre-submit stability | Same encrypted alias in a dedicated Patchright profile; three closed/reopened 10s/5s/10s UI preflights PASS with zero sends after hydration fix | No proof yet of Story Auto's actual generation request/receipt |
 | Bounded live qualification | Separate canary project prepared; no attempt, task ID, or submission; unacknowledged dispatch refused | Fresh Owner authorization for exactly one potentially charged request, then exact request/receipt/output reconciliation; stop if ambiguous |
-| Product integration | Canonical opening manifest, media import and Flow final already exist | Feature-gated operator route and rendered UI journey after live transport qualifies; keep Dola disabled until then |
+| Product integration | Canonical Opening manifest, media import and Flow final exist; exact-project/account default-off operator gate, per-slot preflight and review dialog rendered at 1440/576px; post-review regression fixes passed | Live submit/result states, repeated use, and Owner real-use acceptance; keep production Dola disabled until qualified |
 | Release and acceptance | Flow final accepted by Owner; isolated candidate is not source main | Exact candidate/runtime identity, clean promotion scope, full composed CUJ, explicit Owner product acceptance |
 
 Main agent is the only writer. Use independent read-only review on consequential
@@ -26,6 +26,20 @@ preflight never authorizes a generation. Any live ambiguity stops new sends.
 
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
+
+Checkpoint 2026-09-23: isolated candidate HEAD `1f8c2ab` is clean. The source
+checkout remains `main` at `5464cbb` with 86 pre-existing changed/untracked
+paths; no merge, push or production routing change was made. The current
+127.0.0.1:8778 UI process serves the accepted Flow-final runtime; its Python
+import checkout has not been independently proven, so it is not candidate
+acceptance evidence. Story Auto's prepared Dola browser-UI
+canary still has no attempt ID, native request, receipt or provider submission.
+The new operator gate rechecks the saved cookie binding immediately before
+submission and exposes an explicit retry only after durable zero-effect proof;
+AMBIGUOUS is never retryable. One fresh potentially charged Dola attempt needs
+a separate Owner decision because earlier approvals were consumed by other
+attempts. Until then, make no new provider request and do not call the whole
+product accepted.
 
 Current Dola choice: the Owner reports Dola directly confirmed permission for
 cookie integration; no written scope is stored here. After disclosure that the
