@@ -14,7 +14,7 @@ assuming a worktree branch is already available in source main.
 
 | Milestone | Current proof | Remaining gate |
 | --- | --- | --- |
-| Dola browser transport engineering | One external Gemini UI success; Story Auto opt-in Patchright adapter, durable native ID, exact read/poll linkage; exact-head 1,053 tests/366 subtests plus quality/security PASS | One Story Auto live submit/receipt/output qualification; no stability claim from the external single run |
+| Dola browser transport engineering | One external Gemini UI success; Story Auto opt-in Patchright adapter, durable native ID, exact read/poll linkage; latest 1,054 tests/366 subtests plus quality/security PASS | One Story Auto live submit/receipt/output qualification; no stability claim from the external single run |
 | Browser pre-submit stability | Same encrypted alias in a dedicated Patchright profile; three closed/reopened 10s/5s/10s UI preflights PASS with zero sends after hydration fix | No proof yet of Story Auto's actual generation request/receipt |
 | Bounded live qualification | Separate canary project prepared; no attempt, task ID, or submission; unacknowledged dispatch refused | Fresh Owner authorization for exactly one potentially charged request, then exact request/receipt/output reconciliation; stop if ambiguous |
 | Product integration | Canonical Opening manifest, media import and Flow final exist; exact-project/account default-off operator gate, per-slot preflight and review dialog rendered at 1440/576px; post-review regression fixes passed | Live submit/result states, repeated use, and Owner real-use acceptance; keep production Dola disabled until qualified |
@@ -44,6 +44,11 @@ At 2026-09-23 07:04 UTC, a fresh canary preflight on this exact candidate
 confirmed 5s/16:9 UI readiness with `generation_submits=0`; a separate status
 read confirmed zero attempt IDs, native IDs, task IDs, and provider submissions.
 This is current pre-send readiness only, not a video-generation result.
+An additional disposable rendered-state regression then covered both a proven
+`NOT_DISPATCHED` slot and an `AMBIGUOUS` slot at 1440px and 576px; only the former
+could reach the reviewed Create action, and Cancel preserved zero new sends.
+The latter offered no Check/Create/Import action and explained that the original
+request must be reconciled. This was synthetic UI evidence, not live acceptance.
 
 Current Dola choice: the Owner reports Dola directly confirmed permission for
 cookie integration; no written scope is stored here. After disclosure that the

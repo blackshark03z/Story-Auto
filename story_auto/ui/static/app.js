@@ -280,6 +280,9 @@ function openingBuilderSurface(snapshot) {
   const allowBytePlus = providerPolicy === 'AUTO' || providerPolicy === 'BYTEPLUS';
   const allowElyum = providerPolicy === 'AUTO' || providerPolicy === 'ELYUM';
   const allowDola = providerPolicy === 'AUTO' || providerPolicy === 'DOLA';
+  const openingGuidance = providerPolicy === 'DOLA'
+    ? 'Check your Dola session, then review and create one video per slot. Manual import remains available.'
+    : 'Choose a qualified video provider or import a clip per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.';
   const slots = (opening.slots || []).map(slot => {
     const ready = slot.status === 'READY' && slot.asset_ready;
     const api = slot.api_generation || {};
@@ -308,7 +311,7 @@ function openingBuilderSurface(snapshot) {
     }
     if (!ready && noProvider) {
       if (allowDola && dola.configured && dola.live_verified && dola.generation_enabled && dola.verified_slot_id === slot.slot_id && Number(slot.duration_seconds) <= 10) {
-        providerControls += `<label>Dola account <select aria-label="Dola account for ${esc(slot.slot_id)}" data-opening-dola-account="${esc(slot.slot_id)}">${(dola.accounts || []).map(a => `<option value="${esc(a.account_id)}">${esc(a.account_id)}</option>`).join('')}</select></label><button data-opening-dola="${esc(slot.slot_id)}" type="button">Generate with Dola</button>`;
+        providerControls += `<label>Dola account <select aria-label="Dola account for ${esc(slot.slot_id)}" data-opening-dola-account="${esc(slot.slot_id)}">${(dola.accounts || []).map(a => `<option value="${esc(a.account_id)}">${esc(a.account_id)}</option>`).join('')}</select></label><button data-opening-dola="${esc(slot.slot_id)}" type="button">Create one Dola video</button>`;
       } else if (allowDola && dola.browser_gate_configured && Number(slot.duration_seconds) <= 10) {
         providerControls += `<button data-opening-dola-check="${esc(slot.slot_id)}" data-account="${esc(dola.browser_account_id)}" type="button">Check Dola session</button>`;
       }
@@ -324,7 +327,7 @@ function openingBuilderSurface(snapshot) {
       }
     } else if (!ready && dolaActive && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' && !api.provider_task_id && !api.provider_local_message_id && Number(api.provider_submissions || 0) === 0 && dola.browser_gate_configured && dola.browser_account_id === api.account_id) {
       if (dola.live_verified && dola.generation_enabled && dola.verified_slot_id === slot.slot_id) {
-        providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Try Dola after updating cookie</button>`;
+        providerControls += `<button data-opening-dola="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Create one Dola video</button>`;
       } else {
         providerControls += `<button data-opening-dola-check="${esc(slot.slot_id)}" data-account="${esc(api.account_id)}" type="button">Check Dola session</button>`;
       }
@@ -349,7 +352,7 @@ function openingBuilderSurface(snapshot) {
     const unresolvedProvider = !!providerId && !['FAILED_PRE_DISPATCH','COST_BLOCKED','CREDIT_BLOCKED','FAILED_TERMINAL','KILLED','SUCCEEDED'].includes(apiState);
     const importButton = unresolvedProvider ? '' : `<label class="button">${ready ? 'Replace clip' : 'Import clip'}<input data-opening-import="${esc(slot.slot_id)}" type="file" accept="video/*" hidden></label>`;
     let apiNote = '';
-    if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'Saved evidence shows no video was submitted. Check the session, then review and confirm one new request.' : 'Submission needs attention; a second video will not be submitted automatically.'} ${esc(api.failure_class || '')}</small>`;
+    if (!ready && dolaActive) apiNote = `<small>Dola account: ${esc(api.account_id)}. ${api.provider_task_id ? 'Check again to recover the same video.' : apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'Saved evidence shows no video was submitted. Check the session, then review and confirm one new request.' : 'We cannot confirm whether Dola accepted the original request. Review diagnostics before any new video; Story Auto will not resend it.'} ${esc(api.failure_class || '')}</small>`;
     if (!ready && noProvider && allowDola && dola.configured && !dola.generation_enabled) apiNote = dola.browser_gate_configured ? '<small>Check this Dola session before creating one video for the selected slot. A failed check does not submit or consume a generation.</small>' : '<small>Dola account saved, but generation is paused for this project. Import a clip now; configure the dedicated Dola browser gate before generating.</small>';
     if (!ready && noProvider && allowDola && !dola.configured) apiNote = '<small>Add Dola accounts in Settings to use cookie-based text-to-video.</small>';
     if (!ready && noProvider && providerPolicy === 'MANUAL') apiNote = '<small>Opening provider policy is Manual only. Import a clip for this slot.</small>';
@@ -367,9 +370,13 @@ function openingBuilderSurface(snapshot) {
     const preview = ready && slot.normalized_asset?.path ? `<video class="video-frame" controls preload="metadata" src="${assetUrl(snapshot.project_id,slot.normalized_asset.path)}" aria-label="${esc(slot.slot_id)} normalized opening clip"></video>` : '';
     const sourceKind = slot.source_asset?.provider === 'flow_cookie' ? 'Generated by Flow' : slot.source_asset?.provider === 'dola_cookie' ? 'Generated by Dola' : slot.source_asset?.provider === 'elyum_seedance' ? 'Generated by Elyum' : slot.source_asset?.provider === 'byteplus_seedance' || (byteplusActive && apiState === 'SUCCEEDED') ? 'Generated by BytePlus' : 'Imported';
     const source = slot.source_asset ? `<small>${sourceKind} · ${esc(slot.source_asset.original_filename || 'clip')} · ${Number(slot.source_asset.duration_seconds || 0).toFixed(2)}s${slot.source_asset.had_audio ? ' · embedded audio stripped' : ''}</small>` : '<small>No clip bound yet.</small>';
-    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${ready ? 'READY' : (apiState !== 'NOT_STARTED' ? esc(apiState) : 'MISSING')}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${flowControls}${apiNote}${source}${lockedPreview}${preview}</article>`;
+    const statusLabel = ready ? 'READY'
+      : dolaActive && apiState === 'FAILED_PRE_DISPATCH' && api.dispatch_state === 'NOT_DISPATCHED' ? 'NOT SENT'
+      : dolaActive && apiState === 'AMBIGUOUS' ? 'OUTCOME UNCERTAIN'
+      : apiState !== 'NOT_STARTED' ? apiState : 'MISSING';
+    return `<article class="choice"><div class="surface-head"><div><strong>${esc(slot.slot_id)} · ${esc(slot.start)}-${esc(slot.end)}s</strong><small>${esc(slot.purpose)}</small></div><span class="status-chip ${ready ? 'success' : 'attention'}">${esc(statusLabel)}</span></div><div class="technical opening-prompt">${esc(slot.prompt)}</div><div class="button-row"><button data-opening-copy="${esc(slot.slot_id)}" type="button">Copy prompt</button>${providerControls}${importButton}</div>${flowControls}${apiNote}${source}${lockedPreview}${preview}</article>`;
   }).join('');
-  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>Choose BytePlus, Elyum preview/Keep, or manual import per slot. Narration, subtitles, waveform, and final audio remain separate master tracks.</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Opening provider policy</strong><small>${esc(providerPolicy)}</small></div><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
+  return `<section class="surface"><div class="surface-head"><div><p class="eyebrow">HYBRID VISUAL</p><h2>Opening Builder · ${esc(opening.opening_duration_seconds)}s</h2><p>${openingGuidance}</p></div><span class="status-chip ${opening.ready ? 'success' : 'attention'}">${opening.ready ? 'READY' : 'NEEDS CLIPS'}</span></div><div class="choice-grid"><div class="choice"><strong>Opening provider policy</strong><small>${esc(providerPolicy)}</small></div><div class="choice"><strong>Shared continuity</strong><small>${esc(opening.shared_context || '')}</small></div><div class="choice"><strong>Normalization target</strong><small>${esc(target.width || '?')}×${esc(target.height || '?')} · ${esc(target.fps || '?')} fps · silent MP4</small></div></div><div class="button-row"><button data-opening-copy-all type="button">Copy all opening prompts</button></div><div class="choice-grid opening-slot-grid">${slots}</div></section>`;
 }
 
 function hybridBodySurface(snapshot) {

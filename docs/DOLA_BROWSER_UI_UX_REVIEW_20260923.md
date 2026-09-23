@@ -61,3 +61,15 @@ cookie/profile binding to remain unchanged through the final pre-submit check.
 Only a persisted, provably unsent failure can expose Check again and then an
 explicitly reviewed retry; an ambiguous attempt exposes no new-submit action.
 Focused regression tests cover the refresh race and this state boundary.
+
+The follow-up rendered regression used a disposable project and mocked Dola
+client, never a real provider send. At 1440px and 576px,
+`ui-known-unsent-1440.png` / `ui-known-unsent-576.png` show **NOT SENT** with
+**Create one Dola video** only after a successful per-slot check. Clicking it
+opened Review; Cancel left the durable submit count at one historical
+zero-effect attempt. `ui-ambiguous-1440.png` / `ui-ambiguous-576.png` show
+**OUTCOME UNCERTAIN**, plain-language reconciliation guidance, and no Check,
+Create, or Import action on the ambiguous slot. Other empty slots still offer
+their own Check. The DOLA-only Opening guidance now names the real check/review/
+create journey instead of suggesting unavailable providers. This closes the
+pre-submit error-state wording gap, not live execution/result acceptance.
