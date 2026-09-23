@@ -1,5 +1,35 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 corrected Dola browser-UI evidence
+
+An independent Gemini/Patchright run on this machine **did generate a new Dola
+video through the signed-in browser UI**. Its local script injected one
+`sessionid` into the persistent `acc1` browser context, submitted a prompt
+through the Dola page, and left before/after/final screenshots. The final
+screen shows the same sports-car prompt, a completed Dola video card, and the
+new conversation titled “Tạo video thể thao”. The resulting
+`D:\Video\AutoVideoPipeline\output\dola_new_generated.mp4` exists, SHA-256
+`314c62b5f81ef5075ddb131f83f1e964f09efe04e0ae26b931ee26d9d8945272`,
+HEVC 1248x704/24 fps, 5.041667 s, 1,067,527 bytes. The screenshots were
+written 12:02–12:05 local time and the file at 12:27. This is one external
+live UI success, **not** Story Auto integration, repeatability, exact output
+lineage in our manifest, or whole-product acceptance. The proof script stores
+a live session value in plaintext; never copy that value into source, tests,
+logs, or evidence. Source and screenshots are in the Gemini scratch directory
+`C:\Users\ADMIN\.gemini\antigravity-ide\brain\8e309311-a112-48f9-bf7b-fcfbfb035189\scratch`.
+
+This corrects the earlier claim that only a speculative browser path exists.
+The demonstrated mechanism is cookie injection into Patchright persistent
+browser context plus page UI submission, **not** successful direct HTTP POST.
+Story Auto's separate fresh-cookie direct HTTP canary
+`4832cbfc770746c8a8bb24eeda791efc` made exactly one submit, received
+HTTP 200 SSE without an ACK, and remains AMBIGUOUS. Read-only reconciliation
+of all 10 recent conversations found no exact local ID; absence is not
+no-effect proof. No retry is authorized. Next engineering path: isolate the
+proved browser-UI mechanism behind the existing one-attempt journal and
+account lock; qualify pre-submit controls and exact receipt/output identity
+offline before any new live request.
+
 ## 2026-09-23 dedicated Dola profile read-only qualification
 
 The Owner logged into `D:\Story Auto\profiles\dola-owner-login-20260923`

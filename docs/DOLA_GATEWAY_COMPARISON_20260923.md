@@ -1,8 +1,10 @@
 # Dola gateway comparison — 2026-09-23
 
-Status: READ-ONLY COMPARISON / NO NEW GENERATION. The Owner reports no new
-Dola job or credit deduction for Story Auto's one approved canary. This is
-Owner-observed account evidence, not a provider dispatch ledger or a receipt.
+Status: comparison with one separately observed live browser-UI generation;
+no Story Auto browser-UI generation or new request is authorized here. The
+Owner's earlier no-job/no-credit report concerned the first Story Auto
+canary; it was not a provider dispatch ledger. The newer fresh-cookie HTTP
+canary is also AMBIGUOUS and remains separate from Gemini's successful UI run.
 
 Source identity: https://github.com/coll3879xx-cyber/dola-render-gateway main
 `57518aac4e0a150fa54386654ba8738a15d2a2b3`, independently checked against
@@ -13,9 +15,23 @@ Historical security/architecture audit remains in
 
 ## Actual active paths
 
+Correction from later evidence: the earlier assessment described the gateway
+source correctly but underweighted a real local run. A Gemini scratch script
+used Patchright's persistent `acc1` context, injected `sessionid`, submitted
+through the Dola page, and captured after-send/final screenshots. The final
+screen shows a completed sports-car video card in the newly titled
+conversation. A new local MP4 exists with the matching theme and timestamp:
+`D:\Video\AutoVideoPipeline\output\dola_new_generated.mp4`, SHA-256
+`314c62b5f81ef5075ddb131f83f1e964f09efe04e0ae26b931ee26d9d8945272`,
+HEVC 1248x704/24 fps, 5.041667 s. Thus browser-context cookie injection +
+UI submission is **observed once**, not merely architectural speculation.
+The scratch script has a plaintext session value and is unsuitable to copy
+or commit. This evidence does not validate direct HTTP POST, repeated
+stability, exact Story Auto attempt/result attribution, or product acceptance.
+
 | Boundary | Gateway | Story Auto candidate |
 |---|---|---|
-| Session | Patchright `launch_persistent_context` per account, populated by a full browser OAuth/login flow (`browser.py`, `add_account.py`) | DPAPI named account contains a seven-cookie HTTP header; fresh Chromium contexts are seeded from these pairs |
+| Session | Patchright `launch_persistent_context` per account; the observed Gemini run additionally injected a `sessionid` into that context | DPAPI named accounts: earlier seven-cookie alias failed browser authentication; a fresh 28-cookie alias passed browser authentication but direct HTTP submit remained ambiguous |
 | Submit | Active `server -> browser_pool -> video_worker_ui.generate_video` clicks the video mode and sends the prompt via UI | `DolaCookieClient.submit` sends one Python HTTP POST to `/chat/completion` |
 | Receipt | UI worker waits for a numeric conversation ID in the page URL, then calls `on_conversation_id` | SSE parser requires `SSE_ACK.ack_client_meta.conversation_id` and persists it immediately |
 | Poll | Browser-page fetch of `/im/chain/single` using the full current `uplink_body` envelope (`video_worker.py`) | Python HTTP POST to `/im/chain/single`; requires exact input/output linkage before import |
