@@ -3,6 +3,15 @@
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
 
+Dola permission hold: official terms at `https://www.dola.com/legal/terms/en`
+(last updated 2026-09-04) restrict automated use, reverse engineering,
+incorporation into another product and automated output extraction. The
+candidate's private-endpoint design is therefore not a supportable production
+assumption absent vendor permission or an official API; this is a risk
+classification, not legal advice. Do not send another private Dola request or
+bypass controls. Preserve the ambiguous O1 record below, and choose an
+authorized provider path/manual Dola path for product acceptance.
+
 2026-09-23 live Dola O1 result: Owner saved `dola-main` (one configured account)
 and one bounded canary call recorded attempt
 `ba87f1eb43ea4c018491cd80d3d45d7a`, submit_attempts=1,

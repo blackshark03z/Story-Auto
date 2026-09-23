@@ -1,5 +1,20 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 Dola provider permission HOLD
+
+The current official Dola Terms of Service (last updated 2026-09-04,
+`https://www.dola.com/legal/terms/en`) describe private/non-commercial use and
+restrict automated use, reverse engineering, incorporation into another
+program/product, and automated extraction of output (sections 1, 5, 6).
+FACT: these clauses are published by Dola. INFERENCE: the experimental
+cookie/private-endpoint integration may not be an authorized integration path.
+No vendor permission or official Dola API contract is recorded in this
+project. This is not a legal determination. Pending an authorized path, do not
+send further Dola private-endpoint requests or attempt to bypass web controls;
+leave the account intact and the one ambiguous attempt frozen. A product-safe
+next option is vendor-approved API/permission, or keep Dola as a manual-only
+external step while finishing acceptance on approved providers.
+
 ## 2026-09-23 Dola O1 live canary — AMBIGUOUS, reconcile first
 
 Owner saved one encrypted named account `dola-main` in updated Settings on
