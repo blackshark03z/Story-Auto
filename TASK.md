@@ -32,6 +32,10 @@ It cannot submit or adopt a result, and no match does not prove no effect.
 The browser profile now rotates automatically to a new dedicated subdirectory
 when the encrypted account's cookie header changes, preventing stale browser
 storage from silently following a refreshed session.
+The candidate code commit `5b6a77c` plus documentation-only Git-identity
+correction `49ee04c` passed the full Python suite: 1,048 tests and 366
+subtests; quality and security gates PASS, and the isolated clone was clean.
+This is engineering evidence, not live Dola or product acceptance.
 
 ## 2026-09-23 corrected Dola browser-UI evidence
 
