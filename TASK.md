@@ -1,5 +1,20 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 release target and acceptance boundary
+
+After reviewing the 16 differing source/candidate files, the Owner asked for
+the optimal, clean, lean option. The selected release target is the clean
+`codex/product-acceptance-candidate` branch and its isolated local runtime.
+The source `main` checkout remains at `5464cbb` with its 86 pre-existing dirty
+status entries; no merge, stash, or overwrite was made. The exact candidate
+UI shows the accepted Flow final as Complete/100% and the separate Dola
+project's OPENING_O1 as READY. Latest quality/security gates pass. Release
+status and reviewed boundaries are recorded in
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\RELEASE_CANDIDATE_STATUS.json`.
+The scoped candidate is ready for explicit Owner product acceptance; that
+acceptance has not yet been given. No new Dola generation is part of release
+preparation.
+
 ## 2026-09-23 exact-candidate final composition
 
 On a separate copy of the previously Owner-accepted Flow project, candidate

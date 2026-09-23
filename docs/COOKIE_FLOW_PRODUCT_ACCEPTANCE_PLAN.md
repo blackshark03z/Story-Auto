@@ -1,5 +1,20 @@
 # Cookie Flow product acceptance delivery
 
+## Release selection — 2026-09-23
+
+The Owner delegated selection of the optimal, clean, lean route after seeing
+that 16 overlapping source/candidate files differ. Release from the isolated,
+clean `codex/product-acceptance-candidate` branch was selected. The source
+`main` checkout and all 86 pre-existing dirty status entries remain intact;
+no merge, stash or overwrite occurred. The release UI exposes the accepted
+Flow final and the separate successful Dola O1. Exact evidence and limitations:
+`D:\Story Auto\evidence\candidate-final-composition-c43b39d-20260923\RELEASE_CANDIDATE_STATUS.json`.
+Status is `OWNER_ACCEPTANCE_PENDING`: the Owner has selected the release
+route but has not yet explicitly accepted the scoped product. Dola O2/O3 and
+a Dola-containing final are outside this scoped release, and no further Dola
+send is authorized. In-app browser inline Play remains a known limitation;
+Chrome playback of the accepted final passed.
+
 ## Exact-candidate completion update — 2026-09-23
 
 Candidate commit `c43b39d2781ed6babbcf5dbf47fe47547f2604a0` was used to
