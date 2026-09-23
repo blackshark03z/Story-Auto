@@ -1,5 +1,32 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 Dola O1 live canary — AMBIGUOUS, reconcile first
+
+Owner saved one encrypted named account `dola-main` in updated Settings on
+127.0.0.1:8778; Settings showed account_count=1, CONFIGURED, live_verified=false.
+Local credential parsing passed. The separate isolated project
+`prj_dola_live_20260923` had OPENING_O1 MISSING and no prior api_generation.
+Exactly one bounded `generate_dola_opening` call was made for that slot/account.
+Durable attempt `ba87f1eb43ea4c018491cd80d3d45d7a` now records
+submit_attempts=1, provider_submissions=0, status=AMBIGUOUS,
+dispatch_state=AMBIGUOUS, failure_class=DOLA_SUBMISSION_UNCERTAIN, and no
+provider_task_id or video asset. This means no acknowledged submission, NOT
+proof of zero external effects. Do not retry, rotate accounts, make a
+replacement clip, or label Dola live-qualified.
+
+Follow-up HEAD/GET/OPTIONS requests to the completion path were read-only and
+returned 404 on www; the apex HEAD redirected to www. These do not reveal the
+original POST response. An authenticated fresh browser read showed no matching
+prompt in visible chat text, but absence there also cannot prove no dispatch.
+The transport did not capture a sanitized HTTP status/body class for this
+failed POST. Before any new attempt, reconcile provider-side activity for this
+timestamp/account or obtain an explicit new one-attempt authorization after
+disclosing the unresolved effect. Preserve the original slot and journal.
+
+Evidence: `evidence/dola-live-qualification-20260923/canary-attempt-
+ba87f1eb43ea4c018491cd80d3d45d7a.json` and the isolated project's
+`output/opening_manifest.json`. Whole-product acceptance remains PENDING.
+
 ## 2026-09-23 Dola current-session qualification — candidate only
 
 The Owner's signed-in `dola.com` Cookie-Editor export contains seven cookies,

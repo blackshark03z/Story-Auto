@@ -3,6 +3,15 @@
 Status: ACTIVE, not product accepted. Source baseline HEAD 5464cbb with substantial
 pre-existing uncommitted Flow/Dola/UI work; preserve all owner work. 2026-09-23.
 
+2026-09-23 live Dola O1 result: Owner saved `dola-main` (one configured account)
+and one bounded canary call recorded attempt
+`ba87f1eb43ea4c018491cd80d3d45d7a`, submit_attempts=1,
+provider_submissions=0, status/dispatch_state=AMBIGUOUS, no provider task ID.
+Neither a replay nor a replacement is authorized. Read-only endpoint/browser
+checks did not establish whether the original POST had an external effect.
+Reconcile first; Dola live qualification and whole-product acceptance remain
+PENDING. This newer checkpoint supersedes the pre-canary account_count=0 below.
+
 Current Dola gate: a signed-in Owner export has exact `sessionid_ss` but no
 `sessionid`. Read-only browser positive/negative controls proved it authenticates
 the Dola UI on www, not that the private video API accepts it. The isolated
