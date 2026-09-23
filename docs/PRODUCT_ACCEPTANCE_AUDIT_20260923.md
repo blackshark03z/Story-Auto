@@ -35,7 +35,7 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 | Code validation | Post-change full candidate suite 932/932 PASS in 353.513 s; focused Dola 32/32 PASS; quality/security gates PASS. Independent review finding on abnormal HTTP status was fixed and regression-tested. JS syntax and rendered 576/1440px Dola Settings preview passed before this backend-only change | Engineering PASS; live Dola still pending |
 | Browser playback | Supported Chrome inline playback and seek PASS; Codex IAB inline Play still crashes, while direct media view works | PARTIAL; IAB limitation disclosed |
 | Flow closed-Chrome canary | `evidence/flow-cookie-closed-chrome-canary-20260923/result.json`: one upload, one submit, no exact output. A 2026-09-23 recovery-only re-entry preserved counters 1/1 and still found no asset; the independent current named-cookie read returned `FLOW_COOKIE_SESSION_UNAVAILABLE`, so this latest recovery is inconclusive, not proof of absence | AMBIGUOUS; no retry |
-| Dola account/live canary | One encrypted account saved. `evidence/dola-live-qualification-20260923/canary-attempt-ba87f1eb43ea4c018491cd80d3d45d7a.json`: one submit attempt, no provider receipt or asset, external effect unknown | AMBIGUOUS; no retry |
+| Dola account/live canaries | One encrypted account saved. Old attempt `ba87f1eb...` remains ambiguous. Owner-approved separate canary `9a849c09...` observed HTTP 200 but no parseable SSE receipt; one submit, no task ID/asset. Immediate and >5-minute read-only chat/library views show no exact match, which cannot exclude an external effect. See `evidence/dola-cookie-approved-canary-20260923/POST_DISPATCH.md` | AMBIGUOUS; no retry |
 | Dola provider permission | Owner reports direct Dola confirmation that cookie integration is allowed; no written scope is recorded here. Owner explicitly approved one separate new canary after the unresolved-effect warning | OWNER-ATTESTED; production scope unverified |
 | Release promotion | Source has 92 dirty/untracked entries and 86/87 candidate-path overlap at the previous preflight. Dola cookie path remains chosen; no exact Owner authorization to promote this new candidate | PENDING OWNER DECISION |
 
@@ -44,9 +44,9 @@ final: that exact MP4 is technically complete and Owner quality-accepted.
 The real Flow final and its quality are accepted, but that does not accept the
 whole product or unresolved provider attempts. The Owner chose Dola cookie
 integration and authorized exactly one new, separate canary after the risk was
-disclosed. Preserve the old Dola and Flow ambiguous journals; do not retry or
-rotate accounts. The new canary may proceed only after read-only session and
-code-safety checks, and must stop on uncertainty. Production promotion remains
+disclosed. That canary has now stopped at HTTP 200 without receipt and is
+AMBIGUOUS. Preserve both Dola attempts and the Flow ambiguous journal; do not
+retry, rotate accounts, or submit a replacement. Production promotion remains
 on HOLD pending live result identity, quality, scope, and exact release approval.
 The scoped 8778 candidate can be reviewed without altering source main. An
 unsent, secret-free vendor inquiry remains in

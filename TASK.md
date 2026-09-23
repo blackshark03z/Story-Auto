@@ -1,5 +1,20 @@
 # Story Auto — current delivery and historical checkpoints
 
+## 2026-09-23 one approved new Dola cookie canary — AMBIGUOUS
+
+The Owner's one new, separate Dola test request was executed in isolated
+project `prj_dola_cookie_canary_20260923` after fresh saved-cookie browser
+auth, 932 full tests, quality/security gates and independent review. Attempt
+`9a849c09107a4ee4b5c019ea14424917` sent exactly once. HTTP 200 was
+observed, but no parseable SSE receipt; journal records status/dispatch
+AMBIGUOUS, submit_attempts=1, provider_submissions=0, no task ID/asset. Chat
+and AI works read-only views did not show an exact match; absence is not proof
+of no external effect. A delayed read-only check over five minutes later also
+found no exact match or receipt. No retry, rotation, or replacement. Evidence:
+`D:\Story Auto\evidence\dola-cookie-approved-canary-20260923\POST_DISPATCH.md`.
+The earlier ambiguous attempt remains separate and unchanged. Dola and
+whole-product acceptance are still unproven.
+
 ## 2026-09-23 Owner-reported Dola permission; one new canary authorized
 
 The Owner reports that Dola directly confirmed cookie integration is allowed.
