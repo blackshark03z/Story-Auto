@@ -33,6 +33,7 @@ class OperatorUiTests(unittest.TestCase):
                 _,script,_=call("/static/app.js"); self.assertNotIn(b"prompt(",script); self.assertIn(b"showModal()",script)
                 status,payload,_=call("/api/runtime-attestation"); attestation=json.loads(payload)
                 self.assertEqual((status,attestation["process_id"]),(200,os.getpid()))
+                self.assertEqual(attestation["runtime_root"],str(Path(root).resolve()))
                 self.assertEqual(attestation["provider_surface_extractor_version"],"flow-provider-surface/2.5.0")
                 self.assertEqual(attestation["poll_evidence_version"],"story-auto-flow-poll-evidence/1.5.0")
                 self.assertEqual(len(attestation["flow_module_sha256"]),64)

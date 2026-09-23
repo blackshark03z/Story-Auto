@@ -32,7 +32,8 @@ def listener_state() -> str:
         finally:
             connection.close()
         module = Path(attestation.get("flow_module", "")).resolve()
-        if module == EXPECTED_MODULE:
+        runtime_root = Path(attestation.get("runtime_root", "")).resolve()
+        if module == EXPECTED_MODULE and runtime_root == RUNTIME_ROOT.resolve():
             return "this_release"
     except (OSError, ValueError, TypeError, KeyError):
         pass

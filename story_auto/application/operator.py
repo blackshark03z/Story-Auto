@@ -1610,6 +1610,7 @@ class OperatorService:
         source=Path(flow_live.__file__).resolve()
         return {
             "process_id":os.getpid(),
+            "runtime_root":str(self.runtime.root),
             "flow_module":str(source),
             "flow_module_sha256":hashlib.sha256(source.read_bytes()).hexdigest(),
             "provider_surface_extractor_version":flow_live.PROVIDER_SURFACE_EXTRACTOR_VERSION,
