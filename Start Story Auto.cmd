@@ -13,7 +13,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-python tools\launch_story_auto.py
+python -m tools.launch_story_auto
 set "story_auto_exit=%errorlevel%"
 if "%story_auto_exit%"=="2" (
   pause
